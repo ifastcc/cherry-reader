@@ -7,15 +7,15 @@ part of 'model_info.dart';
 // **************************************************************************
 
 ModelInfo _$ModelInfoFromJson(Map<String, dynamic> json) => ModelInfo(
-      id: json['id'] as String,
-      provider: json['provider'] as String,
-      name: json['name'] as String,
-      group: json['group'] as String?,
-    );
+  id: json['id'] as String,
+  provider: json['provider'] as String,
+  name: json['name'] as String,
+  group: json['group'] as String?,
+);
 
 Map<String, dynamic> _$ModelInfoToJson(ModelInfo instance) => <String, dynamic>{
-      'id': instance.id,
-      'provider': instance.provider,
-      'name': instance.name,
-      'group': instance.group,
-    };
+  'id': instance.id,
+  'provider': instance.provider,
+  'name': instance.name,
+  'group': instance.group,
+};

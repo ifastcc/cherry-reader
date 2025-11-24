@@ -22,7 +22,10 @@ class MarkdownSyntaxHighlighter {
     final protectedRanges = _findProtectedRanges(text);
 
     // 2. 计算安全的高亮范围 (从原始高亮范围中减去受保护范围)
-    final safeHighlights = _calculateSafeHighlights(highlights, protectedRanges);
+    final safeHighlights = _calculateSafeHighlights(
+      highlights,
+      protectedRanges,
+    );
 
     // 3. 按照位置从后往前插入标签，避免破坏索引
     return _applyHighlights(text, safeHighlights);
@@ -37,14 +40,14 @@ class MarkdownSyntaxHighlighter {
     final patterns = [
       // 标题标记 (e.g. "## ")
       RegExp(r'^#{1,6}\s', multiLine: true),
-      
+
       // 粗体/斜体标记 (e.g. "**", "__", "*", "_")
       // 仅匹配边界标记
       RegExp(r'(\*\*|__|\*|_)'),
-      
+
       // 代码块标记 (e.g. "```", "`")
       RegExp(r'(`{1,3})'),
-      
+
       // 链接和图片语法结构: [, ], (, ), ![
       // 我们不仅要保护括号本身，还要保护 URL 部分，因为如果在 URL 中插入 span 会破坏链接
       // 匹配: [text](url) 或 ![alt](url)
@@ -52,16 +55,15 @@ class MarkdownSyntaxHighlighter {
       // 以及 `(...)` 里面的内容 (URL)
       RegExp(r'!\[|\[|\]'),
       RegExp(r'\([^\)]+\)'), // 保护链接的 URL 部分 (content inside parens)
-      
       // HTML 标签 (e.g. <br>, <span>) - 避免在高亮标签内部再插入高亮
       RegExp(r'<[^>]+>'),
-      
+
       // 引用标记
       RegExp(r'^>\s', multiLine: true),
-      
+
       // 列表标记
       RegExp(r'^(\s*[-*+]|\s*\d+\.)\s+', multiLine: true),
-      
+
       // 分割线
       RegExp(r'^[\*\-_]{3,}\s*$', multiLine: true),
     ];
@@ -92,8 +94,8 @@ class MarkdownSyntaxHighlighter {
       if (next.start <= current.end) {
         // 重叠或相邻，合并
         current = TextRange(
-          start: current.start, 
-          end: next.end > current.end ? next.end : current.end
+          start: current.start,
+          end: next.end > current.end ? next.end : current.end,
         );
       } else {
         merged.add(current);
@@ -107,8 +109,8 @@ class MarkdownSyntaxHighlighter {
   /// 计算安全的高亮范围
   /// 算法: Safe = Highlight - Protected
   List<HighlightRange> _calculateSafeHighlights(
-    List<HighlightRange> rawHighlights, 
-    List<TextRange> protectedRanges
+    List<HighlightRange> rawHighlights,
+    List<TextRange> protectedRanges,
   ) {
     final safeHighlights = <HighlightRange>[];
 
@@ -122,7 +124,7 @@ class MarkdownSyntaxHighlighter {
       for (final protected in protectedRanges) {
         // 如果受保护范围在当前高亮范围之前，跳过
         if (protected.end <= currentStart) continue;
-        
+
         // 如果受保护范围在当前高亮范围之后，结束检查
         if (protected.start >= currentEnd) break;
 
@@ -130,17 +132,21 @@ class MarkdownSyntaxHighlighter {
 
         // 1. 添加交集之前的高亮部分 (如果是有效文本)
         if (currentStart < protected.start) {
-          safeHighlights.add(HighlightRange(
-            id: highlight.id,
-            start: currentStart,
-            end: protected.start,
-            color: color,
-            styleType: styleType,
-          ));
+          safeHighlights.add(
+            HighlightRange(
+              id: highlight.id,
+              start: currentStart,
+              end: protected.start,
+              color: color,
+              styleType: styleType,
+            ),
+          );
         }
 
         // 2. 跳过受保护部分，更新 currentStart
-        currentStart = protected.end > currentStart ? protected.end : currentStart;
+        currentStart = protected.end > currentStart
+            ? protected.end
+            : currentStart;
 
         // 如果已经超出了高亮范围，提前结束
         if (currentStart >= currentEnd) break;
@@ -148,13 +154,15 @@ class MarkdownSyntaxHighlighter {
 
       // 添加剩余的高亮部分
       if (currentStart < currentEnd) {
-        safeHighlights.add(HighlightRange(
-          id: highlight.id,
-          start: currentStart,
-          end: currentEnd,
-          color: color,
-          styleType: styleType,
-        ));
+        safeHighlights.add(
+          HighlightRange(
+            id: highlight.id,
+            start: currentStart,
+            end: currentEnd,
+            color: color,
+            styleType: styleType,
+          ),
+        );
       }
     }
 
@@ -170,27 +178,27 @@ class MarkdownSyntaxHighlighter {
     int currentPos = 0;
 
     for (final range in safeHighlights) {
-       if (range.start < currentPos) continue; // 防止回退（理论上不会发生）
+      if (range.start < currentPos) continue; // 防止回退（理论上不会发生）
 
-       // 添加未高亮的文本
-       if (range.start > currentPos) {
-         buffer.write(text.substring(currentPos, range.start));
-       }
+      // 添加未高亮的文本
+      if (range.start > currentPos) {
+        buffer.write(text.substring(currentPos, range.start));
+      }
 
-       // 生成高亮 HTML
-       // 将颜色转换为 8 位 ARGB Hex 字符串，保留透明度
-       final colorHex = range.color.value.toRadixString(16).padLeft(8, '0');
-       
-       // c 属性存储颜色的 hex 值
-       // t 属性存储样式类型 (background/underline)
-       // i 属性存储 ID
-       final type = range.styleType ?? 'background';
-       final id = range.id ?? '';
-       buffer.write('<highlight c="$colorHex" t="$type" i="$id">');
-       buffer.write(text.substring(range.start, range.end));
-       buffer.write('</highlight>');
+      // 生成高亮 HTML
+      // 将颜色转换为 8 位 ARGB Hex 字符串，保留透明度
+      final colorHex = range.color.value.toRadixString(16).padLeft(8, '0');
 
-       currentPos = range.end;
+      // c 属性存储颜色的 hex 值
+      // t 属性存储样式类型 (background/underline)
+      // i 属性存储 ID
+      final type = range.styleType ?? 'background';
+      final id = range.id ?? '';
+      buffer.write('<highlight c="$colorHex" t="$type" i="$id">');
+      buffer.write(text.substring(range.start, range.end));
+      buffer.write('</highlight>');
+
+      currentPos = range.end;
     }
 
     // 添加剩余文本
@@ -223,7 +231,10 @@ class HighlightRange {
 /// 匹配格式: <highlight c="RRGGBB" t="type" i="id">text</highlight>
 class HighlightSyntax extends md.InlineSyntax {
   // 更新正则以匹配 i="id" 属性，支持 6 位或 8 位颜色 hex
-  HighlightSyntax() : super(r'<highlight c="([a-fA-F0-9]{6,8})" t="([^\"]+)" i="([^\"]*)">(.+?)</highlight>');
+  HighlightSyntax()
+    : super(
+        r'<highlight c="([a-fA-F0-9]{6,8})" t="([^\"]+)" i="([^\"]*)">(.+?)</highlight>',
+      );
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
@@ -239,18 +250,18 @@ class HighlightSyntax extends md.InlineSyntax {
 
     // 创建一个 Element，tag 为 'highlight'
     final element = md.Element.text('highlight', content);
-    
+
     // 将捕获的属性存入 attributes
     element.attributes['c'] = colorHex; // 颜色 hex
     element.attributes['t'] = styleType; // 样式类型
     if (id != null) {
       element.attributes['i'] = id; // ID
     }
-    
+
     // 内容是第四个捕获组
     element.children!.clear();
     element.children!.add(md.Text(content));
-    
+
     parser.addNode(element);
     return true;
   }

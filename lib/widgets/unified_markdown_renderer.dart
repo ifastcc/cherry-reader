@@ -109,12 +109,14 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
     );
 
     // 默认的正文样式
-    final defaultTextStyle = textStyle ?? TextStyle(
-      fontSize: largeFont ? 18 : 15,
-      height: largeFont ? 2.0 : 1.85,
-      color: const Color(0xFF2C3E50),
-      letterSpacing: 0.2,
-    );
+    final defaultTextStyle =
+        textStyle ??
+        TextStyle(
+          fontSize: largeFont ? 18 : 15,
+          height: largeFont ? 2.0 : 1.85,
+          color: const Color(0xFF2C3E50),
+          letterSpacing: 0.2,
+        );
 
     // 创建自定义高亮组件实例（支持多色和点击）
     final customHighlight = CustomHighlightMd(
@@ -156,49 +158,68 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
 
     // 根据 scrollable 和 padding 包装
     if (padding != EdgeInsets.zero) {
-      markdownWidget = Padding(
-        padding: padding,
-        child: markdownWidget,
-      );
+      markdownWidget = Padding(padding: padding, child: markdownWidget);
     }
 
     if (scrollable) {
-      return SingleChildScrollView(
-        child: markdownWidget,
-      );
+      return SingleChildScrollView(child: markdownWidget);
     }
 
     return markdownWidget;
   }
 
   /// 将高亮范围转换为自定义 <highlight> 标签（支持多色）
+  ///
+  /// 【性能优化】使用 StringBuffer 替代字符串拼接
   String _applyHighlights(String text, List<HighlightRange> highlights) {
     if (highlights.isEmpty) return text;
 
-    debugPrint('[UnifiedMarkdownRenderer] Applying ${highlights.length} highlights to text of length ${text.length}');
+    debugPrint(
+      '[UnifiedMarkdownRenderer] Applying ${highlights.length} highlights to text of length ${text.length}',
+    );
 
-    // 按起始位置排序（从后往前处理，避免位置偏移）
+    // 按起始位置排序（从前往后处理）
     final sortedHighlights = List<HighlightRange>.from(highlights)
-      ..sort((a, b) => b.start.compareTo(a.start));
+      ..sort((a, b) => a.start.compareTo(b.start));
 
-    String result = text;
+    // 【优化】使用 StringBuffer 避免字符串拼接
+    final buffer = StringBuffer();
+    var lastIndex = 0;
+
     for (final highlight in sortedHighlights) {
-      final isValid = highlight.start >= 0 && highlight.end <= text.length && highlight.start < highlight.end;
-      debugPrint('[UnifiedMarkdownRenderer] Highlight ${highlight.id}: start=${highlight.start}, end=${highlight.end}, textLen=${text.length}, valid=$isValid');
+      final isValid =
+          highlight.start >= 0 &&
+          highlight.end <= text.length &&
+          highlight.start < highlight.end &&
+          highlight.start >= lastIndex; // 避免重叠
 
-      if (isValid) {
-        final before = result.substring(0, highlight.start);
-        final highlighted = result.substring(highlight.start, highlight.end);
-        final after = result.substring(highlight.end);
-
-        // 将颜色转换为十六进制字符串
-        final colorHex = '#${highlight.color.value.toRadixString(16).padLeft(8, '0')}';
-
-        // 使用自定义 <highlight> 标签（支持多色）
-        result = '$before<highlight color="$colorHex" id="${highlight.id}" style="${highlight.styleType}">$highlighted</highlight>$after';
+      if (!isValid) {
+        debugPrint(
+          '[UnifiedMarkdownRenderer] ⚠️  跳过无效高亮: start=${highlight.start}, end=${highlight.end}',
+        );
+        continue;
       }
+
+      // 添加高亮前的文本
+      buffer.write(text.substring(lastIndex, highlight.start));
+
+      // 将颜色转换为十六进制字符串
+      final colorHex =
+          '#${highlight.color.value.toRadixString(16).padLeft(8, '0')}';
+
+      // 添加高亮标签
+      buffer.write(
+        '<highlight color="$colorHex" id="${highlight.id}" style="${highlight.styleType}">',
+      );
+      buffer.write(text.substring(highlight.start, highlight.end));
+      buffer.write('</highlight>');
+
+      lastIndex = highlight.end;
     }
 
-    return result;
+    // 添加最后剩余的文本
+    buffer.write(text.substring(lastIndex));
+
+    return buffer.toString();
   }
 }

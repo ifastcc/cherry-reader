@@ -122,7 +122,8 @@ class CherryExtractor {
   /// 从 localStorage 中提取 assistants 信息
   void _extractAssistants() {
     try {
-      final localStorage = rawData!['localStorage'] as Map<String, dynamic>? ?? {};
+      final localStorage =
+          rawData!['localStorage'] as Map<String, dynamic>? ?? {};
       final persistDataStr = localStorage['persist:cherry-studio'];
 
       Map<String, dynamic> persistData;
@@ -339,9 +340,11 @@ class CherryExtractor {
       lastTime = createdAt;
 
       // 获取消息块内容
-      final blockIds = (message['blocks'] as List<dynamic>?)
-          ?.map((e) => e.toString())
-          .toList() ?? [];
+      final blockIds =
+          (message['blocks'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [];
       final blocks = getMessageBlocks(blockIds);
 
       // 构建完整消息
@@ -395,7 +398,8 @@ class CherryExtractor {
       switch (blockType) {
         case 'main_text':
           processedBlock['content'] = block['content'] ?? '';
-          processedBlock['citation_references'] = block['citationReferences'] ?? [];
+          processedBlock['citation_references'] =
+              block['citationReferences'] ?? [];
           break;
 
         case 'thinking':
@@ -487,7 +491,8 @@ class CherryExtractor {
       final blockStatus = block['status'] as String? ?? 'unknown';
 
       blockTypeCounts[blockType] = (blockTypeCounts[blockType] ?? 0) + 1;
-      blockStatusCounts[blockStatus] = (blockStatusCounts[blockStatus] ?? 0) + 1;
+      blockStatusCounts[blockStatus] =
+          (blockStatusCounts[blockStatus] ?? 0) + 1;
     }
 
     return {

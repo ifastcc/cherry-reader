@@ -7,11 +7,11 @@ part of 'export_data.dart';
 // **************************************************************************
 
 ExportData _$ExportDataFromJson(Map<String, dynamic> json) => ExportData(
-      time: (json['time'] as num).toInt(),
-      version: (json['version'] as num).toInt(),
-      localStorage: json['localStorage'] as Map<String, dynamic>,
-      indexedDB: json['indexedDB'] as Map<String, dynamic>,
-    );
+  time: (json['time'] as num).toInt(),
+  version: (json['version'] as num).toInt(),
+  localStorage: json['localStorage'] as Map<String, dynamic>,
+  indexedDB: json['indexedDB'] as Map<String, dynamic>,
+);
 
 Map<String, dynamic> _$ExportDataToJson(ExportData instance) =>
     <String, dynamic>{

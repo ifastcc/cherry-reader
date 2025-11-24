@@ -3,6 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'no_scrollbar_behavior.dart';
 import 'screens/home_screen.dart';
 import 'services/analysis_cache_manager.dart';
+import 'services/isar_database.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,7 +11,10 @@ void main() async {
   // 加载环境变量
   await dotenv.load(fileName: ".env");
 
-  // 初始化缓存管理器
+  // 初始化 Isar 数据库（优先初始化，提供高性能存储）
+  await IsarDatabase().init();
+
+  // 初始化缓存管理器（后续会迁移到 Isar）
   await AnalysisCacheManager().init();
 
   runApp(const CherryViewerApp());
@@ -47,10 +51,7 @@ class CherryViewerApp extends StatelessWidget {
           shadowColor: Colors.black.withOpacity(0.05),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            side: BorderSide(
-              color: Colors.grey.withOpacity(0.12),
-              width: 1,
-            ),
+            side: BorderSide(color: Colors.grey.withOpacity(0.12), width: 1),
           ),
         ),
 
@@ -72,7 +73,10 @@ class CherryViewerApp extends StatelessWidget {
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 12,
+          ),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
             borderSide: BorderSide(color: Colors.grey.withOpacity(0.2)),

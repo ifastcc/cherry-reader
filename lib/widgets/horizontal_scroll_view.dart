@@ -32,7 +32,8 @@ class HorizontalScrollView extends StatelessWidget {
     // spacing: 16 * (列数 - 1)
     final totalPadding = 32.0;
     final totalSpacing = 16.0 * (columnsPerView - 1);
-    final cardWidth = (screenWidth - totalPadding - totalSpacing) / columnsPerView;
+    final cardWidth =
+        (screenWidth - totalPadding - totalSpacing) / columnsPerView;
 
     return SizedBox(
       height: cardHeight,
@@ -43,15 +44,10 @@ class HorizontalScrollView extends StatelessWidget {
         separatorBuilder: (context, index) => const SizedBox(width: 16),
         itemBuilder: (context, index) {
           if (index < cards.length) {
-            return SizedBox(
-              width: cardWidth,
-              child: cards[index],
-            );
+            return SizedBox(width: cardWidth, child: cards[index]);
           } else {
             // Trailing 按钮
-            return Center(
-              child: trailing,
-            );
+            return Center(child: trailing);
           }
         },
       ),

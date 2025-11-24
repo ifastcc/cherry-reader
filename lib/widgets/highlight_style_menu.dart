@@ -172,7 +172,8 @@ class _CompactHighlightMenu extends StatelessWidget {
                   children: [
                     // 颜色选择按钮
                     ...kHighlightStyles.map((style) {
-                      final isSelected = currentColor == style.color.value &&
+                      final isSelected =
+                          currentColor == style.color.value &&
                           currentStyleType == style.type;
                       return _buildColorButton(style, isSelected);
                     }),
@@ -203,33 +204,31 @@ class _CompactHighlightMenu extends StatelessWidget {
         height: 28,
         margin: const EdgeInsets.symmetric(horizontal: 3),
         decoration: BoxDecoration(
-          color: style.type == 'background'
-              ? style.color
-              : Colors.transparent,
+          color: style.type == 'background' ? style.color : Colors.transparent,
           shape: BoxShape.circle,
           border: Border.all(
             color: isSelected
                 ? Colors.white
                 : (style.type == 'underline'
-                    ? style.color.withValues(alpha: 0.6)
-                    : Colors.transparent),
+                      ? style.color.withValues(alpha: 0.6)
+                      : Colors.transparent),
             width: isSelected ? 2.5 : 1.5,
           ),
         ),
         child: isSelected
             ? const Icon(Icons.check, color: Colors.white, size: 16)
             : (style.type == 'underline'
-                ? Center(
-                    child: Container(
-                      width: 14,
-                      height: 2.5,
-                      decoration: BoxDecoration(
-                        color: style.color,
-                        borderRadius: BorderRadius.circular(1),
+                  ? Center(
+                      child: Container(
+                        width: 14,
+                        height: 2.5,
+                        decoration: BoxDecoration(
+                          color: style.color,
+                          borderRadius: BorderRadius.circular(1),
+                        ),
                       ),
-                    ),
-                  )
-                : null),
+                    )
+                  : null),
       ),
     );
   }
@@ -240,9 +239,7 @@ class _CompactHighlightMenu extends StatelessWidget {
       child: Container(
         width: 28,
         height: 28,
-        decoration: const BoxDecoration(
-          shape: BoxShape.circle,
-        ),
+        decoration: const BoxDecoration(shape: BoxShape.circle),
         child: Icon(
           Icons.delete_outline_rounded,
           color: Colors.white.withValues(alpha: 0.85),

@@ -1,5 +1,5 @@
-name: cherry_viewer_flutter
-description: A Flutter viewer for Cherry Studio chat history
+name: cherry_reader
+description: An immersive reader for Cherry Studio chat history with annotations and AI insights
 version: 1.0.0+1
 
 environment:
@@ -43,6 +43,10 @@ dependencies:
   # 缓存
   shared_preferences: ^2.2.2      # 持久化存储
 
+  # 数据库
+  isar: ^3.1.0+1                  # 高性能数据库
+  isar_flutter_libs: ^3.1.0+1     # Isar Flutter 平台库
+
   # 日志
   logger: ^2.0.2                  # 日志工具
 
@@ -55,6 +59,7 @@ dev_dependencies:
   flutter_lints: ^3.0.0
   build_runner: ^2.4.6            # 代码生成
   json_serializable: ^6.7.1       # JSON 序列化代码生成
+  isar_generator: ^3.1.0+1        # Isar 代码生成
 
 flutter:
   uses-material-design: true

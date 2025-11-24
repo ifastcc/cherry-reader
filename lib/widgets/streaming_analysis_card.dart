@@ -45,7 +45,11 @@ class StreamingAnalysisCard extends StatelessWidget {
                       width: 0.5,
                     ),
                   ),
-                  child: const Icon(Icons.auto_awesome, size: 13, color: modelColor),
+                  child: const Icon(
+                    Icons.auto_awesome,
+                    size: 13,
+                    color: modelColor,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 // 模型名称

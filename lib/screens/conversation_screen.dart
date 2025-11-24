@@ -4,6 +4,8 @@ import 'dart:io' show Platform;
 import '../services/cherry_extractor.dart';
 import '../services/analysis_cache_manager.dart';
 import '../services/openai_service.dart';
+import '../services/highlight_service.dart';
+import '../services/data_persistence_manager.dart';
 import '../widgets/horizontal_scroll_view.dart';
 import '../widgets/streaming_analysis_card.dart';
 import '../widgets/highlightable_card.dart';
@@ -31,7 +33,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   OpenAIService? _openaiService;
 
   Map<String, dynamic>? _conversation;
-  Map<String, dynamic> _cacheData = {};
+  // _cacheData 已移除，Isar 自动管理持久化
   Map<int, List<String>> _aiAnalyses = {};
 
   // 流式生成状态
@@ -41,6 +43,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   // 卡片显示配置
   late int _columnsPerView;
+
+  // 【性能优化】缓存对话分组结果
+  List<Map<String, dynamic>>? _cachedGroups;
 
   // API 配置
   String _apiKey = '';
@@ -66,10 +71,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
       _apiKey = config['apiKey'] ?? '';
       _baseUrl = config['apiUrl'] ?? 'https://api.openai.com/v1';
       _model = config['model'] ?? 'gpt-4-turbo-preview';
-      _openaiService = OpenAIService(
-        apiKey: _apiKey,
-        baseUrl: _baseUrl,
-      );
+      _openaiService = OpenAIService(apiKey: _apiKey, baseUrl: _baseUrl);
     });
   }
 
@@ -91,29 +93,62 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   Future<void> _loadData() async {
-    // 加载对话数据
-    final conv = widget.extractor.extractTopicConversation(widget.topicId);
+    final startTime = DateTime.now();
 
-    // 加载缓存
-    final cacheData = await _cacheManager.loadCache();
-    final analyses = _cacheManager.getTopicAnalyses(cacheData, widget.topicId);
+    // 【优化】优先从 Isar 加载话题数据（按需加载）
+    var conv = await DataPersistenceManager.loadTopicData(widget.topicId);
+
+    // 如果缓存中没有数据，使用 extractor（fallback）
+    if (conv == null) {
+      conv = widget.extractor.extractTopicConversation(widget.topicId);
+    }
+
+    // 【优化】从 Isar 加载分析缓存
+    final analyses = await _cacheManager.getTopicAnalyses(widget.topicId);
+
+    // 【性能优化】批量预加载所有消息的标注
+    if (conv != null) {
+      final messages = conv['messages'] as List<dynamic>? ?? [];
+      final messageIds = messages
+          .where((m) => m is Map<String, dynamic>)
+          .map((m) => m['id'] as String?)
+          .where((id) => id != null && id.isNotEmpty)
+          .cast<String>()
+          .toList();
+
+      if (messageIds.isNotEmpty) {
+        final highlightService = HighlightService();
+        await highlightService.batchPreload(messageIds);
+      }
+    }
 
     setState(() {
       _conversation = conv;
-      _cacheData = cacheData;
       _aiAnalyses = analyses;
+      _cachedGroups = null; // 清除缓存，触发重新计算
     });
   }
 
   /// 获取对话分组（按 askId 和 useful 字段分组）
+  ///
+  /// 【性能优化】使用缓存避免重复计算
   List<Map<String, dynamic>> _getConversationGroups() {
-    if (_conversation == null) return [];
+    // 检查缓存
+    if (_cachedGroups != null) {
+      return _cachedGroups!;
+    }
+
+    if (_conversation == null) {
+      return [];
+    }
 
     final messages = _conversation!['messages'] as List<dynamic>;
+
     final groups = <Map<String, dynamic>>[];
     Map<String, dynamic>? currentGroup;
 
-    for (final msg in messages) {
+    for (var i = 0; i < messages.length; i++) {
+      final msg = messages[i];
       if (msg is! Map<String, dynamic>) continue;
 
       final role = msg['role'] as String?;
@@ -136,6 +171,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if (currentGroup != null) {
       groups.add(currentGroup);
     }
+
+    // 缓存结果
+    _cachedGroups = groups;
 
     return groups;
   }
@@ -161,9 +199,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final assistantReplies = group['assistant_replies'] as List<dynamic>;
 
     if (assistantReplies.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('该问题没有助手回复')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('该问题没有助手回复')));
       return;
     }
 
@@ -191,31 +229,29 @@ class _ConversationScreenState extends State<ConversationScreen> {
         });
       }
 
-      // 保存到缓存
-      final updatedCache = await _cacheManager.saveAnalysis(
-        _cacheData,
+      // 【优化】保存到 Isar（自动持久化）
+      await _cacheManager.saveAnalysis(
         widget.topicId,
         groupIndex,
         _currentStreamContent,
       );
 
-      final updatedAnalyses = _cacheManager.getTopicAnalyses(
-        updatedCache,
+      final updatedAnalyses = await _cacheManager.getTopicAnalyses(
         widget.topicId,
       );
 
       setState(() {
-        _cacheData = updatedCache;
         _aiAnalyses = updatedAnalyses;
         _isGenerating = false;
         _generatingGroupIndex = null;
         _currentStreamContent = '';
+        _cachedGroups = null; // AI 分析可能改变显示，清除缓存
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ 分析已保存')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('✅ 分析已保存')));
       }
     } catch (e) {
       setState(() {
@@ -226,10 +262,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('生成失败: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('生成失败: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -333,8 +366,15 @@ $modelResponses''';
       padding: const EdgeInsets.all(16),
       itemCount: groups.length,
       separatorBuilder: (context, index) => const SizedBox(height: 24),
+      // 【性能优化】减小缓存范围，提升滚动性能
+      cacheExtent: 300, // 只预渲染必要的内容
+      addAutomaticKeepAlives: true, // 保持已构建的组件
       itemBuilder: (context, index) {
-        return _buildConversationGroup(groups[index], index);
+        // 【性能优化】使用 RepaintBoundary 隔离重绘
+        return RepaintBoundary(
+          key: ValueKey('group_$index'),
+          child: _buildConversationGroup(groups[index], index),
+        );
       },
     );
   }
@@ -344,18 +384,21 @@ $modelResponses''';
     final assistantReplies = group['assistant_replies'] as List<dynamic>;
 
     // 计算总卡片数（流式卡片 + AI分析 + 助手回复）
-    final hasStreamingCard = _isGenerating && _generatingGroupIndex == groupIndex;
+    final hasStreamingCard =
+        _isGenerating && _generatingGroupIndex == groupIndex;
     final aiAnalysisCount = _aiAnalyses[groupIndex]?.length ?? 0;
-    final totalCards = (hasStreamingCard ? 1 : 0) + aiAnalysisCount + assistantReplies.length;
+    final totalCards =
+        (hasStreamingCard ? 1 : 0) + aiAnalysisCount + assistantReplies.length;
 
     // 判断是否为单卡片模式（只有一个助手回复，无AI分析，无流式生成）
-    final isSingleCard = totalCards == 1 && !hasStreamingCard && aiAnalysisCount == 0;
+    final isSingleCard =
+        totalCards == 1 && !hasStreamingCard && aiAnalysisCount == 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // 用户消息
-        UserMessageCard(data: userMsg),
+        UserMessageCard(key: ValueKey(userMsg['id']), data: userMsg),
 
         const SizedBox(height: 16),
 
@@ -363,63 +406,75 @@ $modelResponses''';
         if (assistantReplies.isNotEmpty)
           isSingleCard
               ? // 单个助手回复：居中占满宽度
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: SizedBox(
-                  height: 600,
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: HighlightableCard.assistant(
-                          data: assistantReplies.first as Map<String, dynamic>,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: SizedBox(
+                    height: 600,
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: HighlightableCard.assistant(
+                            key: ValueKey(
+                              (assistantReplies.first
+                                  as Map<String, dynamic>)['id'],
+                            ),
+                            data:
+                                assistantReplies.first as Map<String, dynamic>,
+                          ),
                         ),
+                        const SizedBox(height: 8),
+                        // 生成分析按钮
+                        IconButton(
+                          icon: const Icon(Icons.add_circle_outline),
+                          iconSize: 32,
+                          tooltip: '生成 AI 分析',
+                          onPressed: _isGenerating
+                              ? null
+                              : () => _showAnalysisDialog(groupIndex),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : // 多卡片：使用横向滚动视图
+                HorizontalScrollView(
+                  columnsPerView: _columnsPerView,
+                  cards: [
+                    // 正在生成的流式卡片（最前面）
+                    if (hasStreamingCard)
+                      StreamingAnalysisCard(
+                        content: _currentStreamContent,
+                        analysisIndex: aiAnalysisCount + 1,
                       ),
-                      const SizedBox(height: 8),
-                      // 生成分析按钮
-                      IconButton(
-                        icon: const Icon(Icons.add_circle_outline),
-                        iconSize: 32,
-                        tooltip: '生成 AI 分析',
-                        onPressed: _isGenerating
-                            ? null
-                            : () => _showAnalysisDialog(groupIndex),
-                      ),
-                    ],
+
+                    // 已保存的 AI 分析卡片（也在助手回复之前）
+                    ...(_aiAnalyses[groupIndex] ?? []).asMap().entries.map((
+                      entry,
+                    ) {
+                      return HighlightableCard.aiAnalysis(
+                        key: ValueKey('ai_${groupIndex}_${entry.key}'),
+                        content: entry.value,
+                      );
+                    }),
+
+                    // 助手回复卡片（放在最后）
+                    ...assistantReplies.map((reply) {
+                      final replyMap = reply as Map<String, dynamic>;
+                      return HighlightableCard.assistant(
+                        key: ValueKey(replyMap['id']),
+                        data: replyMap,
+                      );
+                    }),
+                  ],
+                  trailing: IconButton(
+                    icon: const Icon(Icons.add_circle_outline),
+                    iconSize: 32,
+                    tooltip: '生成 AI 分析',
+                    onPressed: _isGenerating
+                        ? null
+                        : () => _showAnalysisDialog(groupIndex),
                   ),
                 ),
-              )
-              : // 多卡片：使用横向滚动视图
-              HorizontalScrollView(
-                columnsPerView: _columnsPerView,
-                cards: [
-                  // 正在生成的流式卡片（最前面）
-                  if (hasStreamingCard)
-                    StreamingAnalysisCard(
-                      content: _currentStreamContent,
-                      analysisIndex: aiAnalysisCount + 1,
-                    ),
-
-                  // 已保存的 AI 分析卡片（也在助手回复之前）
-                  ...(_aiAnalyses[groupIndex] ?? []).map((analysis) {
-                    return HighlightableCard.aiAnalysis(content: analysis);
-                  }),
-
-                  // 助手回复卡片（放在最后）
-                  ...assistantReplies.map((reply) {
-                    return HighlightableCard.assistant(
-                      data: reply as Map<String, dynamic>,
-                    );
-                  }),
-                ],
-                trailing: IconButton(
-                  icon: const Icon(Icons.add_circle_outline),
-                  iconSize: 32,
-                  tooltip: '生成 AI 分析',
-                  onPressed: _isGenerating
-                      ? null
-                      : () => _showAnalysisDialog(groupIndex),
-                ),
-              ),
       ],
     );
   }

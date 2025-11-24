@@ -1,15 +1,15 @@
-# Cherry Viewer Flutter
+# Cherry Reader
 
-纯 Flutter 实现的 Cherry Studio 聊天记录查看器
+一个沉浸式的 Cherry Studio 聊天记录阅读器，支持标注、AI 分析和流畅的阅读体验。
 
 ## 🎯 特性
 
-✅ **纯 Dart 数据处理** - 无需 Python 后端
-✅ **横向滚动卡片** - 流畅的多模型回复对比
-✅ **AI 流式分析** - 实时生成元分析内容
+✅ **沉浸式阅读** - 专为长时间阅读优化的界面设计
+✅ **智能标注** - 高亮、批注你的重要对话内容
+✅ **AI 洞察分析** - 实时生成对话总结和深度分析
+✅ **横向对比阅读** - 流畅的多模型回复对比卡片
 ✅ **跨平台支持** - Web/Desktop/Mobile 统一代码
-✅ **高性能渲染** - 只重绘变化的部分
-✅ **持久化缓存** - 基于 Topic ID 的分析缓存
+✅ **纯 Dart 实现** - 无需 Python 后端，高性能渲染
 
 ## 📦 安装
 
@@ -26,7 +26,8 @@ https://flutter.dev/docs/get-started/install
 ### 2. 克隆项目
 
 ```bash
-cd /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer
+git clone https://github.com/yourusername/cherry-reader.git
+cd cherry-reader
 ```
 
 ### 3. 安装依赖
@@ -85,8 +86,6 @@ OPENAI_MODEL=gpt-4
 ```bash
 flutter run -d macos
 ```
-
-详细配置说明请查看 [ENV_CONFIG_GUIDE.md](ENV_CONFIG_GUIDE.md)
 
 **旧方式（不推荐）：命令行参数**
 ```bash

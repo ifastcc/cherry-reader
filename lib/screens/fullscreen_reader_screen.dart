@@ -36,13 +36,16 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
   bool _showColorPicker = false;
   int _currentStyleIndex = 0;
 
-  Color get _currentHighlightColor => kHighlightStyles[_currentStyleIndex].color;
+  Color get _currentHighlightColor =>
+      kHighlightStyles[_currentStyleIndex].color;
   String get _currentHighlightType => kHighlightStyles[_currentStyleIndex].type;
 
   @override
   void initState() {
     super.initState();
-    debugPrint('[FullscreenReader] initState with messageId: ${widget.messageId}');
+    debugPrint(
+      '[FullscreenReader] initState with messageId: ${widget.messageId}',
+    );
     _loadHighlights();
   }
 
@@ -140,10 +143,7 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
     _saveHighlights();
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('已删除高亮'),
-        duration: Duration(seconds: 1),
-      ),
+      const SnackBar(content: Text('已删除高亮'), duration: Duration(seconds: 1)),
     );
   }
 
@@ -175,7 +175,11 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
     }
   }
 
-  void _updateHighlightStyle(HighlightData oldHighlight, int newColor, String newType) {
+  void _updateHighlightStyle(
+    HighlightData oldHighlight,
+    int newColor,
+    String newType,
+  ) {
     final newHighlight = HighlightData(
       id: oldHighlight.id,
       text: oldHighlight.text,
@@ -282,45 +286,55 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
                 _currentStyleIndex = index;
               });
             },
-            itemBuilder: (context) => List.generate(kHighlightStyles.length, (index) {
-              final style = kHighlightStyles[index];
-              final color = style.color;
-              final label = style.name;
-              final type = style.type;
+            itemBuilder: (context) =>
+                List.generate(kHighlightStyles.length, (index) {
+                  final style = kHighlightStyles[index];
+                  final color = style.color;
+                  final label = style.name;
+                  final type = style.type;
 
-              return PopupMenuItem(
-                value: index,
-                child: Row(
-                  children: [
-                    Container(
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        color: type == 'background' ? color : Colors.transparent,
-                        shape: BoxShape.circle,
-                        border: _currentStyleIndex == index
-                            ? Border.all(color: Colors.white, width: 2)
-                            : Border.all(color: Colors.grey, width: 1),
-                      ),
-                      child: type == 'underline'
-                          ? Center(
-                              child: Container(width: 16, height: 2, color: color),
-                            )
-                          : null,
+                  return PopupMenuItem(
+                    value: index,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: type == 'background'
+                                ? color
+                                : Colors.transparent,
+                            shape: BoxShape.circle,
+                            border: _currentStyleIndex == index
+                                ? Border.all(color: Colors.white, width: 2)
+                                : Border.all(color: Colors.grey, width: 1),
+                          ),
+                          child: type == 'underline'
+                              ? Center(
+                                  child: Container(
+                                    width: 16,
+                                    height: 2,
+                                    color: color,
+                                  ),
+                                )
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Text(label),
+                      ],
                     ),
-                    const SizedBox(width: 12),
-                    Text(label),
-                  ],
-                ),
-              );
-            }),
+                  );
+                }),
           ),
           // 高亮列表
           IconButton(
             icon: Badge(
               label: Text('${_highlights.length}'),
               isLabelVisible: _highlights.isNotEmpty,
-              child: const Icon(Icons.format_list_bulleted, color: Colors.black87),
+              child: const Icon(
+                Icons.format_list_bulleted,
+                color: Colors.black87,
+              ),
             ),
             onPressed: _showHighlightsList,
             tooltip: '查看高亮列表',
@@ -369,7 +383,8 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
                   }
                 },
                 contextMenuBuilder: (context, selectableRegionState) {
-                  final buttonItems = selectableRegionState.contextMenuButtonItems;
+                  final buttonItems =
+                      selectableRegionState.contextMenuButtonItems;
 
                   return AdaptiveTextSelectionToolbar.buttonItems(
                     anchors: selectableRegionState.contextMenuAnchors,
@@ -394,13 +409,17 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
                   data: widget.content,
                   scrollable: true,
                   largeFont: true,
-                  highlights: _highlights.map((h) => HighlightRange(
-                    id: h.id,
-                    start: h.start,
-                    end: h.end,
-                    color: Color(h.color),
-                    styleType: h.styleType,
-                  )).toList(),
+                  highlights: _highlights
+                      .map(
+                        (h) => HighlightRange(
+                          id: h.id,
+                          start: h.start,
+                          end: h.end,
+                          color: Color(h.color),
+                          styleType: h.styleType,
+                        ),
+                      )
+                      .toList(),
                   onHighlightTap: (id, details) {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (mounted) {
@@ -408,7 +427,10 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
                       }
                     });
                   },
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 20,
+                  ),
                 ),
               ),
             ),
@@ -452,7 +474,8 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
             final color = style.color;
             final type = style.type;
             final isSelected = _activeHighlight != null
-                ? (_activeHighlight!.color == color.value && _activeHighlight!.styleType == type)
+                ? (_activeHighlight!.color == color.value &&
+                      _activeHighlight!.styleType == type)
                 : _currentStyleIndex == index;
 
             return GestureDetector(
@@ -466,7 +489,9 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
 
                   if (_activeHighlight != null) {
                     _updateHighlightStyle(_activeHighlight!, color.value, type);
-                    final newHighlight = _highlights.firstWhere((h) => h.id == _activeHighlight!.id);
+                    final newHighlight = _highlights.firstWhere(
+                      (h) => h.id == _activeHighlight!.id,
+                    );
                     setState(() {
                       _activeHighlight = newHighlight;
                     });
@@ -485,7 +510,9 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
                       : Border.all(color: Colors.grey.withValues(alpha: 0.2)),
                 ),
                 child: type == 'underline'
-                    ? Center(child: Container(width: 18, height: 2, color: color))
+                    ? Center(
+                        child: Container(width: 18, height: 2, color: color),
+                      )
                     : null,
               ),
             );

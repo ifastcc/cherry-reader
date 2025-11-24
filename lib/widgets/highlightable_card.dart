@@ -96,10 +96,7 @@ class HighlightableCard extends StatefulWidget {
   }
 
   /// 创建 AI 分析卡片
-  factory HighlightableCard.aiAnalysis({
-    Key? key,
-    required String content,
-  }) {
+  factory HighlightableCard.aiAnalysis({Key? key, required String content}) {
     final messageId = 'ai_analysis_${content.hashCode}';
 
     return HighlightableCard(
@@ -138,11 +135,7 @@ class HighlightableCard extends StatefulWidget {
 }
 
 /// 卡片类型
-enum CardType {
-  assistant,
-  aiAnalysis,
-  user,
-}
+enum CardType { assistant, aiAnalysis, user }
 
 class _HighlightableCardState extends State<HighlightableCard> {
   final HighlightService _highlightService = HighlightService();
@@ -153,7 +146,13 @@ class _HighlightableCardState extends State<HighlightableCard> {
   int _selectionEnd = 0;
   int _currentStyleIndex = 0;
 
-  Color get _currentHighlightColor => kHighlightStyles[_currentStyleIndex].color;
+  // 【性能优化】Markdown 渲染缓存（memo 模式）
+  Widget? _cachedMarkdownWidget;
+  String? _lastRenderedContent;
+  int? _lastRenderedHighlightsHash;
+
+  Color get _currentHighlightColor =>
+      kHighlightStyles[_currentStyleIndex].color;
   String get _currentHighlightType => kHighlightStyles[_currentStyleIndex].type;
 
   @override
@@ -167,8 +166,61 @@ class _HighlightableCardState extends State<HighlightableCard> {
     if (mounted) {
       setState(() {
         _highlights = highlights;
+        // 高亮变化时清除 Markdown 缓存
+        _cachedMarkdownWidget = null;
       });
     }
+  }
+
+  /// 【性能优化】获取 memoized Markdown widget
+  ///
+  /// 只有在 content 或 highlights 变化时才重新创建
+  Widget _getMemoizedMarkdownWidget() {
+    // 【优化】使用 highlights 长度作为快速检查
+    final highlightsHash = _highlights.length;
+
+    // 检查是否需要重新渲染
+    final needsRebuild =
+        _cachedMarkdownWidget == null ||
+        _lastRenderedContent != widget.content ||
+        _lastRenderedHighlightsHash != highlightsHash;
+
+    if (needsRebuild) {
+      _cachedMarkdownWidget = UnifiedMarkdownRenderer(
+        data: widget.content,
+        scrollable: false,
+        selectable: true,
+        highlights: _highlights
+            .map(
+              (h) => HighlightRange(
+                id: h.id,
+                start: h.start,
+                end: h.end,
+                color: Color(h.color),
+                styleType: h.styleType,
+              ),
+            )
+            .toList(),
+        onHighlightTap: (id, details) {
+          final highlight = _highlights.firstWhere(
+            (h) => h.id == id,
+            orElse: () => _highlights.first,
+          );
+          _showHighlightMenu(highlight);
+        },
+        textStyle: const TextStyle(
+          fontSize: 15,
+          height: 1.8,
+          color: Color(0xFF2C3E50),
+          letterSpacing: 0.3,
+        ),
+      );
+
+      _lastRenderedContent = widget.content;
+      _lastRenderedHighlightsHash = highlightsHash;
+    }
+
+    return _cachedMarkdownWidget!;
   }
 
   void _addHighlightFromSelection(String text, int start, int end) {
@@ -180,10 +232,14 @@ class _HighlightableCardState extends State<HighlightableCard> {
       styleType: _currentHighlightType,
     );
 
-    _highlightService.addHighlight(widget.messageId, highlight).then((highlights) {
+    _highlightService.addHighlight(widget.messageId, highlight).then((
+      highlights,
+    ) {
       if (mounted) {
         setState(() {
           _highlights = highlights;
+          // 高亮变化时清除 Markdown 缓存
+          _cachedMarkdownWidget = null;
         });
       }
     });
@@ -198,39 +254,44 @@ class _HighlightableCardState extends State<HighlightableCard> {
   }
 
   void _removeHighlight(HighlightData highlight) {
-    _highlightService.removeHighlight(widget.messageId, highlight.id).then((highlights) {
+    _highlightService.removeHighlight(widget.messageId, highlight.id).then((
+      highlights,
+    ) {
       if (mounted) {
         setState(() {
           _highlights = highlights;
+          // 高亮变化时清除 Markdown 缓存
+          _cachedMarkdownWidget = null;
         });
       }
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('已删除高亮'),
-        duration: Duration(seconds: 1),
-      ),
+      const SnackBar(content: Text('已删除高亮'), duration: Duration(seconds: 1)),
     );
   }
 
-  void _updateHighlightStyle(HighlightData highlight, int newColor, String newType) {
-    _highlightService.updateHighlightStyle(
-      widget.messageId,
-      highlight.id,
-      newColor,
-      newType,
-    ).then((highlights) {
-      if (mounted) {
-        setState(() {
-          _highlights = highlights;
+  void _updateHighlightStyle(
+    HighlightData highlight,
+    int newColor,
+    String newType,
+  ) {
+    _highlightService
+        .updateHighlightStyle(widget.messageId, highlight.id, newColor, newType)
+        .then((highlights) {
+          if (mounted) {
+            setState(() {
+              _highlights = highlights;
+              // 高亮变化时清除 Markdown 缓存
+              _cachedMarkdownWidget = null;
+            });
+          }
         });
-      }
-    });
   }
 
   void _showHighlightMenu(HighlightData highlight) {
-    final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
     final center = Offset(overlay.size.width / 2, overlay.size.height / 2);
 
     HighlightStyleMenu.show(
@@ -249,7 +310,9 @@ class _HighlightableCardState extends State<HighlightableCard> {
   }
 
   Future<void> _openFullscreen() async {
-    debugPrint('[HighlightableCard] Navigating to fullscreen with messageId: ${widget.messageId}');
+    debugPrint(
+      '[HighlightableCard] Navigating to fullscreen with messageId: ${widget.messageId}',
+    );
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -261,11 +324,17 @@ class _HighlightableCardState extends State<HighlightableCard> {
       ),
     );
     // 从全屏返回后，强制刷新标注
-    debugPrint('[HighlightableCard] Returned from fullscreen, reloading highlights...');
-    final highlights = await _highlightService.reloadHighlights(widget.messageId);
+    debugPrint(
+      '[HighlightableCard] Returned from fullscreen, reloading highlights...',
+    );
+    final highlights = await _highlightService.reloadHighlights(
+      widget.messageId,
+    );
     if (mounted) {
       setState(() {
         _highlights = highlights;
+        // 高亮变化时清除 Markdown 缓存
+        _cachedMarkdownWidget = null;
       });
     }
   }
@@ -289,7 +358,10 @@ class _HighlightableCardState extends State<HighlightableCard> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: widget.modelColor.withValues(alpha: 0.2), width: 1),
+          border: Border.all(
+            color: widget.modelColor.withValues(alpha: 0.2),
+            width: 1,
+          ),
         ),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: widget.maxHeight),
@@ -400,7 +472,11 @@ class _HighlightableCardState extends State<HighlightableCard> {
             ContextMenuButtonItem(
               onPressed: () {
                 if (_selectedText.isNotEmpty) {
-                  _addHighlightFromSelection(_selectedText, _selectionStart, _selectionEnd);
+                  _addHighlightFromSelection(
+                    _selectedText,
+                    _selectionStart,
+                    _selectionEnd,
+                  );
                 }
                 ContextMenuController.removeAny();
               },
@@ -411,31 +487,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
           ],
         );
       },
-      child: UnifiedMarkdownRenderer(
-        data: widget.content,
-        scrollable: false,
-        selectable: true,
-        highlights: _highlights.map((h) => HighlightRange(
-          id: h.id,
-          start: h.start,
-          end: h.end,
-          color: Color(h.color),
-          styleType: h.styleType,
-        )).toList(),
-        onHighlightTap: (id, details) {
-          final highlight = _highlights.firstWhere(
-            (h) => h.id == id,
-            orElse: () => _highlights.first,
-          );
-          _showHighlightMenu(highlight);
-        },
-        textStyle: const TextStyle(
-          fontSize: 15,
-          height: 1.8,
-          color: Color(0xFF2C3E50),
-          letterSpacing: 0.3,
-        ),
-      ),
+      // 【性能优化】使用 memoized Markdown widget
+      child: _getMemoizedMarkdownWidget(),
     );
   }
 
@@ -462,7 +515,9 @@ class _HighlightableCardState extends State<HighlightableCard> {
                   Icon(Icons.bookmark, size: 12, color: color),
                   const SizedBox(width: 4),
                   Text(
-                    h.text.length > 20 ? '${h.text.substring(0, 20)}...' : h.text,
+                    h.text.length > 20
+                        ? '${h.text.substring(0, 20)}...'
+                        : h.text,
                     style: TextStyle(fontSize: 11, color: color),
                   ),
                 ],

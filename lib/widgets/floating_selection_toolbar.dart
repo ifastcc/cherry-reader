@@ -122,11 +122,7 @@ class _ToolbarButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                icon,
-                size: 18,
-                color: color ?? Colors.white,
-              ),
+              Icon(icon, size: 18, color: color ?? Colors.white),
               const SizedBox(width: 6),
               Text(
                 label,

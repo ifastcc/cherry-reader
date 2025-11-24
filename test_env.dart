@@ -19,7 +19,9 @@ void main() async {
 
     print('配置信息:');
     print('─' * 60);
-    print('OPENAI_API_KEY: ${apiKey.length > 20 ? "${apiKey.substring(0, 20)}..." : apiKey}');
+    print(
+      'OPENAI_API_KEY: ${apiKey.length > 20 ? "${apiKey.substring(0, 20)}..." : apiKey}',
+    );
     print('OPENAI_BASE_URL: $baseUrl');
     print('OPENAI_MODEL: $model');
     print('─' * 60);

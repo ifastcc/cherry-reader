@@ -44,10 +44,7 @@ class HighlightListSheet extends StatelessWidget {
               ),
               Text(
                 '${highlights.length} 条标注',
-                style: const TextStyle(
-                  color: Colors.grey,
-                  fontSize: 14,
-                ),
+                style: const TextStyle(color: Colors.grey, fontSize: 14),
               ),
             ],
           ),
@@ -55,10 +52,7 @@ class HighlightListSheet extends StatelessWidget {
           if (highlights.isEmpty)
             const Expanded(
               child: Center(
-                child: Text(
-                  '暂无高亮标注',
-                  style: TextStyle(color: Colors.grey),
-                ),
+                child: Text('暂无高亮标注', style: TextStyle(color: Colors.grey)),
               ),
             )
           else
@@ -68,9 +62,11 @@ class HighlightListSheet extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final date = sortedKeys[index];
                   final dayHighlights = grouped[date]!;
-                  
+
                   // Sort highlights within the day by time descending
-                  dayHighlights.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+                  dayHighlights.sort(
+                    (a, b) => b.createdAt.compareTo(a.createdAt),
+                  );
 
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -86,7 +82,9 @@ class HighlightListSheet extends StatelessWidget {
                           ),
                         ),
                       ),
-                      ...dayHighlights.map((h) => _buildHighlightItem(context, h)),
+                      ...dayHighlights.map(
+                        (h) => _buildHighlightItem(context, h),
+                      ),
                       const SizedBox(height: 8),
                     ],
                   );
@@ -128,10 +126,7 @@ class HighlightListSheet extends StatelessWidget {
         ),
         subtitle: Text(
           DateFormat('HH:mm').format(highlight.createdAt),
-          style: const TextStyle(
-            color: Colors.grey,
-            fontSize: 12,
-          ),
+          style: const TextStyle(color: Colors.grey, fontSize: 12),
         ),
         trailing: IconButton(
           icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
@@ -141,10 +136,16 @@ class HighlightListSheet extends StatelessWidget {
     );
   }
 
-  Map<DateTime, List<HighlightData>> _groupHighlights(List<HighlightData> list) {
+  Map<DateTime, List<HighlightData>> _groupHighlights(
+    List<HighlightData> list,
+  ) {
     final map = <DateTime, List<HighlightData>>{};
     for (final h in list) {
-      final date = DateTime(h.createdAt.year, h.createdAt.month, h.createdAt.day);
+      final date = DateTime(
+        h.createdAt.year,
+        h.createdAt.month,
+        h.createdAt.day,
+      );
       if (!map.containsKey(date)) {
         map[date] = [];
       }

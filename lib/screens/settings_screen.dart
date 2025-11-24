@@ -49,13 +49,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
 
     // 优先读取 SharedPreferences，如果没有则从 .env 读取
-    final apiUrl = prefs.getString(_keyApiUrl) ??
+    final apiUrl =
+        prefs.getString(_keyApiUrl) ??
         dotenv.env['OPENAI_BASE_URL'] ??
         'https://api.openai.com/v1';
-    final apiKey = prefs.getString(_keyApiKey) ??
-        dotenv.env['OPENAI_API_KEY'] ??
-        '';
-    final model = prefs.getString(_keyModel) ??
+    final apiKey =
+        prefs.getString(_keyApiKey) ?? dotenv.env['OPENAI_API_KEY'] ?? '';
+    final model =
+        prefs.getString(_keyModel) ??
         dotenv.env['OPENAI_MODEL'] ??
         'gpt-4-turbo-preview';
 
@@ -79,10 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✅ 设置已保存'),
-          backgroundColor: Colors.green,
-        ),
+        const SnackBar(content: Text('✅ 设置已保存'), backgroundColor: Colors.green),
       );
     }
   }
@@ -118,11 +116,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _loadSettings();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('已重置为默认值'),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已重置为默认值')));
     }
   }
 
@@ -157,8 +153,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.info_outline,
-                                    color: Colors.blue[300], size: 20),
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Colors.blue[300],
+                                  size: 20,
+                                ),
                                 const SizedBox(width: 8),
                                 const Text(
                                   'AI 分析配置',
@@ -302,10 +301,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(width: 8),
                 const Text(
                   '数据管理',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
               ],
             ),
@@ -331,7 +327,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: const Icon(Icons.copy),
                 tooltip: '复制路径',
                 onPressed: () async {
-                  final path = await DataPersistenceManager.getAppDataFilePath();
+                  final path =
+                      await DataPersistenceManager.getAppDataFilePath();
                   await Clipboard.setData(ClipboardData(text: path));
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -399,13 +396,13 @@ Future<Map<String, String>> getApiConfig() async {
   final prefs = await SharedPreferences.getInstance();
 
   return {
-    'apiUrl': prefs.getString(_keyApiUrl) ??
+    'apiUrl':
+        prefs.getString(_keyApiUrl) ??
         dotenv.env['OPENAI_BASE_URL'] ??
         'https://api.openai.com/v1',
-    'apiKey': prefs.getString(_keyApiKey) ??
-        dotenv.env['OPENAI_API_KEY'] ??
-        '',
-    'model': prefs.getString(_keyModel) ??
+    'apiKey': prefs.getString(_keyApiKey) ?? dotenv.env['OPENAI_API_KEY'] ?? '',
+    'model':
+        prefs.getString(_keyModel) ??
         dotenv.env['OPENAI_MODEL'] ??
         'gpt-4-turbo-preview',
   };
