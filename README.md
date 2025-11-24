@@ -1,99 +1,116 @@
-# Cherry Reader
+<div align="center">
 
-一个沉浸式的 Cherry Studio 聊天记录阅读器，支持标注、AI 分析和流畅的阅读体验。
+# 🍒 Cherry Reader
 
-## 🎯 特性
+**一个沉浸式的 Cherry Studio 聊天记录阅读器**
 
-✅ **沉浸式阅读** - 专为长时间阅读优化的界面设计
-✅ **智能标注** - 高亮、批注你的重要对话内容
-✅ **AI 洞察分析** - 实时生成对话总结和深度分析
-✅ **横向对比阅读** - 流畅的多模型回复对比卡片
-✅ **跨平台支持** - Web/Desktop/Mobile 统一代码
-✅ **纯 Dart 实现** - 无需 Python 后端，高性能渲染
+支持标注、AI 分析和流畅的阅读体验
 
-## 📦 安装
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Flutter](https://img.shields.io/badge/Flutter-3.0%2B-blue.svg)](https://flutter.dev/)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Web-lightgrey.svg)](https://github.com/ifastcc/cherry-reader)
 
-### 1. 安装 Flutter SDK
+[English](README.md) | 简体中文
+
+</div>
+
+---
+
+## ✨ 特性
+
+<table>
+<tr>
+<td width="50%">
+
+### 📖 沉浸式阅读
+专为长时间阅读优化的界面设计，让你舒适地回顾每一段对话
+
+### 🎨 智能标注
+高亮、批注你的重要对话内容，像读书一样做笔记
+
+### 🤖 AI 洞察分析
+实时生成对话总结和深度分析，提取关键信息
+
+</td>
+<td width="50%">
+
+### 📊 横向对比阅读
+流畅的多模型回复对比卡片，一目了然
+
+### 🌐 跨平台支持
+macOS 桌面 + Web 浏览器，随处访问
+
+### ⚡ 纯 Dart 实现
+无需 Python 后端，高性能渲染
+
+</td>
+</tr>
+</table>
+
+## 🚀 快速开始
+
+### 前置要求
+
+- [Flutter SDK](https://flutter.dev/docs/get-started/install) 3.0+
+- macOS 12+ (桌面版) 或现代浏览器 (Web 版)
+
+### 安装与运行
 
 ```bash
-# macOS
-brew install flutter
-
-# 或从官网下载
-https://flutter.dev/docs/get-started/install
-```
-
-### 2. 克隆项目
-
-```bash
-git clone https://github.com/yourusername/cherry-reader.git
+# 1. 克隆项目
+git clone https://github.com/ifastcc/cherry-reader.git
 cd cherry-reader
-```
 
-### 3. 安装依赖
-
-```bash
+# 2. 安装依赖
 flutter pub get
-```
 
-### 4. 生成 JSON 序列化代码
-
-```bash
+# 3. 生成代码
 flutter pub run build_runner build --delete-conflicting-outputs
+
+# 4. 运行应用
+flutter run -d macos    # macOS 桌面版（推荐）
+flutter run -d chrome   # Web 版
 ```
 
-## 🚀 运行
-
-### Web 版
+### 或使用便捷脚本
 
 ```bash
-flutter run -d chrome
+./run.sh        # macOS 桌面版
+./run.sh web    # Web 版
 ```
 
-### macOS 桌面版
+## ⚙️ 配置 AI 分析功能
+
+> AI 分析功能是可选的。如果不配置，仍可正常浏览和标注聊天记录。
+
+### 方式一：使用 `.env` 文件（推荐）
 
 ```bash
-flutter run -d macos
-```
-
-### 所有可用设备
-
-```bash
-flutter devices
-flutter run -d <device_id>
-```
-
-## ⚙️ 配置
-
-### 环境变量配置
-
-**推荐方式：使用 `.env` 文件**
-
-1. 复制示例配置：
-```bash
+# 1. 复制示例配置
 cp .env.example .env
-```
 
-2. 编辑 `.env` 文件，填写你的配置：
-```bash
-# OpenAI API 配置
+# 2. 编辑 .env 文件
 OPENAI_API_KEY=your_api_key_here
-OPENAI_BASE_URL=https://api.openai.com/v1  # 或你的代理地址
+OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4
 ```
 
-3. 运行应用（会自动加载 `.env` 配置）：
-```bash
-flutter run -d macos
-```
+### 方式二：应用内设置
 
-**旧方式（不推荐）：命令行参数**
-```bash
-export OPENAI_API_KEY="sk-..."
-flutter run -d macos --dart-define=OPENAI_API_KEY=$OPENAI_API_KEY
-```
+启动应用后，在设置页面中配置 API 信息（会保存在本地）。
 
-## 📂 项目结构
+## 🏗️ 技术架构
+
+### 支持平台
+
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| 🖥️ macOS | ✅ 推荐 | 桌面端完整体验，适合长时间阅读 |
+| 🌐 Web | ✅ 支持 | 无需安装，浏览器直接使用 |
+| 📱 iOS/Android | 🚧 计划中 | 未来支持移动端 |
+| 💻 Windows/Linux | 🚧 计划中 | 考虑支持其他桌面平台 |
+
+### 项目结构
 
 ```
 lib/
@@ -123,69 +140,30 @@ lib/
     └── conversation_screen.dart        # 对话详情页
 ```
 
-## 🔄 从 Python MVP 迁移的对应关系
+### 从 Python MVP 迁移的架构对应
 
-| Python 文件                     | Dart 文件                           | 说明                       |
-| ------------------------------- | ----------------------------------- | -------------------------- |
-| `types.py`                      | `models/*.dart`                     | 数据类型定义               |
-| `extractor.py`                  | `services/cherry_extractor.dart`    | 核心提取器（完整翻译）     |
-| `analysis_cache_manager.py`    | `services/analysis_cache_manager.dart` | 缓存管理（完整翻译）       |
-| `streamlit_viewer.py` (UI部分)  | `screens/*.dart`, `widgets/*.dart`  | UI 组件（Flutter 原生实现）|
-| OpenAI streaming API            | `services/openai_service.dart`      | SSE 流式解析               |
+<details>
+<summary>点击查看详细对应关系</summary>
 
-## 🎨 核心功能实现
+| Python 文件 | Dart 文件 | 说明 |
+|------------|----------|------|
+| `types.py` | `models/*.dart` | 数据类型定义 |
+| `extractor.py` | `services/cherry_extractor.dart` | 核心提取器（完整翻译） |
+| `analysis_cache_manager.py` | `services/analysis_cache_manager.dart` | 缓存管理（完整翻译） |
+| `streamlit_viewer.py` (UI部分) | `screens/*.dart`, `widgets/*.dart` | UI 组件（Flutter 原生实现）|
+| OpenAI streaming API | `services/openai_service.dart` | SSE 流式解析 |
 
-### 1. 数据加载
-
-```dart
-// 从 ZIP 或 JSON 加载
-final extractor = CherryExtractor(zipPath: 'cherry-studio.zip');
-await extractor.load();
-
-// 按 Assistant 分组
-final grouped = extractor.getTopicsByAssistant();
-```
-
-### 2. 横向滚动卡片
-
-```dart
-HorizontalScrollView(
-  cards: [
-    ConversationCard.assistant(reply1),
-    ConversationCard.assistant(reply2),
-    ConversationCard.aiAnalysis(analysis),
-  ],
-  trailing: IconButton(
-    icon: Icon(Icons.add_circle_outline),
-    onPressed: () => _generateAnalysis(),
-  ),
-)
-```
-
-### 3. 流式 AI 分析
-
-```dart
-final stream = _openaiService.streamChatCompletion(
-  model: 'gpt-4-turbo-preview',
-  messages: [{'role': 'user', 'content': prompt}],
-);
-
-await for (final chunk in stream) {
-  setState(() {
-    _currentStreamContent += chunk;
-  });
-}
-```
+</details>
 
 ## 📊 性能对比
 
-| 功能              | Python (Streamlit) | Flutter (Dart)   |
-| ----------------- | ------------------ | ---------------- |
-| 加载 117MB 数据   | ~2秒               | ~1.5秒           |
-| 构建索引          | ~1秒               | ~0.5秒           |
-| UI 渲染           | 每次重新加载整个页面 | 只重绘变化的部分 |
-| 流式更新          | 阻塞式             | 真正异步         |
-| 打包大小          | 需要Python运行时    | 单一可执行文件   |
+| 功能 | Python (Streamlit) | Flutter (Dart) |
+|------|-------------------|----------------|
+| 💾 加载 117MB 数据 | ~2秒 | ~1.5秒 |
+| 📇 构建索引 | ~1秒 | ~0.5秒 |
+| 🎨 UI 渲染 | 每次重新加载整个页面 | 只重绘变化的部分 |
+| ⚡ 流式更新 | 阻塞式 | 真正异步 |
+| 📦 打包大小 | 需要Python运行时 | 单一可执行文件 |
 
 ## 🛠️ 开发指南
 
@@ -222,14 +200,20 @@ FutureBuilder(
 )
 ```
 
-## 📝 TODO
+## 🗺️ 开发路线图
 
-- [ ] 实现搜索和过滤功能
-- [ ] 添加数据导出功能（JSON/Markdown）
-- [ ] 支持自定义 AI 分析 prompt
-- [ ] 添加数据可视化图表
-- [ ] 实现文件附件查看
-- [ ] 支持深色/浅色主题切换
+### 🚧 进行中
+- [ ] 🎙️ TTS 语音朗读功能
+- [ ] 📝 高级标注功能（笔记、分类）
+
+### 📋 计划中
+- [ ] 🔍 搜索和过滤功能
+- [ ] 📤 数据导出功能（JSON/Markdown）
+- [ ] ✍️ 自定义 AI 分析 prompt
+- [ ] 📊 数据可视化图表
+- [ ] 📎 文件附件查看
+- [ ] 🌓 深色/浅色主题切换
+- [ ] 📱 iOS/Android 移动端支持
 
 ## 🐛 故障排除
 
@@ -252,6 +236,25 @@ flutter run --verbose
 flutter doctor
 ```
 
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+在提交 PR 前，请确保：
+- 运行 `dart format .` 格式化代码
+- 运行 `flutter analyze` 检查代码质量
+- 测试你的更改在 macOS 和 Web 平台上都能正常工作
+
 ## 📄 许可证
 
-MIT License
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+---
+
+<div align="center">
+
+**如果这个项目对你有帮助，请给一个 ⭐️ Star！**
+
+ Made with ❤️ by [ifastcc](https://github.com/ifastcc)
+
+</div>
