@@ -10,6 +10,7 @@ import '../widgets/horizontal_scroll_view.dart';
 import '../widgets/streaming_analysis_card.dart';
 import '../widgets/highlightable_card.dart';
 import '../widgets/user_message_card.dart';
+import '../services/epub_export_service.dart';
 import 'settings_screen.dart';
 
 class ConversationScreen extends StatefulWidget {
@@ -46,6 +47,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   // 【性能优化】缓存对话分组结果
   List<Map<String, dynamic>>? _cachedGroups;
+
+  final _epubExportService = EpubExportService();
 
   // API 配置
   String _apiKey = '';
@@ -268,6 +271,44 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
+  Future<void> _exportToEpub(int groupIndex) async {
+    final groups = _getConversationGroups();
+    if (groupIndex >= groups.length) return;
+
+    final group = groups[groupIndex];
+    final userMsg = group['user_message'] as Map<String, dynamic>;
+    final assistantReplies = group['assistant_replies'] as List<dynamic>;
+    final analyses = _aiAnalyses[groupIndex] ?? [];
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('正在生成电子书...')),
+      );
+
+      await _epubExportService.exportGroup(
+        topicName: widget.topicName,
+        userMessage: userMsg,
+        assistantReplies: assistantReplies,
+        aiAnalyses: analyses,
+      );
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ EPUB 3.0 导出成功 (v2)')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('电子书导出失败: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   /// 构建 AI 分析 prompt（使用元分析模板）
   String _buildAnalysisPrompt(
     Map<String, dynamic> userMsg,
@@ -424,13 +465,25 @@ $modelResponses''';
                         ),
                         const SizedBox(height: 8),
                         // 生成分析按钮
-                        IconButton(
-                          icon: const Icon(Icons.add_circle_outline),
-                          iconSize: 32,
-                          tooltip: '生成 AI 分析',
-                          onPressed: _isGenerating
-                              ? null
-                              : () => _showAnalysisDialog(groupIndex),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.add_circle_outline),
+                              iconSize: 32,
+                              tooltip: '生成 AI 分析',
+                              onPressed: _isGenerating
+                                  ? null
+                                  : () => _showAnalysisDialog(groupIndex),
+                            ),
+                            const SizedBox(width: 16),
+                            IconButton(
+                              icon: const Icon(Icons.book),
+                              iconSize: 28,
+                              tooltip: '导出 EPUB',
+                              onPressed: () => _exportToEpub(groupIndex),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -466,13 +519,25 @@ $modelResponses''';
                       );
                     }),
                   ],
-                  trailing: IconButton(
-                    icon: const Icon(Icons.add_circle_outline),
-                    iconSize: 32,
-                    tooltip: '生成 AI 分析',
-                    onPressed: _isGenerating
-                        ? null
-                        : () => _showAnalysisDialog(groupIndex),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        iconSize: 32,
+                        tooltip: '生成 AI 分析',
+                        onPressed: _isGenerating
+                            ? null
+                            : () => _showAnalysisDialog(groupIndex),
+                      ),
+                      const SizedBox(height: 16),
+                      IconButton(
+                        icon: const Icon(Icons.book),
+                        iconSize: 32,
+                        tooltip: '导出 EPUB',
+                        onPressed: () => _exportToEpub(groupIndex),
+                      ),
+                    ],
                   ),
                 ),
       ],

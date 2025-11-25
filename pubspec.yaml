@@ -43,6 +43,10 @@ dependencies:
   # 缓存
   shared_preferences: ^2.2.2      # 持久化存储
 
+  # 音频播放
+  audioplayers: ^6.0.0            # 音频播放
+  crypto: ^3.0.3                  # 加密（MD5等）
+
   # 数据库
   isar: ^3.1.0+1                  # 高性能数据库
   isar_flutter_libs: ^3.1.0+1     # Isar Flutter 平台库

@@ -7,16 +7,16 @@ part of 'file_metadata.dart';
 // **************************************************************************
 
 FileMetadata _$FileMetadataFromJson(Map<String, dynamic> json) => FileMetadata(
-  id: json['id'] as String,
-  originName: json['origin_name'] as String,
-  name: json['name'] as String,
-  path: json['path'] as String,
-  createdAt: json['created_at'] as String,
-  size: (json['size'] as num).toInt(),
-  ext: json['ext'] as String,
-  type: json['type'] as String,
-  count: (json['count'] as num?)?.toInt() ?? 0,
-);
+      id: json['id'] as String,
+      originName: json['origin_name'] as String,
+      name: json['name'] as String,
+      path: json['path'] as String,
+      createdAt: json['created_at'] as String,
+      size: (json['size'] as num).toInt(),
+      ext: json['ext'] as String,
+      type: json['type'] as String,
+      count: (json['count'] as num?)?.toInt() ?? 0,
+    );
 
 Map<String, dynamic> _$FileMetadataToJson(FileMetadata instance) =>
     <String, dynamic>{

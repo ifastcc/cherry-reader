@@ -7,13 +7,13 @@ part of 'usage.dart';
 // **************************************************************************
 
 Usage _$UsageFromJson(Map<String, dynamic> json) => Usage(
-  promptTokens: (json['prompt_tokens'] as num?)?.toInt() ?? 0,
-  completionTokens: (json['completion_tokens'] as num?)?.toInt() ?? 0,
-  totalTokens: (json['total_tokens'] as num?)?.toInt() ?? 0,
-);
+      promptTokens: (json['prompt_tokens'] as num?)?.toInt() ?? 0,
+      completionTokens: (json['completion_tokens'] as num?)?.toInt() ?? 0,
+      totalTokens: (json['total_tokens'] as num?)?.toInt() ?? 0,
+    );
 
 Map<String, dynamic> _$UsageToJson(Usage instance) => <String, dynamic>{
-  'prompt_tokens': instance.promptTokens,
-  'completion_tokens': instance.completionTokens,
-  'total_tokens': instance.totalTokens,
-};
+      'prompt_tokens': instance.promptTokens,
+      'completion_tokens': instance.completionTokens,
+      'total_tokens': instance.totalTokens,
+    };
