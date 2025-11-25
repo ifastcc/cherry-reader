@@ -4,6 +4,9 @@ CLAUDE.md
 .cursorrules
 .cursorindexingignore
 
+# 临时文件/目录
+temp_epub_check*/
+
 # Miscellaneous
 *.class
 *.log
