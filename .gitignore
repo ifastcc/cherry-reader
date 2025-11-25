@@ -1,3 +1,9 @@
+# AI/IDE 开发辅助文档
+WARP.md
+CLAUDE.md
+.cursorrules
+.cursorindexingignore
+
 # Miscellaneous
 *.class
 *.log
