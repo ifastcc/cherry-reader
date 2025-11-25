@@ -27,7 +27,7 @@ class CherryViewerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       scrollBehavior: NoScrollbarBehavior(),
-      title: 'Cherry Studio Viewer',
+      title: 'Cherry Reader',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         // 使用 Material 3 设计语言

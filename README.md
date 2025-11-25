@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo.jpg" width="120" height="120" alt="Cherry Viewer Logo" />
+
 # 🍒 Cherry Viewer
 
 **Cherry Studio 聊天记录的沉浸式阅读器**
@@ -39,7 +41,12 @@ Cherry Viewer 是一个专为 **Cherry Studio** 用户设计的对话记录阅�
 git clone https://github.com/ifastcc/cherry-viewer.git
 cd cherry-viewer/flutter_viewer
 flutter pub get
+
+# 运行 MacOS 版本
 flutter run -d macos
+
+# 运行 Android 版本
+flutter run -d android
 ```
 
 ### 配置 (可选)

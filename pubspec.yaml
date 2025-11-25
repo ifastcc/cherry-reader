@@ -30,6 +30,7 @@ dependencies:
   # 网络请求
   http: ^1.1.0                    # HTTP 客户端
   dio: ^5.4.0                     # 更强大的 HTTP 客户端(支持流式响应)
+  webdav_client: ^1.0.6           # WebDAV 客户端
 
   # 状态管理
   provider: ^6.1.1                # 状态管理(简单易用)
@@ -56,6 +57,7 @@ dependencies:
 
   # 环境变量
   flutter_dotenv: ^5.1.0          # .env 文件支持
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
@@ -64,6 +66,7 @@ dev_dependencies:
   build_runner: ^2.4.6            # 代码生成
   json_serializable: ^6.7.1       # JSON 序列化代码生成
   isar_generator: ^3.1.0+1        # Isar 代码生成
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
@@ -79,3 +82,21 @@ flutter:
   #       - asset: assets/fonts/JetBrainsMono-Regular.ttf
   #       - asset: assets/fonts/JetBrainsMono-Bold.ttf
   #         weight: 700
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/logo.jpg"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/logo.jpg"
+    background_color: "#ffffff"
+    theme_color: "#ffffff"
+  windows:
+    generate: true
+    icon_size: 48
+    image_path: "assets/logo.jpg"
+  macos:
+    generate: true
+    image_path: "assets/logo.jpg"

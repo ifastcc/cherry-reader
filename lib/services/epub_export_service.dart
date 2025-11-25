@@ -213,9 +213,88 @@ class _ZipEntry {
 }
 
 class EpubExportService {
+  /// Export the entire conversation (all rounds) to EPUB
+  /// Creates a valid EPUB 3.0 file with multiple chapters.
+  ///
+  /// Each round becomes a separate chapter in the book.
+  /// [groups] should be the result of _getConversationGroups() from ConversationScreen.
+  Future<void> exportFullConversation({
+    required String topicName,
+    required List<Map<String, dynamic>> groups,
+    required Map<int, List<String>> allAnalyses,
+  }) async {
+    // Generate a consistent UUID for the book
+    final uuid = 'urn:uuid:${DateTime.now().millisecondsSinceEpoch}';
+
+    // Create EPUB-compliant ZIP
+    final zip = EpubZipEncoder();
+
+    // 1. mimetype MUST be first and uncompressed
+    zip.addTextFile('mimetype', 'application/epub+zip', compress: false);
+
+    // 2. META-INF/container.xml
+    final containerXml = '''<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>''';
+    zip.addTextFile('META-INF/container.xml', containerXml);
+
+    // 3. OEBPS/styles.css
+    zip.addTextFile('OEBPS/styles.css', _generateCss());
+
+    // 4. Generate chapter files for each round
+    for (var i = 0; i < groups.length; i++) {
+      final group = groups[i];
+      final userMsg = group['user_message'] as Map<String, dynamic>;
+      final assistantReplies = group['assistant_replies'] as List<dynamic>;
+      final analyses = allAnalyses[i];
+
+      final chapterHtml = _generateChapterHtml(
+        i + 1,
+        userMsg,
+        assistantReplies,
+        analyses,
+      );
+      zip.addTextFile('OEBPS/chapter${i + 1}.html', chapterHtml);
+    }
+
+    // 5. OEBPS/content.opf
+    zip.addTextFile('OEBPS/content.opf', _generateFullConversationOpf(topicName, uuid, groups.length));
+
+    // 6. OEBPS/toc.ncx
+    zip.addTextFile('OEBPS/toc.ncx', _generateFullConversationToc(topicName, uuid, groups));
+
+    // 7. OEBPS/nav.xhtml
+    zip.addTextFile('OEBPS/nav.xhtml', _generateFullConversationNav(topicName, groups));
+
+    // Encode to bytes
+    final epubData = zip.encode();
+
+    // Ask user where to save
+    String? outputFile = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save Full Conversation EPUB',
+      fileName: '${_sanitizeFilename(topicName)}_完整对话.epub',
+      type: FileType.custom,
+      allowedExtensions: ['epub'],
+    );
+
+    if (outputFile == null) return;
+
+    // Ensure extension
+    if (!outputFile.toLowerCase().endsWith('.epub')) {
+      outputFile += '.epub';
+    }
+
+    // Write to file
+    final file = File(outputFile);
+    await file.writeAsBytes(epubData);
+  }
+
   /// Export a single conversation round (group) to EPUB
   /// Creates a valid EPUB 3.0 file compatible with WeRead (微信读书) and other readers.
-  /// 
+  ///
   /// Uses a custom ZIP encoder to ensure full EPUB/OCF compliance.
   /// Works on all platforms (macOS, Windows, Linux, Web, iOS, Android).
   Future<void> exportGroup({
@@ -635,5 +714,167 @@ th {
      buffer.writeln('</ncx>');
      
      return buffer.toString();
+  }
+
+  /// Generate HTML for a single chapter (round)
+  String _generateChapterHtml(
+    int chapterNumber,
+    Map<String, dynamic> userMessage,
+    List<dynamic> assistantReplies,
+    List<String>? aiAnalyses,
+  ) {
+    final buffer = StringBuffer();
+    buffer.writeln('<?xml version="1.0" encoding="utf-8"?>');
+    buffer.writeln('<!DOCTYPE html>');
+    buffer.writeln('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">');
+    buffer.writeln('<head>');
+    buffer.writeln('<title>第 $chapterNumber 轮对话</title>');
+    buffer.writeln('<link rel="stylesheet" type="text/css" href="styles.css"/>');
+    buffer.writeln('</head>');
+    buffer.writeln('<body>');
+
+    // Chapter title
+    buffer.writeln('<h1>第 $chapterNumber 轮对话</h1>');
+
+    // User Question
+    buffer.writeln('<section class="user-message" id="question-$chapterNumber">');
+    buffer.writeln('<h2>用户提问</h2>');
+    buffer.writeln(_markdownToHtml(_extractText(userMessage)));
+    buffer.writeln('</section>');
+
+    // AI Analysis
+    if (aiAnalyses != null && aiAnalyses.isNotEmpty) {
+      buffer.writeln('<section class="ai-analysis" id="ai-insights-$chapterNumber">');
+      buffer.writeln('<h2>AI 洞察</h2>');
+      for (final analysis in aiAnalyses) {
+         buffer.writeln('<div class="analysis-block">');
+         buffer.writeln(_markdownToHtml(analysis));
+         buffer.writeln('</div>');
+      }
+      buffer.writeln('</section>');
+    }
+
+    // Model Responses
+    buffer.writeln('<section class="model-responses" id="responses-$chapterNumber">');
+    buffer.writeln('<h2>模型回复</h2>');
+    for (var i = 0; i < assistantReplies.length; i++) {
+       final replyMap = assistantReplies[i] as Map<String, dynamic>;
+       final modelName = replyMap['model']?['name'] as String? ?? 'Unknown Model';
+       final content = _extractText(replyMap);
+       final modelId = _sanitizeId(modelName, i);
+
+       buffer.writeln('<article class="response-block" id="$modelId-ch$chapterNumber">');
+       buffer.writeln('<h3 class="model-name">$modelName</h3>');
+       buffer.writeln('<div class="model-content">');
+       buffer.writeln(_markdownToHtml(content));
+       buffer.writeln('</div>');
+       buffer.writeln('<hr/>');
+       buffer.writeln('</article>');
+    }
+    buffer.writeln('</section>');
+
+    buffer.writeln('</body>');
+    buffer.writeln('</html>');
+
+    return buffer.toString();
+  }
+
+  /// Generate OPF for full conversation (multiple chapters)
+  String _generateFullConversationOpf(String title, String uuid, int chapterCount) {
+    final modifiedDate = DateTime.now().toUtc().toIso8601String().replaceAll(RegExp(r'\.\d+Z$'), 'Z');
+
+    final buffer = StringBuffer();
+    buffer.writeln('<?xml version="1.0" encoding="UTF-8"?>');
+    buffer.writeln('<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0">');
+    buffer.writeln('  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">');
+    buffer.writeln('    <dc:title>$title - 完整对话</dc:title>');
+    buffer.writeln('    <dc:language>zh-CN</dc:language>');
+    buffer.writeln('    <dc:identifier id="BookId">$uuid</dc:identifier>');
+    buffer.writeln('    <meta property="dcterms:modified">$modifiedDate</meta>');
+    buffer.writeln('  </metadata>');
+    buffer.writeln('  <manifest>');
+    buffer.writeln('    <item id="styles" href="styles.css" media-type="text/css"/>');
+
+    // Add all chapter files
+    for (var i = 1; i <= chapterCount; i++) {
+      buffer.writeln('    <item id="chapter$i" href="chapter$i.html" media-type="application/xhtml+xml"/>');
+    }
+
+    buffer.writeln('    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>');
+    buffer.writeln('    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>');
+    buffer.writeln('  </manifest>');
+    buffer.writeln('  <spine toc="ncx">');
+
+    // Add all chapters to spine
+    for (var i = 1; i <= chapterCount; i++) {
+      buffer.writeln('    <itemref idref="chapter$i"/>');
+    }
+
+    buffer.writeln('  </spine>');
+    buffer.writeln('</package>');
+
+    return buffer.toString();
+  }
+
+  /// Generate TOC for full conversation
+  String _generateFullConversationToc(String title, String uuid, List<Map<String, dynamic>> groups) {
+    final buffer = StringBuffer();
+    buffer.writeln('<?xml version="1.0" encoding="UTF-8"?>');
+    buffer.writeln('<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">');
+    buffer.writeln('  <head>');
+    buffer.writeln('    <meta name="dtb:uid" content="$uuid"/>');
+    buffer.writeln('    <meta name="dtb:depth" content="2"/>');
+    buffer.writeln('    <meta name="dtb:totalPageCount" content="0"/>');
+    buffer.writeln('    <meta name="dtb:maxPageNumber" content="0"/>');
+    buffer.writeln('  </head>');
+    buffer.writeln('  <docTitle>');
+    buffer.writeln('    <text>$title - 完整对话</text>');
+    buffer.writeln('  </docTitle>');
+    buffer.writeln('  <navMap>');
+
+    var playOrder = 1;
+
+    // Add each chapter
+    for (var i = 0; i < groups.length; i++) {
+      final chapterNum = i + 1;
+      buffer.writeln('    <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
+      buffer.writeln('      <navLabel><text>第 $chapterNum 轮对话</text></navLabel>');
+      buffer.writeln('      <content src="chapter$chapterNum.html"/>');
+      buffer.writeln('    </navPoint>');
+      playOrder++;
+    }
+
+    buffer.writeln('  </navMap>');
+    buffer.writeln('</ncx>');
+
+    return buffer.toString();
+  }
+
+  /// Generate navigation for full conversation
+  String _generateFullConversationNav(String title, List<Map<String, dynamic>> groups) {
+    final buffer = StringBuffer();
+    buffer.writeln('<?xml version="1.0" encoding="utf-8"?>');
+    buffer.writeln('<!DOCTYPE html>');
+    buffer.writeln('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="zh-CN">');
+    buffer.writeln('<head>');
+    buffer.writeln('<title>$title - 完整对话</title>');
+    buffer.writeln('</head>');
+    buffer.writeln('<body>');
+    buffer.writeln('<nav epub:type="toc" id="toc">');
+    buffer.writeln('  <h1>目录</h1>');
+    buffer.writeln('  <ol>');
+
+    // Add each chapter
+    for (var i = 0; i < groups.length; i++) {
+      final chapterNum = i + 1;
+      buffer.writeln('    <li><a href="chapter$chapterNum.html">第 $chapterNum 轮对话</a></li>');
+    }
+
+    buffer.writeln('  </ol>');
+    buffer.writeln('</nav>');
+    buffer.writeln('</body>');
+    buffer.writeln('</html>');
+
+    return buffer.toString();
   }
 }

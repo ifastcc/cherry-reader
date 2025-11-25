@@ -53,24 +53,43 @@ class CherryExtractor {
   Future<void> _loadFromZip() async {
     print('📦 正在解压: $zipPath');
 
-    final bytes = await File(zipPath!).readAsBytes();
-    final archive = ZipDecoder().decodeBytes(bytes);
+    try {
+      final bytes = await File(zipPath!).readAsBytes();
 
-    // 查找 data.json
-    for (final file in archive) {
-      if (file.name == 'data.json' && file.isFile) {
-        final content = file.content as List<int>;
-        final jsonString = utf8.decode(content);
-        rawData = json.decode(jsonString) as Map<String, dynamic>;
-        break;
+      // 【修复】验证ZIP文件完整性
+      if (bytes.isEmpty) {
+        throw Exception('ZIP 文件为空');
       }
-    }
 
-    if (rawData == null) {
-      throw Exception('ZIP 中未找到 data.json');
-    }
+      // 尝试解码ZIP（这里会验证ZIP格式）
+      final archive = ZipDecoder().decodeBytes(bytes);
 
-    print('✅ 解压完成');
+      // 查找 data.json
+      for (final file in archive) {
+        if (file.name == 'data.json' && file.isFile) {
+          final content = file.content as List<int>;
+          final jsonString = utf8.decode(content);
+          rawData = json.decode(jsonString) as Map<String, dynamic>;
+          break;
+        }
+      }
+
+      if (rawData == null) {
+        throw Exception('ZIP 中未找到 data.json');
+      }
+
+      print('✅ 解压完成');
+    } on FormatException catch (e) {
+      // ZIP格式错误（如缺少End of Central Directory Record）
+      throw Exception('ZIP 文件损坏或格式无效: ${e.message}');
+    } catch (e) {
+      // 其他解压错误
+      if (e.toString().contains('zipfile') ||
+          e.toString().contains('central directory')) {
+        throw Exception('ZIP 文件损坏: 文件结构不完整');
+      }
+      throw Exception('解压失败: $e');
+    }
   }
 
   /// 从 JSON 文件加载

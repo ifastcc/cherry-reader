@@ -5,8 +5,10 @@ import 'dart:io';
 import '../services/cherry_extractor.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/isar_database.dart';
+import '../services/webdav_service.dart';
 import 'conversation_screen.dart';
 import 'settings_screen.dart';
+import 'package:intl/intl.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -17,34 +19,255 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   CherryExtractor? _extractor;
-  bool _isLoading = false;
+  bool _isLoading = false;  // 仅用于首次加载无缓存时
   String? _error;
+  String? _loadingMessage;  // 加载状态描述
+  DataLoadMode _loadMode = DataLoadMode.manual;
 
   // 【优化】使用轻量级索引，而非完整数据
   Map<String, List<Map<String, dynamic>>>? _topicIndex;
   Map<String, Map<String, dynamic>>? _assistantMap;
 
+  // 【新增】后台同步状态
+  bool _isBackgroundSyncing = false;
+  double? _syncProgress;  // 同步进度 (0-1)
+  String? _syncMessage;   // 同步状态描述
+  CancelToken? _downloadCancelToken;
+  DateTime? _lastSyncTime;  // 缓存版本时间
+
   @override
   void initState() {
     super.initState();
-    _autoLoadDataFile();
+    _initAndLoad();
   }
 
-  /// 自动加载上次打开的文件（使用轻量级缓存）
+  /// 初始化并加载数据
+  /// 
+  /// 【重构】缓存优先：先加载本地缓存，再后台同步
+  Future<void> _initAndLoad({bool forceReload = false}) async {
+    // 防止重复加载
+    if (_isLoading) {
+      debugPrint('⚠️ _initAndLoad: 已在加载中，跳过');
+      return;
+    }
+    
+    final newLoadMode = await WebDavService.getLoadMode();
+    final modeChanged = newLoadMode != _loadMode;
+    _loadMode = newLoadMode;
+    
+    // 加载缓存版本时间
+    _lastSyncTime = await WebDavService.getLastSyncTime();
+    setState(() {});
+    
+    // 只有模式变化或强制重新加载时才触发
+    if (forceReload || modeChanged || _topicIndex == null) {
+      await _autoLoadDataFile();
+    } else {
+      debugPrint('ℹ️ _initAndLoad: 模式未变化且已有数据，跳过加载');
+    }
+  }
+
+  /// 自动加载数据文件
   ///
-  /// 【性能优化】只加载话题索引，不加载完整数据
+  /// 【重构】缓存优先，后台同步
+  /// - 先尝试加载本地缓存
+  /// - WebDAV 模式下后台启动同步
   Future<void> _autoLoadDataFile() async {
+    // 先尝试加载本地缓存
+    await _loadFromLocal(showLoadingIfEmpty: true);
+    
+    // WebDAV 模式下，后台启动同步
+    if (_loadMode == DataLoadMode.webdav) {
+      // 不 await，让其在后台运行
+      _backgroundSyncFromWebDav();
+    }
+  }
+
+  /// 【新增】后台从 WebDAV 同步数据
+  /// 
+  /// 非阻塞式，不影响缓存数据的显示
+  Future<void> _backgroundSyncFromWebDav() async {
+    // 防止重复同步
+    if (_isBackgroundSyncing) {
+      debugPrint('⚠️ 已在后台同步中，跳过');
+      return;
+    }
+
+    final config = await WebDavService.loadConfig();
+    if (!config.isValid) {
+      // 配置不完整，显示错误
+      if (mounted && _topicIndex == null) {
+        setState(() {
+          _error = 'WebDAV 配置不完整\n请在设置中配置 WebDAV';
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    // 创建取消 token
+    _downloadCancelToken = CancelToken();
+    
     setState(() {
-      _isLoading = true;
-      _error = null;
+      _isBackgroundSyncing = true;
+      _syncProgress = null;
+      _syncMessage = '正在检查更新...';
     });
+
+    try {
+      final (updated, localPath, message) = await WebDavService.autoSync(
+        config,
+        cancelToken: _downloadCancelToken,
+        onProgress: (received, total) {
+          if (total > 0 && mounted) {
+            setState(() {
+              _syncProgress = received / total;
+              _syncMessage = '正在下载... ${(received / 1024 / 1024).toStringAsFixed(1)}MB';
+            });
+          }
+        },
+      );
+
+      if (!mounted) return;
+
+      if (localPath == null) {
+        // 同步失败
+        setState(() {
+          _isBackgroundSyncing = false;
+          _syncProgress = null;
+          _syncMessage = null;
+        });
+        
+        // 显示错误提示
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ WebDAV 同步失败: $message'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+
+      if (updated) {
+        // 有更新，重新加载数据
+        setState(() {
+          _syncMessage = '正在解析数据...';
+        });
+
+        try {
+          await _loadFile(localPath, saveCache: true);
+
+          // 更新缓存时间
+          _lastSyncTime = await WebDavService.getLastSyncTime();
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('✅ 已从 WebDAV 同步最新数据'),
+                backgroundColor: Colors.green,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        } catch (e) {
+          // 【修复】如果下载的文件损坏，清除并提示重试
+          if (e.toString().contains('ZIP 文件损坏') ||
+              e.toString().contains('FormatException')) {
+            debugPrint('❌ WebDAV下载的文件损坏: $e');
+            await _handleCorruptedFile(localPath);
+
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('❌ 下载的文件不完整或损坏\n可能是网络中断导致，请点击刷新按钮重试'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 4),
+                ),
+              );
+
+              // 同时更新错误状态，方便用户看到
+              setState(() {
+                _error = 'WebDAV 下载的文件损坏\n请点击右上角刷新按钮重新下载';
+              });
+            }
+          } else {
+            rethrow;
+          }
+        }
+      } else {
+        // 无更新
+        debugPrint('ℹ️ WebDAV: 已是最新版本');
+      }
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) {
+        debugPrint('ℹ️ WebDAV 下载已取消');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('已取消下载'),
+              duration: Duration(seconds: 1),
+            ),
+          );
+        }
+      } else {
+        debugPrint('❌ WebDAV 同步异常: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('❌ WebDAV 同步失败: ${e.message}'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ WebDAV 同步异常: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ WebDAV 同步失败: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      _downloadCancelToken = null;
+      if (mounted) {
+        setState(() {
+          _isBackgroundSyncing = false;
+          _syncProgress = null;
+          _syncMessage = null;
+        });
+      }
+    }
+  }
+
+  /// 取消正在进行的下载
+  void _cancelDownload() {
+    _downloadCancelToken?.cancel('用户取消');
+  }
+
+  /// 从本地加载数据
+  /// 
+  /// [showLoadingIfEmpty] 如果没有缓存是否显示加载状态
+  /// 返回是否成功加载了缓存数据
+  Future<bool> _loadFromLocal({bool showLoadingIfEmpty = false}) async {
+    if (showLoadingIfEmpty) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+        _loadingMessage = '正在加载本地数据...';
+      });
+    }
 
     try {
       final startTime = DateTime.now();
 
       // 智能加载: 优先使用轻量级索引
-      final (topicIndex, isFromCache) =
-          await DataPersistenceManager.smartLoad();
+      final (topicIndex, _) = await DataPersistenceManager.smartLoad();
 
       if (topicIndex != null && topicIndex.isNotEmpty) {
         // 从缓存加载索引
@@ -77,44 +300,87 @@ class _HomeScreenState extends State<HomeScreen> {
 
           final elapsed = DateTime.now().difference(startTime).inMilliseconds;
           debugPrint('💡 从缓存加载完成，耗时 ${elapsed}ms');
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('✅ 已从缓存加载（轻量级索引）'),
-                duration: Duration(seconds: 2),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
-        }
-      } else {
-        // 没有缓存,尝试重新解析文件
-        final lastFile = await DataPersistenceManager.getLastFilePath();
-        if (lastFile != null) {
-          final file = File(lastFile);
-          if (await file.exists()) {
-            debugPrint('📂 重新解析文件: $lastFile');
-            await _loadFile(lastFile, saveCache: true);
-          } else {
-            debugPrint('⚠️  上次打开的文件不存在: $lastFile');
-            setState(() {
-              _isLoading = false;
-            });
-          }
-        } else {
-          debugPrint('ℹ️  没有上次打开的文件记录');
-          setState(() {
-            _isLoading = false;
-          });
+          return true;
         }
       }
+      
+      // 没有缓存,尝试重新解析文件
+      final lastFile = await DataPersistenceManager.getLastFilePath();
+      if (lastFile != null) {
+        final file = File(lastFile);
+        if (await file.exists()) {
+          debugPrint('📂 重新解析文件: $lastFile');
+          try {
+            await _loadFile(lastFile, saveCache: true);
+            return true;
+          } catch (e) {
+            // 【修复】如果文件损坏，清除缓存并删除损坏的文件
+            if (e.toString().contains('ZIP 文件损坏') ||
+                e.toString().contains('FormatException')) {
+              debugPrint('❌ 检测到ZIP文件损坏，清除缓存: $e');
+              await _handleCorruptedFile(lastFile);
+
+              if (mounted) {
+                // 根据是否正在后台同步，显示不同提示
+                final errorMessage = _isBackgroundSyncing
+                    ? '缓存文件损坏\n正在从 WebDAV 下载最新文件，请稍候...'
+                    : 'ZIP 文件损坏\n请点击右上角刷新按钮重新下载，或手动选择文件';
+
+                setState(() {
+                  _error = errorMessage;
+                  _isLoading = false;
+                });
+              }
+            } else {
+              rethrow;
+            }
+          }
+        } else {
+          debugPrint('⚠️  上次打开的文件不存在: $lastFile');
+        }
+      } else {
+        debugPrint('ℹ️  没有上次打开的文件记录');
+      }
+
+      setState(() {
+        _isLoading = false;
+      });
+      return false;
     } catch (e) {
-      // 自动加载失败不显示错误，让用户手动选择
       debugPrint('⚠️  自动加载失败: $e');
       setState(() {
         _isLoading = false;
       });
+      return false;
+    }
+  }
+
+  /// 【新增】处理损坏的文件
+  ///
+  /// 当检测到ZIP文件损坏时:
+  /// 1. 删除损坏的文件
+  /// 2. 清除所有缓存
+  /// 3. 清除文件时间戳
+  Future<void> _handleCorruptedFile(String filePath) async {
+    try {
+      debugPrint('🗑️  开始清理损坏的文件: $filePath');
+
+      // 1. 删除损坏的文件
+      final file = File(filePath);
+      if (await file.exists()) {
+        await file.delete();
+        debugPrint('✅ 已删除损坏的ZIP文件');
+      }
+
+      // 2. 清除所有缓存
+      await DataPersistenceManager.clearCache();
+      debugPrint('✅ 已清除所有缓存');
+
+      // 3. 清除Isar数据库
+      await IsarDatabase().clearTopicCaches();
+      debugPrint('✅ 已清除Isar缓存');
+    } catch (e) {
+      debugPrint('❌ 清理失败: $e');
     }
   }
 
@@ -183,23 +449,51 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // 加载拷贝后的文件
-      await _loadFile(appFilePath, saveCache: true);
+      try {
+        await _loadFile(appFilePath, saveCache: true);
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ 文件已导入到App目录'),
-            duration: Duration(seconds: 2),
-            backgroundColor: Colors.green,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ 文件已导入到App目录'),
+              duration: Duration(seconds: 2),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        // 【修复】区分ZIP损坏和其他错误
+        if (e.toString().contains('ZIP 文件损坏') ||
+            e.toString().contains('FormatException')) {
+          debugPrint('❌ 用户选择的文件损坏: $e');
+          await _handleCorruptedFile(appFilePath);
+
+          if (mounted) {
+            setState(() {
+              _error = '选择的 ZIP 文件损坏或格式无效\n请确认文件完整性后重新选择';
+              _isLoading = false;
+            });
+
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('❌ ZIP 文件损坏，请重新选择文件'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
+        } else {
+          // 其他加载错误
+          rethrow;
+        }
       }
     } catch (e) {
+      // 拷贝过程或其他错误
       setState(() {
-        _error = '文件拷贝失败: $e';
+        _error = '文件导入失败: $e';
         _isLoading = false;
       });
-      debugPrint('文件拷贝失败: $e');
+      debugPrint('文件导入失败: $e');
     }
   }
 
@@ -333,17 +627,38 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// 刷新数据（强制从 WebDAV 同步）
+  Future<void> _refreshData() async {
+    if (_loadMode == DataLoadMode.webdav) {
+      // 清除时间戳，强制重新下载
+      await WebDavService.clearLastModified();
+    }
+    await _autoLoadDataFile();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cherry Studio Viewer'),
+        title: const Text('Cherry Reader'),
         actions: [
-          // 【修复】清除缓存按钮
+          // 后台同步时显示取消按钮
+          if (_isBackgroundSyncing)
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _cancelDownload,
+              tooltip: '取消同步',
+            ),
+          // 刷新按钮
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: (_isLoading || _isBackgroundSyncing) ? null : _refreshData,
+            tooltip: _loadMode == DataLoadMode.webdav ? '从 WebDAV 刷新' : '重新加载',
+          ),
+          // 清除缓存按钮
           IconButton(
             icon: const Icon(Icons.delete_sweep),
-            onPressed: () async {
-              // 显示确认对话框
+            onPressed: _isLoading ? null : () async {
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -364,7 +679,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
               if (confirm == true) {
                 try {
-                  // 清除所有缓存
                   await DataPersistenceManager.clearCache();
                   await IsarDatabase().clearAll();
 
@@ -381,6 +695,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     _extractor = null;
                     _topicIndex = null;
                     _assistantMap = null;
+                    _lastSyncTime = null;
                   });
                 } catch (e) {
                   if (mounted) {
@@ -398,34 +713,138 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.push(
+            onPressed: _isLoading ? null : () async {
+              await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const SettingsScreen()),
               );
+              if (mounted) {
+                _initAndLoad();
+              }
             },
             tooltip: '设置',
           ),
         ],
+        // 【新增】AppBar 下方同步进度条
+        bottom: _isBackgroundSyncing
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(24),
+                child: Column(
+                  children: [
+                    LinearProgressIndicator(
+                      value: _syncProgress,
+                      backgroundColor: Colors.grey[300],
+                      minHeight: 3,
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                      child: Row(
+                        children: [
+                          const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _syncMessage ?? '同步中...',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          if (_syncProgress != null)
+                            Text(
+                              '${(_syncProgress! * 100).toStringAsFixed(0)}%',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            : null,
       ),
-      body: _buildBody(),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isLoading ? null : _pickAndLoadFile,
-        icon: const Icon(Icons.folder_open),
-        label: const Text('加载数据'),
+      body: Column(
+        children: [
+          Expanded(child: _buildBody()),
+          // 【新增】底部状态栏
+          if (_topicIndex != null) _buildStatusBar(),
+        ],
+      ),
+      floatingActionButton: _loadMode == DataLoadMode.manual
+          ? FloatingActionButton.extended(
+              onPressed: _isLoading ? null : _pickAndLoadFile,
+              icon: const Icon(Icons.folder_open),
+              label: const Text('加载数据'),
+            )
+          : null,
+    );
+  }
+
+  /// 底部状态栏
+  Widget _buildStatusBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+        border: Border(
+          top: BorderSide(
+            color: Theme.of(context).dividerColor.withOpacity(0.3),
+            width: 0.5,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          // 模式标识
+          Icon(
+            _loadMode == DataLoadMode.webdav ? Icons.cloud : Icons.folder,
+            size: 12,
+            color: Colors.grey[500],
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _loadMode == DataLoadMode.webdav ? 'WebDAV' : '本地',
+            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+          ),
+          
+          // 分隔符
+          if (_lastSyncTime != null) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text('·', style: TextStyle(color: Colors.grey[400])),
+            ),
+            // 同步时间
+            Text(
+              '同步于 ${_formatSyncTime(_lastSyncTime)}',
+              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            ),
+          ],
+          
+          const Spacer(),
+          
+          // 精确时间（可选）
+          if (_lastSyncTime != null)
+            Text(
+              DateFormat('MM-dd HH:mm').format(_lastSyncTime!),
+              style: TextStyle(fontSize: 10, color: Colors.grey[400]),
+            ),
+        ],
       ),
     );
   }
 
   Widget _buildBody() {
+    // 首次加载无缓存时显示加载动画
     if (_isLoading) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('正在加载数据...'),
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(_loadingMessage ?? '正在加载数据...'),
           ],
         ),
       );
@@ -458,17 +877,40 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.folder_open, size: 80, color: Colors.grey[600]),
+            Icon(
+              _loadMode == DataLoadMode.webdav ? Icons.cloud_off : Icons.folder_open,
+              size: 80,
+              color: Colors.grey[600],
+            ),
             const SizedBox(height: 16),
-            const Text(
-              '请选择 Cherry Studio 导出文件',
-              style: TextStyle(fontSize: 18),
+            Text(
+              _loadMode == DataLoadMode.webdav
+                  ? '请在设置中配置 WebDAV'
+                  : '请选择 Cherry Studio 导出文件',
+              style: const TextStyle(fontSize: 18),
             ),
             const SizedBox(height: 8),
             Text(
-              '支持 .zip 或 .json 格式',
+              _loadMode == DataLoadMode.webdav
+                  ? '并点击刷新按钮同步数据'
+                  : '支持 .zip 或 .json 格式',
               style: TextStyle(color: Colors.grey[400]),
             ),
+            if (_loadMode == DataLoadMode.webdav) ...[
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: _isLoading ? null : () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                  ).then((_) {
+                    if (mounted) _initAndLoad();
+                  });
+                },
+                icon: const Icon(Icons.settings),
+                label: const Text('去设置'),
+              ),
+            ],
           ],
         ),
       );
@@ -477,12 +919,30 @@ class _HomeScreenState extends State<HomeScreen> {
     return _buildTopicList();
   }
 
+  /// 格式化缓存版本时间
+  String _formatSyncTime(DateTime? time) {
+    if (time == null) return '未知';
+    final now = DateTime.now();
+    final diff = now.difference(time);
+    
+    if (diff.inMinutes < 1) {
+      return '刚刚';
+    } else if (diff.inHours < 1) {
+      return '${diff.inMinutes} 分钟前';
+    } else if (diff.inDays < 1) {
+      return '${diff.inHours} 小时前';
+    } else if (diff.inDays < 7) {
+      return '${diff.inDays} 天前';
+    } else {
+      return DateFormat('MM-dd HH:mm').format(time);
+    }
+  }
+
   Widget _buildTopicList() {
     if (_topicIndex == null || _topicIndex!.isEmpty) {
       return const Center(child: Text('没有找到话题'));
     }
 
-    // 【优化】将 Map 转换为 List 用于 ListView.builder
     final assistantEntries = _topicIndex!.entries.toList();
 
     return ListView.builder(
@@ -524,31 +984,30 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: Text(topicName),
                 subtitle: Text('$messageCount 条消息'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () async {
-                  // 【按需加载】点击时才加载完整话题数据
-                  if (_extractor == null) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(const SnackBar(content: Text('数据加载器未就绪')));
-                    return;
-                  }
+                  onTap: () async {
+                    if (_extractor == null) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text('数据加载器未就绪')));
+                      return;
+                    }
 
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ConversationScreen(
-                        extractor: _extractor!,
-                        topicId: topicId,
-                        topicName: topicName,
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => ConversationScreen(
+                          extractor: _extractor!,
+                          topicId: topicId,
+                          topicName: topicName,
+                        ),
                       ),
-                    ),
-                  );
-                },
-              );
-            }).toList(),
-          ),
-        );
-      },
+                    );
+                  },
+                );
+              }).toList(),
+            ),
+          );
+        },
     );
   }
 }

@@ -59,9 +59,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void initState() {
     super.initState();
 
-    // 根据平台设置默认列数
-    _columnsPerView = _getDefaultColumnsPerView();
-
     _cacheManager = AnalysisCacheManager();
     _initApiConfig();
     _loadData();
@@ -70,29 +67,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
   /// 初始化 API 配置（从 SharedPreferences 读取）
   Future<void> _initApiConfig() async {
     final config = await getApiConfig();
+    final columnsPerView = await getColumnsPerView();
     setState(() {
       _apiKey = config['apiKey'] ?? '';
       _baseUrl = config['apiUrl'] ?? 'https://api.openai.com/v1';
       _model = config['model'] ?? 'gpt-4-turbo-preview';
       _openaiService = OpenAIService(apiKey: _apiKey, baseUrl: _baseUrl);
+      _columnsPerView = columnsPerView;
     });
-  }
-
-  /// 根据平台返回默认列数
-  int _getDefaultColumnsPerView() {
-    // 移动端（iOS/Android）默认 1 列
-    if (!kIsWeb) {
-      try {
-        if (Platform.isAndroid || Platform.isIOS) {
-          return 1;
-        }
-      } catch (e) {
-        // 如果平台检测失败，继续检查其他条件
-      }
-    }
-
-    // 桌面端（macOS/Windows/Linux/Web）默认 2 列
-    return 2;
   }
 
   Future<void> _loadData() async {
@@ -291,7 +273,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
         assistantReplies: assistantReplies,
         aiAnalyses: analyses,
       );
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('✅ EPUB 3.0 导出成功 (v2)')),
@@ -302,6 +284,48 @@ class _ConversationScreenState extends State<ConversationScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('电子书导出失败: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 导出完整对话（所有轮次）
+  Future<void> _exportFullConversation() async {
+    final groups = _getConversationGroups();
+
+    if (groups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有对话内容可以导出')),
+      );
+      return;
+    }
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('正在生成完整对话电子书 (${groups.length} 轮)...')),
+      );
+
+      await _epubExportService.exportFullConversation(
+        topicName: widget.topicName,
+        groups: groups,
+        allAnalyses: _aiAnalyses,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ 完整对话导出成功 (${groups.length} 轮)'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('完整对话导出失败: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -375,22 +399,11 @@ $modelResponses''';
       appBar: AppBar(
         title: Text(widget.topicName),
         actions: [
-          // 卡片列数选择器
-          PopupMenuButton<int>(
-            icon: const Icon(Icons.view_column),
-            tooltip: '设置每屏显示卡片数',
-            initialValue: _columnsPerView,
-            onSelected: (value) {
-              setState(() {
-                _columnsPerView = value;
-              });
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 1, child: Text('1 列 (全屏)')),
-              const PopupMenuItem(value: 2, child: Text('2 列 (默认)')),
-              const PopupMenuItem(value: 3, child: Text('3 列 (紧凑)')),
-              const PopupMenuItem(value: 4, child: Text('4 列 (超紧凑)')),
-            ],
+          // 导出完整对话按钮
+          IconButton(
+            icon: const Icon(Icons.file_download),
+            tooltip: '导出完整对话',
+            onPressed: _conversation == null ? null : _exportFullConversation,
           ),
         ],
       ),
@@ -441,19 +454,50 @@ $modelResponses''';
         // 用户消息
         UserMessageCard(key: ValueKey(userMsg['id']), data: userMsg),
 
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
 
-        // 助手回复（横向滚动）+ AI 分析
+        // 整合的回复区域（工具栏 + 卡片）
         if (assistantReplies.isNotEmpty)
-          isSingleCard
-              ? // 单个助手回复：居中占满宽度
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    height: 600,
-                    child: Column(
-                      children: [
-                        Expanded(
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.grey[900]?.withOpacity(0.5)
+                  : Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.grey[800]!
+                    : Colors.grey[200]!,
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 顶部工具栏
+                _buildIntegratedToolbar(groupIndex),
+                // 分隔线
+                Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.grey[800]
+                      : Colors.grey[100],
+                ),
+                // 卡片区域
+                isSingleCard
+                    ? Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: SizedBox(
+                          height: 580,
                           child: HighlightableCard.assistant(
                             key: ValueKey(
                               (assistantReplies.first
@@ -463,86 +507,189 @@ $modelResponses''';
                                 assistantReplies.first as Map<String, dynamic>,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        // 生成分析按钮
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.add_circle_outline),
-                              iconSize: 32,
-                              tooltip: '生成 AI 分析',
-                              onPressed: _isGenerating
-                                  ? null
-                                  : () => _showAnalysisDialog(groupIndex),
-                            ),
-                            const SizedBox(width: 16),
-                            IconButton(
-                              icon: const Icon(Icons.book),
-                              iconSize: 28,
-                              tooltip: '导出 EPUB',
-                              onPressed: () => _exportToEpub(groupIndex),
-                            ),
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.only(
+                          left: 4,
+                          right: 4,
+                          bottom: 12,
+                          top: 8,
+                        ),
+                        child: HorizontalScrollView(
+                          columnsPerView: _columnsPerView,
+                          cards: [
+                            if (hasStreamingCard)
+                              StreamingAnalysisCard(
+                                content: _currentStreamContent,
+                                analysisIndex: aiAnalysisCount + 1,
+                              ),
+                            ...(_aiAnalyses[groupIndex] ?? [])
+                                .asMap()
+                                .entries
+                                .map((entry) {
+                              return HighlightableCard.aiAnalysis(
+                                key: ValueKey('ai_${groupIndex}_${entry.key}'),
+                                content: entry.value,
+                              );
+                            }),
+                            ...assistantReplies.map((reply) {
+                              final replyMap = reply as Map<String, dynamic>;
+                              return HighlightableCard.assistant(
+                                key: ValueKey(replyMap['id']),
+                                data: replyMap,
+                              );
+                            }),
                           ],
                         ),
-                      ],
-                    ),
-                  ),
-                )
-              : // 多卡片：使用横向滚动视图
-                HorizontalScrollView(
-                  columnsPerView: _columnsPerView,
-                  cards: [
-                    // 正在生成的流式卡片（最前面）
-                    if (hasStreamingCard)
-                      StreamingAnalysisCard(
-                        content: _currentStreamContent,
-                        analysisIndex: aiAnalysisCount + 1,
                       ),
-
-                    // 已保存的 AI 分析卡片（也在助手回复之前）
-                    ...(_aiAnalyses[groupIndex] ?? []).asMap().entries.map((
-                      entry,
-                    ) {
-                      return HighlightableCard.aiAnalysis(
-                        key: ValueKey('ai_${groupIndex}_${entry.key}'),
-                        content: entry.value,
-                      );
-                    }),
-
-                    // 助手回复卡片（放在最后）
-                    ...assistantReplies.map((reply) {
-                      final replyMap = reply as Map<String, dynamic>;
-                      return HighlightableCard.assistant(
-                        key: ValueKey(replyMap['id']),
-                        data: replyMap,
-                      );
-                    }),
-                  ],
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.add_circle_outline),
-                        iconSize: 32,
-                        tooltip: '生成 AI 分析',
-                        onPressed: _isGenerating
-                            ? null
-                            : () => _showAnalysisDialog(groupIndex),
-                      ),
-                      const SizedBox(height: 16),
-                      IconButton(
-                        icon: const Icon(Icons.book),
-                        iconSize: 32,
-                        tooltip: '导出 EPUB',
-                        onPressed: () => _exportToEpub(groupIndex),
-                      ),
-                    ],
-                  ),
-                ),
+              ],
+            ),
+          ),
       ],
     );
   }
+
+  /// 构建整合式工具栏（作为卡片区域的标题栏）
+  Widget _buildIntegratedToolbar(int groupIndex) {
+    const primaryColor = Color(0xFF8B5CF6); // AI Purple
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final isCurrentGenerating =
+        _isGenerating && _generatingGroupIndex == groupIndex;
+    final analysisCount = _aiAnalyses[groupIndex]?.length ?? 0;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          // 左侧：本轮对话标题
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: primaryColor.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.chat_bubble_outline_rounded,
+                  size: 14,
+                  color: primaryColor,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '本轮对话',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: primaryColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 分析计数徽章
+          if (analysisCount > 0) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$analysisCount 条分析',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.green[700],
+                ),
+              ),
+            ),
+          ],
+
+          const Spacer(),
+
+          // 右侧：操作按钮
+          _buildCompactButton(
+            onPressed:
+                _isGenerating ? null : () => _showAnalysisDialog(groupIndex),
+            icon: isCurrentGenerating
+                ? SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+                    ),
+                  )
+                : Icon(Icons.auto_awesome_rounded, size: 15, color: primaryColor),
+            label: isCurrentGenerating ? '分析中' : 'AI 分析',
+            backgroundColor: primaryColor.withOpacity(0.1),
+            textColor: primaryColor,
+          ),
+          const SizedBox(width: 8),
+          _buildCompactButton(
+            onPressed: () => _exportToEpub(groupIndex),
+            icon: Icon(
+              Icons.menu_book_rounded,
+              size: 15,
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+            ),
+            label: '导出',
+            backgroundColor: isDark
+                ? Colors.grey[800]!.withOpacity(0.5)
+                : Colors.grey[100]!,
+            textColor: isDark ? Colors.grey[300]! : Colors.grey[700]!,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建紧凑型按钮
+  Widget _buildCompactButton({
+    required VoidCallback? onPressed,
+    required Widget icon,
+    required String label,
+    required Color backgroundColor,
+    required Color textColor,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              icon,
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: onPressed == null
+                      ? textColor.withOpacity(0.5)
+                      : textColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
 
   /// 显示生成分析对话框
   void _showAnalysisDialog(int groupIndex) {

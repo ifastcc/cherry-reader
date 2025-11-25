@@ -84,58 +84,6 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
     _saveHighlights();
   }
 
-  void _addHighlightFromClipboard() async {
-    final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = clipboardData?.text?.trim();
-
-    if (text == null || text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('⚠️  请先选中并复制要高亮的文本'),
-          duration: Duration(seconds: 2),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    final start = widget.content.indexOf(text);
-    if (start == -1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('⚠️  在文章中未找到该文本'),
-          duration: Duration(seconds: 2),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    final end = start + text.length;
-    final highlight = HighlightData(
-      text: text,
-      start: start,
-      end: end,
-      color: _currentHighlightColor.value,
-      styleType: _currentHighlightType,
-    );
-
-    setState(() {
-      _highlights.add(highlight);
-      _activeHighlight = highlight;
-    });
-
-    _saveHighlights();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('✅ 已添加高亮'),
-        duration: Duration(seconds: 1),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
-
   void _removeHighlight(HighlightData highlight) {
     setState(() {
       _highlights.remove(highlight);
@@ -439,12 +387,6 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
               _buildStylePicker(),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: _currentHighlightColor,
-        onPressed: _addHighlightFromClipboard,
-        tooltip: '添加高亮（先选中并复制文本）',
-        child: const Icon(Icons.highlight, color: Colors.white),
       ),
     );
   }
