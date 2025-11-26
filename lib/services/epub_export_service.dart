@@ -401,7 +401,7 @@ class EpubExportService {
       buffer.writeln('</section>');
     }
 
-    // Model Responses
+    // Model Responses - 使用带id的HTML生成
     buffer.writeln('<section class="model-responses" id="responses">');
     buffer.writeln('<h2>模型回复</h2>');
     for (var i = 0; i < assistantReplies.length; i++) {
@@ -409,11 +409,12 @@ class EpubExportService {
        final modelName = replyMap['model']?['name'] as String? ?? 'Unknown Model';
        final content = _extractText(replyMap);
        final modelId = _sanitizeId(modelName, i);
-       
+
        buffer.writeln('<article class="response-block" id="$modelId">');
        buffer.writeln('<h3 class="model-name">$modelName</h3>');
        buffer.writeln('<div class="model-content">');
-       buffer.writeln(_markdownToHtml(content));
+       // 【改进】使用带id的HTML生成，为Markdown标题添加锚点
+       buffer.writeln(_markdownToHtmlWithIds(content, modelId));
        buffer.writeln('</div>');
        buffer.writeln('<hr/>');
        buffer.writeln('</article>');
@@ -422,7 +423,7 @@ class EpubExportService {
 
     buffer.writeln('</body>');
     buffer.writeln('</html>');
-    
+
     return buffer.toString();
   }
   
@@ -481,6 +482,79 @@ class EpubExportService {
       }
     }
     return content;
+  }
+
+  /// 从Markdown内容中提取标题列表
+  /// 返回: [{level: 1, title: "标题", id: "heading-1"}]
+  List<Map<String, dynamic>> _extractHeadings(String markdown, String idPrefix) {
+    final headings = <Map<String, dynamic>>[];
+    final lines = markdown.split('\n');
+    var headingIndex = 0;
+
+    for (final line in lines) {
+      final match = RegExp(r'^(#{1,6})\s+(.+)$').firstMatch(line.trim());
+      if (match != null) {
+        final level = match.group(1)!.length;
+        final title = match.group(2)!.trim();
+        final id = '$idPrefix-h${headingIndex++}';
+        headings.add({
+          'level': level,
+          'title': title,
+          'id': id,
+        });
+      }
+    }
+    return headings;
+  }
+
+  /// 将Markdown转换为HTML，并为标题添加id锚点
+  String _markdownToHtmlWithIds(String markdown, String idPrefix) {
+    var headingIndex = 0;
+
+    // 先替换标题，添加id
+    final processedMarkdown = markdown.replaceAllMapped(
+      RegExp(r'^(#{1,6})\s+(.+)$', multiLine: true),
+      (match) {
+        final hashes = match.group(1)!;
+        final title = match.group(2)!;
+        final id = '$idPrefix-h${headingIndex++}';
+        // 使用特殊标记，后面转换后再处理
+        return '$hashes $title {#$id}';
+      },
+    );
+
+    // 转换为HTML
+    String html = md.markdownToHtml(
+      processedMarkdown,
+      extensionSet: md.ExtensionSet.gitHubWeb,
+    );
+
+    // 处理标题id：将 <h1>title {#id}</h1> 转换为 <h1 id="id">title</h1>
+    html = html.replaceAllMapped(
+      RegExp(r'<(h[1-6])>(.+?)\s*\{#([^}]+)\}</(h[1-6])>'),
+      (match) => '<${match.group(1)} id="${match.group(3)}">${match.group(2)}</${match.group(4)}>',
+    );
+
+    // 基本XHTML修复
+    html = html.replaceAll('<br>', '<br/>');
+    html = html.replaceAll('<hr>', '<hr/>');
+
+    html = html.replaceAllMapped(RegExp(r'<img[^>]+>'), (match) {
+      var imgTag = match.group(0)!;
+      if (!imgTag.trimRight().endsWith('/>')) {
+        imgTag = imgTag.substring(0, imgTag.lastIndexOf('>')) + '/>';
+      }
+      return imgTag;
+    });
+
+    // 修复HTML实体
+    html = html.replaceAll('&nbsp;', '&#160;');
+    html = html.replaceAll('&copy;', '&#169;');
+    html = html.replaceAll('&mdash;', '&#8212;');
+    html = html.replaceAll('&ldquo;', '&#8220;');
+    html = html.replaceAll('&rdquo;', '&#8221;');
+
+    return html;
   }
 
   String _generateCss() {
@@ -623,16 +697,16 @@ th {
     buffer.writeln('<nav epub:type="toc" id="toc">');
     buffer.writeln('  <h1>目录</h1>');
     buffer.writeln('  <ol>');
-    
+
     // 用户提问
     buffer.writeln('    <li><a href="chapter.html#question">用户提问</a></li>');
-    
+
     // AI 洞察（如果有）
     if (hasAiAnalyses) {
       buffer.writeln('    <li><a href="chapter.html#ai-insights">AI 洞察</a></li>');
     }
-    
-    // 模型回复（作为子目录）
+
+    // 模型回复（作为子目录，包含Markdown标题）
     buffer.writeln('    <li>');
     buffer.writeln('      <a href="chapter.html#responses">模型回复</a>');
     if (assistantReplies.isNotEmpty) {
@@ -641,18 +715,44 @@ th {
         final replyMap = assistantReplies[i] as Map<String, dynamic>;
         final modelName = replyMap['model']?['name'] as String? ?? 'Unknown Model';
         final modelId = _sanitizeId(modelName, i);
-        buffer.writeln('        <li><a href="chapter.html#$modelId">$modelName</a></li>');
+        final content = _extractText(replyMap);
+        final headings = _extractHeadings(content, modelId);
+
+        buffer.writeln('        <li>');
+        buffer.writeln('          <a href="chapter.html#$modelId">$modelName</a>');
+
+        // 【改进】添加Markdown标题作为子章节
+        if (headings.isNotEmpty) {
+          buffer.writeln('          <ol>');
+          for (final heading in headings) {
+            final hTitle = _escapeXml(heading['title'] as String);
+            final hId = heading['id'] as String;
+            buffer.writeln('            <li><a href="chapter.html#$hId">$hTitle</a></li>');
+          }
+          buffer.writeln('          </ol>');
+        }
+        buffer.writeln('        </li>');
       }
       buffer.writeln('      </ol>');
     }
     buffer.writeln('    </li>');
-    
+
     buffer.writeln('  </ol>');
     buffer.writeln('</nav>');
     buffer.writeln('</body>');
     buffer.writeln('</html>');
-    
+
     return buffer.toString();
+  }
+
+  /// 转义XML特殊字符
+  String _escapeXml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
   }
   
   String _generateToc(String title, String uuid, List<dynamic> assistantReplies, bool hasAiAnalyses) {
@@ -663,7 +763,7 @@ th {
      buffer.writeln('<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">');
      buffer.writeln('  <head>');
      buffer.writeln('    <meta name="dtb:uid" content="$uuid"/>');
-     buffer.writeln('    <meta name="dtb:depth" content="2"/>');
+     buffer.writeln('    <meta name="dtb:depth" content="3"/>');
      buffer.writeln('    <meta name="dtb:totalPageCount" content="0"/>');
      buffer.writeln('    <meta name="dtb:maxPageNumber" content="0"/>');
      buffer.writeln('  </head>');
@@ -671,16 +771,16 @@ th {
      buffer.writeln('    <text>$title</text>');
      buffer.writeln('  </docTitle>');
      buffer.writeln('  <navMap>');
-     
+
      var playOrder = 1;
-     
+
      // 用户提问
      buffer.writeln('    <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
      buffer.writeln('      <navLabel><text>用户提问</text></navLabel>');
      buffer.writeln('      <content src="chapter.html#question"/>');
      buffer.writeln('    </navPoint>');
      playOrder++;
-     
+
      // AI 洞察（如果有）
      if (hasAiAnalyses) {
        buffer.writeln('    <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
@@ -689,30 +789,44 @@ th {
        buffer.writeln('    </navPoint>');
        playOrder++;
      }
-     
-     // 模型回复（带子项）
+
+     // 模型回复（带子项和Markdown标题）
      buffer.writeln('    <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
      buffer.writeln('      <navLabel><text>模型回复</text></navLabel>');
      buffer.writeln('      <content src="chapter.html#responses"/>');
      playOrder++;
-     
+
      // 每个模型作为子导航点
      for (var i = 0; i < assistantReplies.length; i++) {
        final replyMap = assistantReplies[i] as Map<String, dynamic>;
        final modelName = replyMap['model']?['name'] as String? ?? 'Unknown Model';
        final modelId = _sanitizeId(modelName, i);
-       
+       final content = _extractText(replyMap);
+       final headings = _extractHeadings(content, modelId);
+
        buffer.writeln('      <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
        buffer.writeln('        <navLabel><text>$modelName</text></navLabel>');
        buffer.writeln('        <content src="chapter.html#$modelId"/>');
-       buffer.writeln('      </navPoint>');
        playOrder++;
+
+       // 【改进】添加Markdown标题作为子导航点
+       for (final heading in headings) {
+         final hTitle = _escapeXml(heading['title'] as String);
+         final hId = heading['id'] as String;
+         buffer.writeln('        <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
+         buffer.writeln('          <navLabel><text>$hTitle</text></navLabel>');
+         buffer.writeln('          <content src="chapter.html#$hId"/>');
+         buffer.writeln('        </navPoint>');
+         playOrder++;
+       }
+
+       buffer.writeln('      </navPoint>');
      }
-     
+
      buffer.writeln('    </navPoint>');
      buffer.writeln('  </navMap>');
      buffer.writeln('</ncx>');
-     
+
      return buffer.toString();
   }
 
@@ -734,7 +848,7 @@ th {
     buffer.writeln('<body>');
 
     // Chapter title
-    buffer.writeln('<h1>第 $chapterNumber 轮对话</h1>');
+    buffer.writeln('<h1 id="round-$chapterNumber">第 $chapterNumber 轮对话</h1>');
 
     // User Question
     buffer.writeln('<section class="user-message" id="question-$chapterNumber">');
@@ -754,19 +868,20 @@ th {
       buffer.writeln('</section>');
     }
 
-    // Model Responses
+    // Model Responses - 使用带id的HTML生成
     buffer.writeln('<section class="model-responses" id="responses-$chapterNumber">');
     buffer.writeln('<h2>模型回复</h2>');
     for (var i = 0; i < assistantReplies.length; i++) {
        final replyMap = assistantReplies[i] as Map<String, dynamic>;
        final modelName = replyMap['model']?['name'] as String? ?? 'Unknown Model';
        final content = _extractText(replyMap);
-       final modelId = _sanitizeId(modelName, i);
+       final modelId = 'ch$chapterNumber-${_sanitizeId(modelName, i)}';
 
-       buffer.writeln('<article class="response-block" id="$modelId-ch$chapterNumber">');
+       buffer.writeln('<article class="response-block" id="$modelId">');
        buffer.writeln('<h3 class="model-name">$modelName</h3>');
        buffer.writeln('<div class="model-content">');
-       buffer.writeln(_markdownToHtml(content));
+       // 【改进】使用带id的HTML生成，为Markdown标题添加锚点
+       buffer.writeln(_markdownToHtmlWithIds(content, modelId));
        buffer.writeln('</div>');
        buffer.writeln('<hr/>');
        buffer.writeln('</article>');
@@ -817,13 +932,14 @@ th {
   }
 
   /// Generate TOC for full conversation
+  /// 【改进】包含模型回复和Markdown标题作为子章节
   String _generateFullConversationToc(String title, String uuid, List<Map<String, dynamic>> groups) {
     final buffer = StringBuffer();
     buffer.writeln('<?xml version="1.0" encoding="UTF-8"?>');
     buffer.writeln('<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">');
     buffer.writeln('  <head>');
     buffer.writeln('    <meta name="dtb:uid" content="$uuid"/>');
-    buffer.writeln('    <meta name="dtb:depth" content="2"/>');
+    buffer.writeln('    <meta name="dtb:depth" content="4"/>');
     buffer.writeln('    <meta name="dtb:totalPageCount" content="0"/>');
     buffer.writeln('    <meta name="dtb:maxPageNumber" content="0"/>');
     buffer.writeln('  </head>');
@@ -834,14 +950,45 @@ th {
 
     var playOrder = 1;
 
-    // Add each chapter
+    // Add each chapter with nested navigation
     for (var i = 0; i < groups.length; i++) {
       final chapterNum = i + 1;
+      final group = groups[i];
+      final assistantReplies = group['assistant_replies'] as List<dynamic>;
+
       buffer.writeln('    <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
       buffer.writeln('      <navLabel><text>第 $chapterNum 轮对话</text></navLabel>');
       buffer.writeln('      <content src="chapter$chapterNum.html"/>');
-      buffer.writeln('    </navPoint>');
       playOrder++;
+
+      // 【改进】添加模型回复作为子导航点
+      for (var j = 0; j < assistantReplies.length; j++) {
+        final replyMap = assistantReplies[j] as Map<String, dynamic>;
+        final modelName = replyMap['model']?['name'] as String? ?? 'Unknown Model';
+        final modelId = 'ch$chapterNum-${_sanitizeId(modelName, j)}';
+        final content = _extractText(replyMap);
+        final headings = _extractHeadings(content, modelId);
+
+        buffer.writeln('      <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
+        buffer.writeln('        <navLabel><text>$modelName</text></navLabel>');
+        buffer.writeln('        <content src="chapter$chapterNum.html#$modelId"/>');
+        playOrder++;
+
+        // 【改进】添加Markdown标题作为更深层子导航点
+        for (final heading in headings) {
+          final hTitle = _escapeXml(heading['title'] as String);
+          final hId = heading['id'] as String;
+          buffer.writeln('        <navPoint id="navPoint-$playOrder" playOrder="$playOrder">');
+          buffer.writeln('          <navLabel><text>$hTitle</text></navLabel>');
+          buffer.writeln('          <content src="chapter$chapterNum.html#$hId"/>');
+          buffer.writeln('        </navPoint>');
+          playOrder++;
+        }
+
+        buffer.writeln('      </navPoint>');
+      }
+
+      buffer.writeln('    </navPoint>');
     }
 
     buffer.writeln('  </navMap>');
@@ -851,6 +998,7 @@ th {
   }
 
   /// Generate navigation for full conversation
+  /// 【改进】包含模型回复和Markdown标题作为子章节
   String _generateFullConversationNav(String title, List<Map<String, dynamic>> groups) {
     final buffer = StringBuffer();
     buffer.writeln('<?xml version="1.0" encoding="utf-8"?>');
@@ -864,10 +1012,43 @@ th {
     buffer.writeln('  <h1>目录</h1>');
     buffer.writeln('  <ol>');
 
-    // Add each chapter
+    // Add each chapter with sub-navigation
     for (var i = 0; i < groups.length; i++) {
       final chapterNum = i + 1;
-      buffer.writeln('    <li><a href="chapter$chapterNum.html">第 $chapterNum 轮对话</a></li>');
+      final group = groups[i];
+      final assistantReplies = group['assistant_replies'] as List<dynamic>;
+
+      buffer.writeln('    <li>');
+      buffer.writeln('      <a href="chapter$chapterNum.html">第 $chapterNum 轮对话</a>');
+
+      // 【改进】添加模型回复作为子章节
+      if (assistantReplies.isNotEmpty) {
+        buffer.writeln('      <ol>');
+        for (var j = 0; j < assistantReplies.length; j++) {
+          final replyMap = assistantReplies[j] as Map<String, dynamic>;
+          final modelName = replyMap['model']?['name'] as String? ?? 'Unknown Model';
+          final modelId = 'ch$chapterNum-${_sanitizeId(modelName, j)}';
+          final content = _extractText(replyMap);
+          final headings = _extractHeadings(content, modelId);
+
+          buffer.writeln('        <li>');
+          buffer.writeln('          <a href="chapter$chapterNum.html#$modelId">$modelName</a>');
+
+          // 【改进】添加Markdown标题作为更深层子章节
+          if (headings.isNotEmpty) {
+            buffer.writeln('          <ol>');
+            for (final heading in headings) {
+              final hTitle = _escapeXml(heading['title'] as String);
+              final hId = heading['id'] as String;
+              buffer.writeln('            <li><a href="chapter$chapterNum.html#$hId">$hTitle</a></li>');
+            }
+            buffer.writeln('          </ol>');
+          }
+          buffer.writeln('        </li>');
+        }
+        buffer.writeln('      </ol>');
+      }
+      buffer.writeln('    </li>');
     }
 
     buffer.writeln('  </ol>');

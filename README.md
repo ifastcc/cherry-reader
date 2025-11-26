@@ -2,11 +2,11 @@
 
 <img src="assets/logo.jpg" width="120" height="120" alt="Cherry Viewer Logo" />
 
-# 🍒 Cherry Viewer
+# Cherry Viewer
 
 **Cherry Studio 聊天记录的沉浸式阅读器**
 
-导出 EPUB • 智能标注 • AI 深度分析
+📖 导出 EPUB  •  🖊️ 智能标注  •  🤖 AI 深度分析
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Flutter](https://img.shields.io/badge/Flutter-3.0%2B-blue.svg)](https://flutter.dev/)

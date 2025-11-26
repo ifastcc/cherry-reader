@@ -10,6 +10,14 @@ import 'conversation_screen.dart';
 import 'settings_screen.dart';
 import 'package:intl/intl.dart';
 
+/// 同步阶段
+enum SyncStage {
+  connecting,  // 连接服务器
+  downloading, // 下载中
+  parsing,     // 解析中
+  completed,   // 完成
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
 
@@ -32,8 +40,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isBackgroundSyncing = false;
   double? _syncProgress;  // 同步进度 (0-1)
   String? _syncMessage;   // 同步状态描述
+  SyncStage? _syncStage;  // 同步阶段
   CancelToken? _downloadCancelToken;
   DateTime? _lastSyncTime;  // 缓存版本时间
+  bool _hasValidWebDavConfig = false;  // 【新增】WebDAV 配置是否有效
 
   @override
   void initState() {
@@ -54,6 +64,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final newLoadMode = await WebDavService.getLoadMode();
     final modeChanged = newLoadMode != _loadMode;
     _loadMode = newLoadMode;
+    
+    // 【新增】检查 WebDAV 配置是否有效
+    if (_loadMode == DataLoadMode.webdav) {
+      final config = await WebDavService.loadConfig();
+      _hasValidWebDavConfig = config.isValid;
+    } else {
+      _hasValidWebDavConfig = false;
+    }
     
     // 加载缓存版本时间
     _lastSyncTime = await WebDavService.getLastSyncTime();
@@ -95,23 +113,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final config = await WebDavService.loadConfig();
     if (!config.isValid) {
-      // 配置不完整，显示错误
-      if (mounted && _topicIndex == null) {
+      // 配置不完整，更新状态（不显示错误，让空状态提示处理）
+      if (mounted) {
         setState(() {
-          _error = 'WebDAV 配置不完整\n请在设置中配置 WebDAV';
+          _hasValidWebDavConfig = false;
           _isLoading = false;
         });
       }
       return;
     }
+    
+    // 配置有效
+    if (mounted) {
+      setState(() {
+        _hasValidWebDavConfig = true;
+      });
+    }
 
     // 创建取消 token
     _downloadCancelToken = CancelToken();
-    
+
     setState(() {
       _isBackgroundSyncing = true;
+      _syncStage = SyncStage.connecting;
       _syncProgress = null;
-      _syncMessage = '正在检查更新...';
+      _syncMessage = '正在连接 WebDAV 服务器...';
     });
 
     try {
@@ -121,6 +147,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onProgress: (received, total) {
           if (total > 0 && mounted) {
             setState(() {
+              _syncStage = SyncStage.downloading;
               _syncProgress = received / total;
               _syncMessage = '正在下载... ${(received / 1024 / 1024).toStringAsFixed(1)}MB';
             });
@@ -136,6 +163,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _isBackgroundSyncing = false;
           _syncProgress = null;
           _syncMessage = null;
+          _syncStage = null;
         });
         
         // 显示错误提示
@@ -152,7 +180,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (updated) {
         // 有更新，重新加载数据
         setState(() {
-          _syncMessage = '正在解析数据...';
+          _syncStage = SyncStage.parsing;
+          _syncProgress = null;
+          _syncMessage = '正在解析和构建索引...';
         });
 
         try {
@@ -161,7 +191,12 @@ class _HomeScreenState extends State<HomeScreen> {
           // 更新缓存时间
           _lastSyncTime = await WebDavService.getLastSyncTime();
 
+          // 【修复】加载成功后清除之前的错误状态
           if (mounted) {
+            setState(() {
+              _error = null;
+            });
+
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text('✅ 已从 WebDAV 同步最新数据'),
@@ -240,6 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _isBackgroundSyncing = false;
           _syncProgress = null;
           _syncMessage = null;
+          _syncStage = null;
         });
       }
     }
@@ -726,7 +762,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
         // 【新增】AppBar 下方同步进度条
-        bottom: _isBackgroundSyncing
+        // 【优化】只有在有缓存数据时才显示顶部进度条（静默同步）
+        // 无缓存首次下载时，使用中间的大进度展示，避免重复
+        bottom: (_isBackgroundSyncing && _topicIndex != null)
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(24),
                 child: Column(
@@ -850,7 +888,9 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    if (_error != null) {
+    // 【修复】如果正在后台同步，优先显示同步状态，不显示旧的错误
+    // 因为新文件正在下载，旧错误会让用户困惑
+    if (_error != null && !_isBackgroundSyncing) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -873,43 +913,108 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (_topicIndex == null) {
+      // 【优化】如果正在后台同步，显示友好的阶段提示（方案A）
+      if (_isBackgroundSyncing) {
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // 根据阶段显示不同图标
+              _buildSyncStageIcon(),
+              const SizedBox(height: 24),
+              // 阶段提示文字（友好）
+              Text(
+                _getSyncStageMessage(),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              // 阶段描述
+              Text(
+                _getSyncStageDescription(),
+                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                textAlign: TextAlign.center,
+              ),
+              // 下载阶段显示进度条
+              if (_syncStage == SyncStage.downloading && _syncProgress != null) ...[
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: 250,
+                  child: LinearProgressIndicator(
+                    value: _syncProgress,
+                    minHeight: 6,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${(_syncProgress! * 100).toStringAsFixed(0)}%',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+                ),
+              ] else ...[
+                const SizedBox(height: 24),
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+              ],
+            ],
+          ),
+        );
+      }
+
+      // 无数据且未在同步，显示空状态提示
+      // 【优化】区分"未配置 WebDAV"和"已配置但无数据"
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              _loadMode == DataLoadMode.webdav ? Icons.cloud_off : Icons.folder_open,
+              _loadMode == DataLoadMode.webdav
+                  ? (_hasValidWebDavConfig ? Icons.cloud_queue : Icons.cloud_off)
+                  : Icons.folder_open,
               size: 80,
               color: Colors.grey[600],
             ),
             const SizedBox(height: 16),
             Text(
               _loadMode == DataLoadMode.webdav
-                  ? '请在设置中配置 WebDAV'
+                  ? (_hasValidWebDavConfig ? '暂无数据' : '请在设置中配置 WebDAV')
                   : '请选择 Cherry Studio 导出文件',
               style: const TextStyle(fontSize: 18),
             ),
             const SizedBox(height: 8),
             Text(
               _loadMode == DataLoadMode.webdav
-                  ? '并点击刷新按钮同步数据'
+                  ? (_hasValidWebDavConfig
+                      ? '点击刷新按钮从云端同步数据'
+                      : '配置后可自动同步对话记录')
                   : '支持 .zip 或 .json 格式',
               style: TextStyle(color: Colors.grey[400]),
             ),
+            const SizedBox(height: 24),
             if (_loadMode == DataLoadMode.webdav) ...[
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: _isLoading ? null : () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                  ).then((_) {
-                    if (mounted) _initAndLoad();
-                  });
-                },
-                icon: const Icon(Icons.settings),
-                label: const Text('去设置'),
-              ),
+              if (_hasValidWebDavConfig)
+                // 已配置，显示刷新按钮
+                ElevatedButton.icon(
+                  onPressed: _isLoading ? null : _refreshData,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('立即同步'),
+                )
+              else
+                // 未配置，显示去设置按钮
+                ElevatedButton.icon(
+                  onPressed: _isLoading ? null : () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                    ).then((_) {
+                      if (mounted) _initAndLoad();
+                    });
+                  },
+                  icon: const Icon(Icons.settings),
+                  label: const Text('去设置'),
+                ),
             ],
           ],
         ),
@@ -1009,5 +1114,53 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         },
     );
+  }
+
+  /// 【新增】根据同步阶段显示不同图标
+  Widget _buildSyncStageIcon() {
+    switch (_syncStage) {
+      case SyncStage.connecting:
+        return Icon(Icons.cloud_sync, size: 64, color: Colors.blue[400]);
+      case SyncStage.downloading:
+        return Icon(Icons.cloud_download, size: 64, color: Colors.blue[600]);
+      case SyncStage.parsing:
+        return Icon(Icons.auto_fix_high, size: 64, color: Colors.orange[400]);
+      case SyncStage.completed:
+        return Icon(Icons.check_circle, size: 64, color: Colors.green[400]);
+      default:
+        return Icon(Icons.sync, size: 64, color: Colors.grey[400]);
+    }
+  }
+
+  /// 【新增】获取同步阶段的友好提示
+  String _getSyncStageMessage() {
+    switch (_syncStage) {
+      case SyncStage.connecting:
+        return '正在连接云端';
+      case SyncStage.downloading:
+        return '正在下载数据';
+      case SyncStage.parsing:
+        return '正在解析内容';
+      case SyncStage.completed:
+        return '同步完成';
+      default:
+        return '正在同步';
+    }
+  }
+
+  /// 【新增】获取同步阶段的详细描述
+  String _getSyncStageDescription() {
+    switch (_syncStage) {
+      case SyncStage.connecting:
+        return '正在连接到 WebDAV 服务器\n验证配置并检查更新';
+      case SyncStage.downloading:
+        return '正在从云端下载您的对话记录\n请保持网络连接';
+      case SyncStage.parsing:
+        return '正在解析数据并构建索引\n马上就好...';
+      case SyncStage.completed:
+        return '数据已成功同步';
+      default:
+        return '请稍候...';
+    }
   }
 }

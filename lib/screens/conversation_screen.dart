@@ -417,7 +417,7 @@ $modelResponses''';
     final groups = _getConversationGroups();
 
     return ListView.separated(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
       itemCount: groups.length,
       separatorBuilder: (context, index) => const SizedBox(height: 24),
       // 【性能优化】减小缓存范围，提升滚动性能
@@ -459,7 +459,8 @@ $modelResponses''';
         // 整合的回复区域（工具栏 + 卡片）
         if (assistantReplies.isNotEmpty)
           Container(
-            margin: const EdgeInsets.symmetric(horizontal: 8),
+            // 【修复】移除水平边距，与用户消息卡片宽度一致
+            margin: EdgeInsets.zero,
             decoration: BoxDecoration(
               color: Theme.of(context).brightness == Brightness.dark
                   ? Colors.grey[900]?.withOpacity(0.5)
