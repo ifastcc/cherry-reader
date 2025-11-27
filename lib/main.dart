@@ -5,6 +5,9 @@ import 'screens/home_screen.dart';
 import 'services/analysis_cache_manager.dart';
 import 'services/isar_database.dart';
 
+import 'package:provider/provider.dart';
+import 'providers/tts_provider.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -17,7 +20,14 @@ void main() async {
   // 初始化缓存管理器（后续会迁移到 Isar）
   await AnalysisCacheManager().init();
 
-  runApp(const CherryViewerApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => TtsProvider()),
+      ],
+      child: const CherryViewerApp(),
+    ),
+  );
 }
 
 class CherryViewerApp extends StatelessWidget {

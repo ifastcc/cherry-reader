@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:provider/provider.dart';
 import '../models/highlight_data.dart';
 import '../services/highlight_service.dart';
 import '../screens/fullscreen_reader_screen.dart';
 import 'unified_markdown_renderer.dart';
 import 'highlight_style_menu.dart';
+import '../providers/tts_provider.dart';
+import '../models/tts_item.dart';
+import 'discussion_list_sheet.dart';
 
 /// 统一的可高亮卡片组件
 ///
@@ -349,6 +353,19 @@ class _HighlightableCardState extends State<HighlightableCard> {
     }
   }
 
+  /// 显示讨论列表
+  void _showDiscussionSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DiscussionListSheet(
+        messageId: widget.messageId,
+        aiReplyContent: widget.content,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -368,20 +385,29 @@ class _HighlightableCardState extends State<HighlightableCard> {
           child: Container(
             color: Colors.white,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 头部
-                  _buildHeader(),
-                  const SizedBox(height: 12),
-                  // 内容
-                  _buildContent(),
-                  // 标注标签
-                  if (_highlights.isNotEmpty) _buildHighlightTags(),
-                ],
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 头部 (固定)
+                _buildHeader(),
+                const SizedBox(height: 12),
+                // 内容 (可滚动)
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildContent(),
+                        // 标注标签
+                        if (_highlights.isNotEmpty) _buildHighlightTags(),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -423,11 +449,36 @@ class _HighlightableCardState extends State<HighlightableCard> {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        // 全屏阅读按钮
+
+        // TTS 朗读按钮
+        Consumer<TtsProvider>(
+          builder: (context, tts, _) {
+            if (!tts.hasValidConfig) return const SizedBox.shrink();
+            return IconButton(
+              icon: Icon(Icons.volume_up_rounded, size: 18, color: Colors.grey[500]),
+              onPressed: () {
+                final item = TtsItem(
+                  id: widget.messageId,
+                  text: widget.content,
+                  title: widget.modelName,
+                  author: widget.modelName,
+                );
+                tts.setPlaylist([item]);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('开始朗读...'), duration: Duration(seconds: 1)),
+                );
+              },
+              tooltip: '朗读',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            );
+          },
+        ),
+        // 讨论按钮
         IconButton(
-          icon: Icon(Icons.fullscreen, size: 18, color: Colors.grey[500]),
-          onPressed: _openFullscreen,
-          tooltip: '全屏阅读',
+          icon: Icon(Icons.chat_bubble_outline, size: 18, color: Colors.grey[500]),
+          onPressed: _showDiscussionSheet,
+          tooltip: '讨论',
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(),
         ),

@@ -6,6 +6,10 @@ import '../models/highlight_data.dart';
 import '../services/highlight_service.dart';
 import '../widgets/highlight_list_sheet.dart';
 import '../widgets/highlight_style_menu.dart';
+import 'package:provider/provider.dart';
+import '../providers/tts_provider.dart';
+import '../models/tts_item.dart';
+import '../widgets/tts_mini_player.dart';
 
 /// 全屏阅读页面 - 支持高亮标注
 class FullscreenReaderScreen extends StatefulWidget {
@@ -294,6 +298,17 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
               onPressed: _clearAllHighlights,
               tooltip: '清除所有高亮',
             ),
+          // TTS 播放按钮
+          Consumer<TtsProvider>(
+            builder: (context, tts, _) {
+              if (!tts.hasValidConfig) return const SizedBox.shrink();
+              return IconButton(
+                icon: const Icon(Icons.volume_up_rounded, color: Colors.black87),
+                onPressed: _playContent,
+                tooltip: '朗读全文',
+              );
+            },
+          ),
         ],
       ),
       body: GestureDetector(
@@ -385,6 +400,14 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
             // 高亮颜色选择器
             if (_showColorPicker && _toolbarPosition != null)
               _buildStylePicker(),
+            
+            // Mini Player
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: TtsMiniPlayer(),
+            ),
           ],
         ),
       ),
@@ -462,5 +485,35 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
         ),
       ),
     );
+  }
+
+  void _playContent() {
+    final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+    
+    // Split content by paragraphs to avoid too long text for one request
+    // Or just send the whole thing if it's not too huge. 
+    // Azure has limits. Better to split.
+    // Simple split by double newline.
+    final paragraphs = widget.content.split(RegExp(r'\n\s*\n'));
+    final items = <TtsItem>[];
+    
+    for (var i = 0; i < paragraphs.length; i++) {
+      final text = paragraphs[i].trim();
+      if (text.isNotEmpty) {
+        items.add(TtsItem(
+          id: '${widget.messageId}_p$i', // Use messageId for caching association
+          text: text,
+          title: widget.modelName,
+          author: 'Paragraph ${i + 1}',
+        ));
+      }
+    }
+
+    if (items.isNotEmpty) {
+      ttsProvider.setPlaylist(items);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('开始朗读全文...')),
+      );
+    }
   }
 }

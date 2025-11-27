@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/webdav_service.dart';
+import '../services/azure_tts_service.dart';
+import '../models/tts_settings.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 // SharedPreferences 键名常量
 const String _keyApiUrl = 'openai_api_url';
@@ -35,6 +39,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   DataLoadMode _loadMode = DataLoadMode.manual;
   bool _isTestingConnection = false;
 
+  // TTS 配置
+  // late TextEditingController _azureKeyController; // Deprecated: single key
+  late TextEditingController _azureRegionController;
+  final List<TextEditingController> _azureKeyControllers = []; // Multiple keys
+  
+  TtsSettings _ttsSettings = TtsSettings();
+  List<Map<String, String>> _availableVoices = [];
+  bool _isLoadingVoices = false;
+  // bool _obscureAzureKey = true; // Managed per key row now
+  
+  // Voice Preview & Favorites
+  bool _isPreviewingVoice = false;
+  String? _previewingVoiceName;
+  final AudioPlayer _previewPlayer = AudioPlayer();
+
   bool _isLoading = true;
   bool _obscureApiKey = true;
   bool _obscureWebdavPassword = true;
@@ -50,6 +69,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavUsernameController = TextEditingController();
     _webdavPasswordController = TextEditingController();
     _webdavPathController = TextEditingController();
+    // _azureKeyController = TextEditingController();
+    _azureRegionController = TextEditingController();
     _loadSettings();
   }
 
@@ -62,6 +83,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavUsernameController.dispose();
     _webdavPasswordController.dispose();
     _webdavPathController.dispose();
+    // _azureKeyController.dispose();
+    for (var controller in _azureKeyControllers) {
+      controller.dispose();
+    }
+    _azureRegionController.dispose();
+    _previewPlayer.dispose();
     super.dispose();
   }
 
@@ -88,6 +115,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 加载列数设置
     final columnsPerView = prefs.getInt(_keyColumnsPerView) ?? 2;
 
+    // 加载 TTS 设置
+    final ttsJson = prefs.getString(TtsSettings.prefKey);
+    if (ttsJson != null) {
+      _ttsSettings = TtsSettings.fromJson(jsonDecode(ttsJson));
+    } else {
+      _ttsSettings = TtsSettings();
+    }
+
     setState(() {
       _apiUrlController.text = apiUrl;
       _apiKeyController.text = apiKey;
@@ -98,6 +133,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _webdavPasswordController.text = webdavConfig.password;
       _webdavPathController.text = webdavConfig.path;
       _columnsPerView = columnsPerView;
+      
+      // Load Azure Keys
+      _azureKeyControllers.clear();
+      if (_ttsSettings.azureApiKeys.isNotEmpty) {
+        for (var key in _ttsSettings.azureApiKeys) {
+          _azureKeyControllers.add(TextEditingController(text: key));
+        }
+      } else if (_ttsSettings.azureApiKey.isNotEmpty) {
+        // Migration from single key
+        _azureKeyControllers.add(TextEditingController(text: _ttsSettings.azureApiKey));
+        _ttsSettings.azureApiKeys = [_ttsSettings.azureApiKey];
+        _ttsSettings.azureApiKey = ''; // Clear old single key
+      } else {
+        // Default empty slot
+        _azureKeyControllers.add(TextEditingController());
+      }
+      
+      _azureRegionController.text = _ttsSettings.azureRegion;
       _isLoading = false;
     });
   }
@@ -111,6 +164,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setString(_keyApiUrl, _apiUrlController.text.trim());
     await prefs.setString(_keyApiKey, _apiKeyController.text.trim());
     await prefs.setString(_keyModel, _modelController.text.trim());
+
+    // 保存 TTS 设置
+    _ttsSettings.azureApiKeys = _azureKeyControllers
+        .map((c) => c.text.trim())
+        .where((text) => text.isNotEmpty)
+        .toList();
+    // Sync legacy key for backward compatibility
+    if (_ttsSettings.azureApiKeys.isNotEmpty) {
+      _ttsSettings.azureApiKey = _ttsSettings.azureApiKeys.first;
+    } else {
+      _ttsSettings.azureApiKey = '';
+    }
+    
+    _ttsSettings.azureRegion = _azureRegionController.text.trim();
+    await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -319,6 +387,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     // 显示设置部分
                     _buildDisplaySettingsSection(),
+
+                    const SizedBox(height: 16),
+
+                    // TTS 设置部分
+                    _buildTtsSettingsSection(),
 
                     const SizedBox(height: 16),
 
@@ -750,6 +823,556 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     }
+  }
+
+  /// 构建 TTS 设置部分
+  /// 构建 TTS 设置部分
+  Widget _buildTtsSettingsSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.record_voice_over, color: Colors.blue[300], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '语音合成配置 (Azure TTS)',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '配置 Microsoft Azure Speech 服务以启用语音朗读功能',
+              style: TextStyle(color: Colors.grey[400], fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () => launchUrl(Uri.parse('https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices')),
+              child: Row(
+                children: [
+                  Icon(Icons.link, size: 14, color: Colors.blue[300]),
+                  const SizedBox(width: 4),
+                  Text(
+                    '获取 Azure Speech Key',
+                    style: TextStyle(
+                      color: Colors.blue[300],
+                      fontSize: 13,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Azure Region
+            TextFormField(
+              controller: _azureRegionController,
+              decoration: const InputDecoration(
+                labelText: 'Azure Region',
+                hintText: 'eastus',
+                prefixIcon: Icon(Icons.public),
+                border: OutlineInputBorder(),
+                helperText: '例如: eastus, japaneast, southeastasia',
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Azure Keys List
+            const Text('Azure Subscription Keys', style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            ..._azureKeyControllers.asMap().entries.map((entry) {
+              final index = entry.key;
+              final controller = entry.value;
+              final isCurrent = index == _ttsSettings.currentKeyIndex;
+              
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: controller,
+                        obscureText: true, // Always obscure for security
+                        decoration: InputDecoration(
+                          labelText: 'Key ${index + 1}${isCurrent ? " (当前使用)" : ""}',
+                          hintText: 'Enter Key',
+                          prefixIcon: Icon(
+                            Icons.vpn_key, 
+                            color: isCurrent ? Colors.green : null
+                          ),
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    if (_azureKeyControllers.length > 1)
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, color: Colors.red),
+                        onPressed: () => _removeApiKey(index),
+                        tooltip: '删除 Key',
+                      ),
+                  ],
+                ),
+              );
+            }).toList(),
+            
+            // Add Key Button
+            OutlinedButton.icon(
+              onPressed: _addApiKey,
+              icon: const Icon(Icons.add),
+              label: const Text('添加备用 Key'),
+            ),
+            
+            const SizedBox(height: 16),
+
+            // 获取声音列表按钮
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isLoadingVoices ? null : _fetchVoices,
+                icon: _isLoadingVoices
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.cloud_download),
+                label: const Text('获取可用声音列表'),
+              ),
+            ),
+
+            if (_availableVoices.isNotEmpty || _ttsSettings.defaultVoiceName.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.person_outline),
+                title: const Text('默认发音人'),
+                subtitle: Text(
+                  _ttsSettings.defaultVoiceName.isNotEmpty
+                      ? (_availableVoices.isNotEmpty
+                          ? _availableVoices.firstWhere(
+                              (v) => v['shortName'] == _ttsSettings.defaultVoiceName,
+                              orElse: () => {
+                                'localName': _ttsSettings.defaultVoiceLocalName.isNotEmpty
+                                    ? _ttsSettings.defaultVoiceLocalName
+                                    : '未知语音 (${_ttsSettings.defaultVoiceName})',
+                                'shortName': ''
+                              },
+                            )['localName'] as String
+                          : (_ttsSettings.defaultVoiceLocalName.isNotEmpty
+                              ? _ttsSettings.defaultVoiceLocalName
+                              : _ttsSettings.defaultVoiceName))
+                      : '点击选择',
+                  style: TextStyle(
+                    color: _ttsSettings.defaultVoiceName.isNotEmpty 
+                        ? Colors.blue[300] 
+                        : Colors.grey,
+                  ),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                onTap: () => _showVoicePickerDialog(),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: Colors.grey.shade700),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _fetchVoices() async {
+    final keys = _azureKeyControllers
+        .map((c) => c.text.trim())
+        .where((text) => text.isNotEmpty)
+        .toList();
+        
+    if (keys.isEmpty || _azureRegionController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先输入 Region 和至少一个 Key')),
+      );
+      return;
+    }
+
+    setState(() => _isLoadingVoices = true);
+
+    try {
+      final service = AzureTtsService(
+        apiKeys: keys,
+        region: _azureRegionController.text.trim(),
+      );
+      final voices = await service.getVoices();
+      
+      // Filter for Chinese voices primarily, or sort them
+      final chineseVoices = voices.where((v) => v['locale']?.startsWith('zh') ?? false).toList();
+      final otherVoices = voices.where((v) => !(v['locale']?.startsWith('zh') ?? false)).toList();
+      
+      setState(() {
+        _availableVoices = [...chineseVoices, ...otherVoices];
+        _isLoadingVoices = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('成功获取 ${voices.length} 个声音')),
+        );
+      }
+    } catch (e) {
+      setState(() => _isLoadingVoices = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('获取失败: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+  
+  // Helper Methods
+  
+  void _addApiKey() {
+    setState(() {
+      _azureKeyControllers.add(TextEditingController());
+    });
+  }
+  
+  void _removeApiKey(int index) {
+    if (_azureKeyControllers.length > 1) {
+      setState(() {
+        _azureKeyControllers[index].dispose();
+        _azureKeyControllers.removeAt(index);
+      });
+    } else {
+      // Don't remove the last one, just clear it
+      _azureKeyControllers[index].clear();
+    }
+  }
+  
+  Future<void> _previewVoice(String voiceName) async {
+    // Stop any existing playback first
+    try {
+      await _previewPlayer.stop();
+    } catch (e) {
+      debugPrint('Error stopping preview player: $e');
+    }
+
+    if (_isPreviewingVoice && _previewingVoiceName == voiceName) {
+      setState(() {
+        _isPreviewingVoice = false;
+        _previewingVoiceName = null;
+      });
+      return; // Toggle off
+    }
+    
+    // Check keys
+    final keys = _azureKeyControllers
+        .map((c) => c.text.trim())
+        .where((text) => text.isNotEmpty)
+        .toList();
+        
+    if (keys.isEmpty || _azureRegionController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先配置 Azure TTS')),
+      );
+      return;
+    }
+    
+    setState(() {
+      _isPreviewingVoice = true;
+      _previewingVoiceName = voiceName;
+    });
+    
+    try {
+      final service = AzureTtsService(
+        apiKeys: keys,
+        region: _azureRegionController.text.trim(),
+      );
+      
+      final audioPath = await service.previewVoice(voiceName: voiceName);
+      
+      await _previewPlayer.setSourceDeviceFile(audioPath);
+      await _previewPlayer.resume();
+      
+      _previewPlayer.onPlayerComplete.listen((_) {
+        if (mounted) {
+          setState(() {
+            _isPreviewingVoice = false;
+            _previewingVoiceName = null;
+          });
+        }
+      });
+      
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isPreviewingVoice = false;
+          _previewingVoiceName = null;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('试听失败: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+  
+  void _toggleFavorite(String voiceName) {
+    setState(() {
+      if (_ttsSettings.favoriteVoices.contains(voiceName)) {
+        _ttsSettings.favoriteVoices.remove(voiceName);
+      } else {
+        _ttsSettings.favoriteVoices.add(voiceName);
+      }
+    });
+    // Auto save? Maybe not, wait for explicit save.
+    // But user might expect immediate feedback. 
+    // Let's just update state for now, save happens on "Save Settings".
+  }
+
+  /// 显示语音选择器对话框
+  Future<void> _showVoicePickerDialog() async {
+    // 如果没有加载声音，尝试自动加载
+    if (_availableVoices.isEmpty) {
+       await _fetchVoices();
+       if (_availableVoices.isEmpty) return; // 加载失败或取消
+    }
+
+    String searchQuery = '';
+    String? selectedLocale = 'all'; // 'all', 'zh', 'en', etc.
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          // 1. 过滤语音列表
+          var filteredVoices = _availableVoices.where((voice) {
+            final matchesSearch = searchQuery.isEmpty ||
+                (voice['localName']?.toString().toLowerCase().contains(searchQuery.toLowerCase()) ?? false) ||
+                (voice['shortName']?.toString().toLowerCase().contains(searchQuery.toLowerCase()) ?? false);
+            
+            final matchesLocale = selectedLocale == 'all' ||
+                (voice['locale']?.toString().startsWith(selectedLocale ?? '') ?? false);
+            
+            return matchesSearch && matchesLocale;
+          }).toList();
+          
+          // 2. 分离收藏和非收藏
+          final favoriteItems = <Map<String, String>>[];
+          final otherItems = <Map<String, String>>[];
+          
+          // 按收藏顺序添加
+          for (var shortName in _ttsSettings.favoriteVoices) {
+            // 只有在过滤结果中存在的才显示
+            try {
+              final voice = filteredVoices.firstWhere((v) => v['shortName'] == shortName);
+              favoriteItems.add(voice);
+            } catch (_) {}
+          }
+          
+          // 添加其他
+          for (var voice in filteredVoices) {
+            if (!_ttsSettings.favoriteVoices.contains(voice['shortName'])) {
+              otherItems.add(voice);
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('选择默认发音人'),
+            contentPadding: const EdgeInsets.fromLTRB(0, 20, 0, 0),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 600,
+              child: Column(
+                children: [
+                  // 搜索框
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        hintText: '搜索语音...',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (value) {
+                        setDialogState(() => searchQuery = value);
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 语言过滤器
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          ChoiceChip(
+                            label: const Text('全部'),
+                            selected: selectedLocale == 'all',
+                            onSelected: (selected) {
+                              if (selected) setDialogState(() => selectedLocale = 'all');
+                            },
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('中文'),
+                            selected: selectedLocale == 'zh',
+                            onSelected: (selected) {
+                              if (selected) setDialogState(() => selectedLocale = 'zh');
+                            },
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('英语'),
+                            selected: selectedLocale == 'en',
+                            onSelected: (selected) {
+                              if (selected) setDialogState(() => selectedLocale = 'en');
+                            },
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('日语'),
+                            selected: selectedLocale == 'ja',
+                            onSelected: (selected) {
+                              if (selected) setDialogState(() => selectedLocale = 'ja');
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 列表内容
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        // 收藏部分
+                        if (favoriteItems.isNotEmpty) ...[
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                            child: Text('已收藏 (长按拖拽排序)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+                          ),
+                          ReorderableListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: favoriteItems.length,
+                            onReorder: (oldIndex, newIndex) {
+                              if (oldIndex < newIndex) {
+                                newIndex -= 1;
+                              }
+                              final item = favoriteItems.removeAt(oldIndex);
+                              favoriteItems.insert(newIndex, item);
+                              
+                              // Update settings
+                              final shortName = item['shortName']!;
+                              _ttsSettings.favoriteVoices.remove(shortName);
+                              _ttsSettings.favoriteVoices.insert(newIndex, shortName);
+                              
+                              setDialogState(() {});
+                            },
+                            itemBuilder: (context, index) {
+                              final voice = favoriteItems[index];
+                              return _buildVoiceTile(voice, true, setDialogState, Key(voice['shortName']!));
+                            },
+                          ),
+                          const Divider(),
+                        ],
+                        
+                        // 其他部分
+                        if (otherItems.isNotEmpty) ...[
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                            child: Text('所有语音', style: TextStyle(fontWeight: FontWeight.bold)),
+                          ),
+                          ...otherItems.map((voice) => _buildVoiceTile(voice, false, setDialogState, null)),
+                        ],
+                        
+                        if (favoriteItems.isEmpty && otherItems.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Center(child: Text('没有找到匹配的语音')),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  _previewPlayer.stop();
+                  Navigator.pop(context);
+                },
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildVoiceTile(Map<String, String> voice, bool isFavorite, StateSetter setDialogState, Key? key) {
+    final shortName = voice['shortName'] as String;
+    final localName = voice['localName'] as String;
+    final locale = voice['locale'] as String?;
+    final gender = voice['gender'] as String?;
+    final isSelected = shortName == _ttsSettings.defaultVoiceName;
+    final isPreviewing = _isPreviewingVoice && _previewingVoiceName == shortName;
+
+    return ListTile(
+      key: key,
+      selected: isSelected,
+      leading: IconButton(
+        icon: Icon(isPreviewing ? Icons.stop_circle : Icons.play_circle_outline),
+        color: isPreviewing ? Colors.red : Colors.blue,
+        onPressed: () async {
+          await _previewVoice(shortName);
+          setDialogState(() {});
+        },
+      ),
+      title: Text(
+        localName,
+        style: TextStyle(
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      subtitle: Text(
+        '$shortName${locale != null ? ' • $locale' : ''}',
+        style: const TextStyle(fontSize: 12),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: Icon(
+              isFavorite ? Icons.star : Icons.star_border,
+              color: isFavorite ? Colors.orange : Colors.grey,
+            ),
+            onPressed: () {
+              _toggleFavorite(shortName);
+              setDialogState(() {});
+            },
+          ),
+          if (isSelected)
+            Icon(Icons.check_circle, color: Colors.blue[300]),
+        ],
+      ),
+      onTap: () {
+        setState(() {
+          _ttsSettings.defaultVoiceName = shortName;
+          _ttsSettings.defaultVoiceLocalName = localName; // 保存本地名称
+        });
+        setDialogState(() {}); // Refresh to show checkmark
+      },
+    );
   }
 }
 

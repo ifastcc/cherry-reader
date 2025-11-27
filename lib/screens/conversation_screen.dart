@@ -12,6 +12,10 @@ import '../widgets/highlightable_card.dart';
 import '../widgets/user_message_card.dart';
 import '../services/epub_export_service.dart';
 import 'settings_screen.dart';
+import 'package:provider/provider.dart';
+import '../providers/tts_provider.dart';
+import '../models/tts_item.dart';
+import '../widgets/tts_mini_player.dart';
 
 class ConversationScreen extends StatefulWidget {
   final CherryExtractor extractor;
@@ -409,7 +413,17 @@ $modelResponses''';
       ),
       body: _conversation == null
           ? const Center(child: CircularProgressIndicator())
-          : _buildConversation(),
+          : Stack(
+              children: [
+                _buildConversation(),
+                const Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: TtsMiniPlayer(),
+                ),
+              ],
+            ),
     );
   }
 
@@ -417,7 +431,7 @@ $modelResponses''';
     final groups = _getConversationGroups();
 
     return ListView.separated(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      padding: const EdgeInsets.only(left: 12, right: 12, top: 16, bottom: 80), // Add bottom padding for MiniPlayer
       itemCount: groups.length,
       separatorBuilder: (context, index) => const SizedBox(height: 24),
       // 【性能优化】减小缓存范围，提升滚动性能
@@ -632,6 +646,22 @@ $modelResponses''';
             textColor: primaryColor,
           ),
           const SizedBox(width: 8),
+          // TTS 播放按钮
+          Consumer<TtsProvider>(
+            builder: (context, tts, _) {
+              if (!tts.hasValidConfig) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: _buildCompactButton(
+                  onPressed: () => _playGroupAudio(groupIndex),
+                  icon: Icon(Icons.volume_up_rounded, size: 15, color: primaryColor),
+                  label: '朗读',
+                  backgroundColor: primaryColor.withOpacity(0.1),
+                  textColor: primaryColor,
+                ),
+              );
+            },
+          ),
           _buildCompactButton(
             onPressed: () => _exportToEpub(groupIndex),
             icon: Icon(
@@ -714,5 +744,61 @@ $modelResponses''';
         ],
       ),
     );
+  }
+
+  /// 播放本轮对话音频
+  void _playGroupAudio(int groupIndex) {
+    final groups = _getConversationGroups();
+    if (groupIndex >= groups.length) return;
+
+    final group = groups[groupIndex];
+    final assistantReplies = group['assistant_replies'] as List<dynamic>;
+    
+    if (assistantReplies.isEmpty) return;
+
+    final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+    final items = <TtsItem>[];
+
+    // Add AI Analyses if any
+    final analyses = _aiAnalyses[groupIndex] ?? [];
+    for (var i = 0; i < analyses.length; i++) {
+      items.add(TtsItem(
+        id: 'analysis_${groupIndex}_$i',
+        text: analyses[i],
+        title: 'AI 分析 ${i + 1}',
+        author: 'Cherry Assistant',
+      ));
+    }
+
+    // Add Assistant Replies
+    for (var i = 0; i < assistantReplies.length; i++) {
+      final reply = assistantReplies[i] as Map<String, dynamic>;
+      final model = reply['model'] as Map<String, dynamic>?;
+      final modelName = model?['name'] as String? ?? 'Assistant';
+      
+      final blocks = reply['blocks'] as List<dynamic>? ?? [];
+      var content = '';
+      for (final block in blocks) {
+        if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+          content += block['content'] as String? ?? '';
+        }
+      }
+
+      if (content.isNotEmpty) {
+        items.add(TtsItem(
+          id: reply['id'] ?? 'reply_${groupIndex}_$i',
+          text: content,
+          title: '回复 ${i + 1}',
+          author: modelName,
+        ));
+      }
+    }
+
+    if (items.isNotEmpty) {
+      ttsProvider.setPlaylist(items);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('开始朗读...')),
+      );
+    }
   }
 }

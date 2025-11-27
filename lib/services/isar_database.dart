@@ -3,6 +3,8 @@ import 'package:path_provider/path_provider.dart';
 import '../models/isar/highlight_entity.dart';
 import '../models/isar/topic_cache_entity.dart';
 import '../models/isar/ai_analysis_entity.dart';
+import '../models/isar/discussion_entity.dart';
+import '../models/isar/discussion_message_entity.dart';
 
 /// Isar 数据库管理器（单例模式）
 ///
@@ -49,7 +51,13 @@ class IsarDatabase {
       final dir = await getApplicationDocumentsDirectory();
 
       _isar = await Isar.open(
-        [HighlightEntitySchema, TopicCacheEntitySchema, AIAnalysisEntitySchema],
+        [
+          HighlightEntitySchema,
+          TopicCacheEntitySchema,
+          AIAnalysisEntitySchema,
+          DiscussionEntitySchema,
+          DiscussionMessageEntitySchema,
+        ],
         directory: dir.path,
         name: 'cherry_viewer', // 数据库名称
         inspector: true, // 启用 Isar Inspector（调试工具）
@@ -330,5 +338,109 @@ class IsarDatabase {
     await close();
     await init();
     print('✅ 数据库压缩完成');
+  }
+
+  // ============ 讨论相关操作 ============
+
+  /// 保存讨论线程
+  Future<void> saveDiscussion(DiscussionEntity discussion) async {
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      await isar.discussionEntitys.put(discussion);
+    });
+  }
+
+  /// 获取指定AI回复的所有讨论
+  Future<List<DiscussionEntity>> getDiscussions(String messageId) async {
+    final isar = await instance;
+    return isar.discussionEntitys
+        .filter()
+        .messageIdEqualTo(messageId)
+        .sortByUpdatedAtDesc()
+        .findAll();
+  }
+
+  /// 获取单个讨论
+  Future<DiscussionEntity?> getDiscussion(String discussionId) async {
+    final isar = await instance;
+    return isar.discussionEntitys
+        .filter()
+        .discussionIdEqualTo(discussionId)
+        .findFirst();
+  }
+
+  /// 更新讨论的消息计数和更新时间
+  Future<void> updateDiscussion(
+    String discussionId,
+    int messageCount,
+  ) async {
+    final isar = await instance;
+    final discussion = await getDiscussion(discussionId);
+    if (discussion != null) {
+      discussion.messageCount = messageCount;
+      discussion.updatedAt = DateTime.now().millisecondsSinceEpoch;
+      await isar.writeTxn(() async {
+        await isar.discussionEntitys.put(discussion);
+      });
+    }
+  }
+
+  /// 删除讨论（同时删除所有相关消息）
+  Future<void> deleteDiscussion(String discussionId) async {
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      // 删除讨论线程
+      await isar.discussionEntitys
+          .filter()
+          .discussionIdEqualTo(discussionId)
+          .deleteAll();
+      // 删除所有相关消息
+      await isar.discussionMessageEntitys
+          .filter()
+          .discussionIdEqualTo(discussionId)
+          .deleteAll();
+    });
+  }
+
+  /// 保存讨论消息
+  Future<void> saveDiscussionMessage(DiscussionMessageEntity message) async {
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      await isar.discussionMessageEntitys.put(message);
+    });
+  }
+
+  /// 批量保存讨论消息
+  Future<void> saveDiscussionMessages(
+    List<DiscussionMessageEntity> messages,
+  ) async {
+    if (messages.isEmpty) return;
+
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      await isar.discussionMessageEntitys.putAll(messages);
+    });
+  }
+
+  /// 获取讨论的所有消息
+  Future<List<DiscussionMessageEntity>> getDiscussionMessages(
+    String discussionId,
+  ) async {
+    final isar = await instance;
+    return isar.discussionMessageEntitys
+        .filter()
+        .discussionIdEqualTo(discussionId)
+        .sortByCreatedAt()
+        .findAll();
+  }
+
+  /// 监听讨论消息变化（实时更新）
+  Stream<List<DiscussionMessageEntity>> watchDiscussionMessages(
+    String discussionId,
+  ) {
+    return instanceSync.discussionMessageEntitys
+        .filter()
+        .discussionIdEqualTo(discussionId)
+        .watch(fireImmediately: true);
   }
 }

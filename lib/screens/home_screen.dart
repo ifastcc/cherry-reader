@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:webdav_client/webdav_client.dart' as wd;
 import 'dart:io';
+import 'dart:async'; // For Timer
 import '../services/cherry_extractor.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/isar_database.dart';
@@ -25,7 +28,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   CherryExtractor? _extractor;
   bool _isLoading = false;  // 仅用于首次加载无缓存时
   String? _error;
@@ -44,11 +47,31 @@ class _HomeScreenState extends State<HomeScreen> {
   CancelToken? _downloadCancelToken;
   DateTime? _lastSyncTime;  // 缓存版本时间
   bool _hasValidWebDavConfig = false;  // 【新增】WebDAV 配置是否有效
+  
+  // 【新增】检查状态
+  DateTime? _lastCheckTime;  // 上次检查更新的时间
+  bool? _hasUpdate;  // 是否有更新（null=未检查，true=有更新，false=已是最新）
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initAndLoad();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 【新增】监听应用生命周期变化
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _lastCheckTime != null) {
+      // 当应用从后台回到前台时，刷新状态栏时间显示
+      setState(() {});
+    }
   }
 
   /// 初始化并加载数据
@@ -137,103 +160,130 @@ class _HomeScreenState extends State<HomeScreen> {
       _isBackgroundSyncing = true;
       _syncStage = SyncStage.connecting;
       _syncProgress = null;
-      _syncMessage = '正在连接 WebDAV 服务器...';
+      _syncMessage = '正在检查更新...';
     });
 
     try {
-      final (updated, localPath, message) = await WebDavService.autoSync(
+      // 1. 检查更新
+      final (needUpdate, remoteFile, checkMessage) = await WebDavService.checkForUpdate(config);
+
+      if (!mounted) return;
+
+      // 【新增】记录检查时间和结果
+      setState(() {
+        _lastCheckTime = DateTime.now();
+        _hasUpdate = needUpdate;
+      });
+
+      if (!needUpdate) {
+        // 无需更新
+        setState(() {
+          _isBackgroundSyncing = false;
+          _syncMessage = null;
+          _syncStage = null;
+        });
+        debugPrint('ℹ️ WebDAV: $checkMessage');
+        return;
+      }
+
+      // 2. 发现更新，根据网络状态决定是否自动下载
+      final connectivityResult = await Connectivity().checkConnectivity();
+      bool shouldDownload = false;
+
+      if (connectivityResult.contains(ConnectivityResult.wifi)) {
+        // WiFi 环境下自动下载
+        debugPrint('✅ WiFi 环境，自动开始下载');
+        shouldDownload = true;
+        setState(() {
+          _syncMessage = 'WiFi 环境，自动下载更新...';
+        });
+      } else if (connectivityResult.contains(ConnectivityResult.mobile)) {
+        // 蜂窝网络下询问用户
+        debugPrint('⚠️ 蜂窝网络，询问用户');
+        setState(() {
+          _syncMessage = '发现新版本 (蜂窝网络)，等待确认...';
+        });
+        shouldDownload = await _showUpdateDialog(remoteFile!);
+      } else if (connectivityResult.contains(ConnectivityResult.ethernet)) {
+         // 有线网络自动下载
+         shouldDownload = true;
+      } else {
+        // 无网络或其他情况 (虽然能检查到更新说明有网，但以防万一)
+        // 默认询问
+        shouldDownload = await _showUpdateDialog(remoteFile!);
+      }
+      
+      if (!shouldDownload) {
+        if (mounted) {
+          setState(() {
+            _isBackgroundSyncing = false;
+            _syncMessage = null;
+            _syncStage = null;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('已取消更新')),
+          );
+        }
+        return;
+      }
+
+      // 3. 开始下载
+      setState(() {
+        _syncStage = SyncStage.downloading;
+        _syncMessage = '正在下载...';
+      });
+
+      final localPath = await WebDavService.downloadBackup(
         config,
+        remoteFile!,
         cancelToken: _downloadCancelToken,
         onProgress: (received, total) {
           if (total > 0 && mounted) {
             setState(() {
-              _syncStage = SyncStage.downloading;
               _syncProgress = received / total;
               _syncMessage = '正在下载... ${(received / 1024 / 1024).toStringAsFixed(1)}MB';
             });
           }
         },
       );
-
+      
       if (!mounted) return;
 
       if (localPath == null) {
-        // 同步失败
+        // 下载失败
+        throw Exception('下载失败');
+      }
+
+      // 4. 下载成功，更新数据
+      setState(() {
+        _syncStage = SyncStage.parsing;
+        _syncProgress = null;
+        _syncMessage = '正在解析和构建索引...';
+        _hasUpdate = false; // 【修复】下载完成后重置更新状态
+      });
+
+      // 清除旧缓存
+      await DataPersistenceManager.clearCache();
+
+      // 加载新文件
+      await _loadFile(localPath, saveCache: true);
+
+      // 更新缓存时间
+      _lastSyncTime = await WebDavService.getLastSyncTime();
+
+      if (mounted) {
         setState(() {
-          _isBackgroundSyncing = false;
-          _syncProgress = null;
-          _syncMessage = null;
-          _syncStage = null;
+          _error = null;
         });
-        
-        // 显示错误提示
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ WebDAV 同步失败: $message'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
+          const SnackBar(
+            content: Text('✅ 已从 WebDAV 同步最新数据'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
           ),
         );
-        return;
       }
 
-      if (updated) {
-        // 有更新，重新加载数据
-        setState(() {
-          _syncStage = SyncStage.parsing;
-          _syncProgress = null;
-          _syncMessage = '正在解析和构建索引...';
-        });
-
-        try {
-          await _loadFile(localPath, saveCache: true);
-
-          // 更新缓存时间
-          _lastSyncTime = await WebDavService.getLastSyncTime();
-
-          // 【修复】加载成功后清除之前的错误状态
-          if (mounted) {
-            setState(() {
-              _error = null;
-            });
-
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('✅ 已从 WebDAV 同步最新数据'),
-                backgroundColor: Colors.green,
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        } catch (e) {
-          // 【修复】如果下载的文件损坏，清除并提示重试
-          if (e.toString().contains('ZIP 文件损坏') ||
-              e.toString().contains('FormatException')) {
-            debugPrint('❌ WebDAV下载的文件损坏: $e');
-            await _handleCorruptedFile(localPath);
-
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('❌ 下载的文件不完整或损坏\n可能是网络中断导致，请点击刷新按钮重试'),
-                  backgroundColor: Colors.red,
-                  duration: Duration(seconds: 4),
-                ),
-              );
-
-              // 同时更新错误状态，方便用户看到
-              setState(() {
-                _error = 'WebDAV 下载的文件损坏\n请点击右上角刷新按钮重新下载';
-              });
-            }
-          } else {
-            rethrow;
-          }
-        }
-      } else {
-        // 无更新
-        debugPrint('ℹ️ WebDAV: 已是最新版本');
-      }
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         debugPrint('ℹ️ WebDAV 下载已取消');
@@ -280,6 +330,46 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
   }
+
+  /// 显示更新确认对话框（无倒计时）
+  Future<bool> _showUpdateDialog(wd.File remoteFile) async {
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('发现新版本'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('当前处于移动网络，是否下载更新？'),
+              const SizedBox(height: 16),
+              Text('文件：${remoteFile.name}'),
+              const SizedBox(height: 4),
+              Text('大小：${(remoteFile.size ?? 0) ~/ 1024} KB'),
+              const SizedBox(height: 4),
+              Text('时间：${remoteFile.mTime}'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('暂不更新'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('立即下载'),
+            ),
+          ],
+        );
+      },
+    ) ?? false;
+  }
+
+
+
+
 
   /// 取消正在进行的下载
   void _cancelDownload() {
@@ -822,54 +912,78 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// 底部状态栏
   Widget _buildStatusBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor.withOpacity(0.3),
-            width: 0.5,
-          ),
+    return GestureDetector(
+      onTap: () {
+        // 【新增】点击状态栏时刷新时间显示
+        if (_lastCheckTime != null) {
+          setState(() {});
+        }
+      },
+      child: SafeArea(
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Colors.grey[200]!)),
+        ),
+        child: Row(
+          children: [
+            // WebDAV 模式：显示数据同步状态 + 检查时效性
+            if (_loadMode == DataLoadMode.webdav) ...[
+              // 根据状态显示不同图标
+              if (_hasUpdate == null) ...[
+                // 未检查
+                Icon(Icons.help_outline, size: 14, color: Colors.grey[400]),
+              ] else if (_hasUpdate == true) ...[
+                // 有更新
+                Icon(Icons.warning_amber_rounded, size: 14, color: Colors.orange[600]),
+              ] else ...[
+                // 已是最新
+                Icon(Icons.check_circle_outline, size: 14, color: Colors.green[600]),
+              ],
+              const SizedBox(width: 6),
+              
+              // 状态文字
+              Expanded(
+                child: Text(
+                  _hasUpdate == null
+                      ? '未检查 • 点击刷新检查更新'
+                      : _hasUpdate == true
+                          ? '有新版本可用 • ${_formatCheckTime(_lastCheckTime)}'
+                          : '数据已是最新 • ${_formatCheckTime(_lastCheckTime)}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _hasUpdate == null
+                        ? Colors.grey[500]
+                        : _hasUpdate == true
+                            ? Colors.orange[700]
+                            : Colors.green[700],
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ] else ...[
+              // 本地模式
+              const Icon(Icons.folder_open, size: 14, color: Colors.grey),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '本地模式 • 数据来自本地文件',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
-      child: Row(
-        children: [
-          // 模式标识
-          Icon(
-            _loadMode == DataLoadMode.webdav ? Icons.cloud : Icons.folder,
-            size: 12,
-            color: Colors.grey[500],
-          ),
-          const SizedBox(width: 4),
-          Text(
-            _loadMode == DataLoadMode.webdav ? 'WebDAV' : '本地',
-            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-          ),
-          
-          // 分隔符
-          if (_lastSyncTime != null) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text('·', style: TextStyle(color: Colors.grey[400])),
-            ),
-            // 同步时间
-            Text(
-              '同步于 ${_formatSyncTime(_lastSyncTime)}',
-              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-            ),
-          ],
-          
-          const Spacer(),
-          
-          // 精确时间（可选）
-          if (_lastSyncTime != null)
-            Text(
-              DateFormat('MM-dd HH:mm').format(_lastSyncTime!),
-              style: TextStyle(fontSize: 10, color: Colors.grey[400]),
-            ),
-        ],
-      ),
+      ), // GestureDetector
     );
   }
 
@@ -1042,6 +1156,21 @@ class _HomeScreenState extends State<HomeScreen> {
       return DateFormat('MM-dd HH:mm').format(time);
     }
   }
+
+  /// 【新增】格式化检查时间为友好的相对时间
+  String _formatCheckTime(DateTime? checkTime) {
+    if (checkTime == null) return '未检查';
+    
+    final now = DateTime.now();
+    final diff = now.difference(checkTime);
+    
+    if (diff.inSeconds < 10) return '刚刚检查';
+    if (diff.inMinutes < 1) return '${diff.inSeconds}秒前检查';
+    if (diff.inHours < 1) return '${diff.inMinutes}分钟前检查';
+    if (diff.inDays < 1) return '${diff.inHours}小时前检查';
+    return DateFormat('MM-dd HH:mm').format(checkTime) + ' 检查';
+  }
+
 
   Widget _buildTopicList() {
     if (_topicIndex == null || _topicIndex!.isEmpty) {
