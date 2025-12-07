@@ -379,7 +379,7 @@ packages:
   gpt_markdown_custom:
     dependency: "direct main"
     description:
-      path: "../packages/gpt_markdown_custom"
+      path: "packages/gpt_markdown_custom"
       relative: true
     source: path
     version: "1.1.4+custom"

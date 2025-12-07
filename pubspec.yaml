@@ -14,7 +14,7 @@ dependencies:
   scrollable_positioned_list: ^0.3.8  # 可定位列表（精确滚动跳转）
   flutter_markdown: ^0.6.18      # Markdown 渲染
   gpt_markdown_custom:            # 自定义 gpt_markdown fork（支持多色高亮）
-    path: ../packages/gpt_markdown_custom
+    path: packages/gpt_markdown_custom
   markdown: ^7.1.1                # Markdown 解析
   flutter_math_fork: ^0.7.1       # LaTeX 数学公式���染
   sticky_headers: ^0.3.0          # 粘性标题

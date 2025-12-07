@@ -1,0 +1,41 @@
+name: gpt_markdown_custom
+description: "Custom fork of gpt_markdown with enhanced highlight support and exposed APIs for Cherry Viewer"
+version: 1.1.4+custom
+homepage: https://github.com/Infinitix-LLC/gpt_markdown
+
+environment:
+  sdk: '>=3.7.0 <4.0.0'
+  flutter: ">=3.35.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_math_fork: ^0.7.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  fonts:
+    - family: JetBrainsMono
+      fonts:
+        - asset: lib/fonts/JetBrainsMono-Regular.ttf
+
+topics:
+  - markdown
+  - latex
+  - selectable
+  - chatgpt
+  - gemini
+
+keywords:
+  - flutter
+  - markdown
+  - flutter markdown
+  - gpt
+  - latex
+  - chatgpt
+  - rich text
+  - ai
