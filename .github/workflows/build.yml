@@ -24,6 +24,10 @@ on:
         description: '构建 Windows'
         type: boolean
         default: false
+      create_release:
+        description: '发布到 Release'
+        type: boolean
+        default: true
 
   # Tag 触发 - 推送 v* tag 自动打包
   push:
@@ -31,7 +35,7 @@ on:
       - 'v*'
 
 env:
-  FLUTTER_VERSION: '3.24.0'
+  FLUTTER_VERSION: '3.32.0'
 
 jobs:
   # 从 tag 或输入获取版本号
@@ -247,10 +251,12 @@ jobs:
           path: CherryReader-windows-*.zip
           retention-days: 30
 
-  # 创建 Release (仅 tag 触发时)
+  # 创建 Release
   release:
     needs: [prepare, build-android]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
