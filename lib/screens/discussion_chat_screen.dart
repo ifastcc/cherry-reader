@@ -3,6 +3,7 @@ import '../models/isar/discussion_message_entity.dart';
 import'../services/discussion_service.dart';
 import '../services/openai_service.dart';
 import '../screens/settings_screen.dart';
+import '../utils/api_host_utils.dart';
 
 /// 讨论对话页面
 ///
@@ -56,7 +57,8 @@ class _DiscussionChatScreenState extends State<DiscussionChatScreen> {
     final config = await getApiConfig();
     setState(() {
       final apiKey = config['apiKey'] ?? '';
-      final baseUrl = config['apiUrl'] ?? 'https://api.openai.com/v1';
+      final rawBaseUrl = config['apiUrl'] ?? 'https://api.openai.com/v1';
+      final baseUrl = formatOpenAIApiHost(rawBaseUrl);
       _model = config['model'] ?? 'gpt-4-turbo-preview';
       _openaiService = OpenAIService(apiKey: apiKey, baseUrl: baseUrl);
     });

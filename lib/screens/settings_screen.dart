@@ -4,11 +4,18 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:provider/provider.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/webdav_service.dart';
-import '../services/azure_tts_service.dart';
+import '../services/streaming_tts_service.dart';
+import '../services/tts_cache_manager.dart';
+import '../services/ai_provider_service.dart';
 import '../models/tts_settings.dart';
-import 'package:audioplayers/audioplayers.dart';
+import '../providers/tts_provider.dart';
+import 'package:just_audio/just_audio.dart';
+import 'ai_provider_screen.dart';
+import '../services/prompt_template_service.dart';
+import '../models/isar/prompt_template_entity.dart';
 
 // SharedPreferences 键名常量
 const String _keyApiUrl = 'openai_api_url';
@@ -176,9 +183,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       _ttsSettings.azureApiKey = '';
     }
-    
+
     _ttsSettings.azureRegion = _azureRegionController.text.trim();
     await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+
+    // 通知 TtsProvider 重新加载配置
+    if (mounted) {
+      final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+      await ttsProvider.reloadSettings();
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -283,6 +296,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                     ),
+
+                    const SizedBox(height: 16),
+
+                    // Provider 管理入口
+                    _buildProviderManagementCard(),
+
+                    const SizedBox(height: 16),
+
+                    // AI 偏好设置
+                    _buildAIPreferencesCard(),
 
                     const SizedBox(height: 24),
 
@@ -968,8 +991,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               : _ttsSettings.defaultVoiceName))
                       : '点击选择',
                   style: TextStyle(
-                    color: _ttsSettings.defaultVoiceName.isNotEmpty 
-                        ? Colors.blue[300] 
+                    color: _ttsSettings.defaultVoiceName.isNotEmpty
+                        ? Colors.blue[300]
                         : Colors.grey,
                   ),
                 ),
@@ -981,10 +1004,173 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ],
+
+            // 朗读节奏设置
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.speed, color: Colors.green[300], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '朗读节奏',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '控制标题、段落之间的停顿时长',
+              style: TextStyle(color: Colors.grey[500], fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+
+            // 节奏倍率滑块
+            Row(
+              children: [
+                const Text('节奏: '),
+                Expanded(
+                  child: Slider(
+                    value: _ttsSettings.rhythmScale,
+                    min: 0.5,
+                    max: 2.0,
+                    divisions: 15,
+                    label: _getRhythmLabel(_ttsSettings.rhythmScale),
+                    onChanged: (value) {
+                      setState(() {
+                        _ttsSettings.rhythmScale = value;
+                      });
+                    },
+                    onChangeEnd: (value) async {
+                      // 保存设置
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+                      // 通知 TtsProvider
+                      if (mounted) {
+                        final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+                        await ttsProvider.reloadSettings();
+                      }
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 60,
+                  child: Text(
+                    _getRhythmLabel(_ttsSettings.rhythmScale),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green[300],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            // 预设按钮
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                _buildRhythmPresetChip('快速', 0.6, Icons.fast_forward),
+                _buildRhythmPresetChip('正常', 1.0, Icons.play_arrow),
+                _buildRhythmPresetChip('舒缓', 1.3, Icons.slow_motion_video),
+                _buildRhythmPresetChip('有声书', 1.5, Icons.menu_book),
+              ],
+            ),
+
+            // TTS 缓存管理
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.storage, color: Colors.orange[300], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '语音缓存',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _buildCacheManagementTile(),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildCacheManagementTile() {
+    return FutureBuilder<int>(
+      future: _getTtsCacheSize(),
+      builder: (context, snapshot) {
+        final sizeText = snapshot.hasData
+            ? _formatCacheSize(snapshot.data!)
+            : '计算中...';
+
+        return ListTile(
+          leading: const Icon(Icons.folder_open),
+          title: const Text('清除语音缓存'),
+          subtitle: Text('当前缓存: $sizeText'),
+          trailing: TextButton.icon(
+            onPressed: () => _clearTtsCache(),
+            icon: const Icon(Icons.delete_outline, size: 18),
+            label: const Text('清除'),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: BorderSide(color: Colors.grey.shade700),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<int> _getTtsCacheSize() async {
+    final cacheManager = TtsCacheManager();
+    return await cacheManager.getCacheSize();
+  }
+
+  String _formatCacheSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  Future<void> _clearTtsCache() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清除语音缓存'),
+        content: const Text('确定要清除所有语音缓存吗？\n已缓存的语音将需要重新生成。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      final cacheManager = TtsCacheManager();
+      await cacheManager.clearCache();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('语音缓存已清除')),
+        );
+        setState(() {}); // 刷新缓存大小显示
+      }
+    }
   }
 
   Future<void> _fetchVoices() async {
@@ -992,7 +1178,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .map((c) => c.text.trim())
         .where((text) => text.isNotEmpty)
         .toList();
-        
+
     if (keys.isEmpty || _azureRegionController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请先输入 Region 和至少一个 Key')),
@@ -1003,24 +1189,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isLoadingVoices = true);
 
     try {
-      final service = AzureTtsService(
+      final service = StreamingTtsService(
         apiKeys: keys,
         region: _azureRegionController.text.trim(),
       );
       final voices = await service.getVoices();
-      
+
       // Filter for Chinese voices primarily, or sort them
       final chineseVoices = voices.where((v) => v['locale']?.startsWith('zh') ?? false).toList();
       final otherVoices = voices.where((v) => !(v['locale']?.startsWith('zh') ?? false)).toList();
-      
+
       setState(() {
         _availableVoices = [...chineseVoices, ...otherVoices];
         _isLoadingVoices = false;
       });
 
+      // 自动保存 TTS 配置(关键修复!)
+      _ttsSettings.azureApiKeys = keys;
+      if (keys.isNotEmpty) {
+        _ttsSettings.azureApiKey = keys.first;
+      }
+      _ttsSettings.azureRegion = _azureRegionController.text.trim();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+
+      // 通知 TtsProvider 重新加载配置
+      if (mounted) {
+        final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+        await ttsProvider.reloadSettings();
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('成功获取 ${voices.length} 个声音')),
+          SnackBar(
+            content: Text('✅ 成功获取 ${voices.length} 个声音并保存配置'),
+            backgroundColor: Colors.green,
+          ),
         );
       }
     } catch (e) {
@@ -1088,18 +1293,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     
     try {
-      final service = AzureTtsService(
+      final service = StreamingTtsService(
         apiKeys: keys,
         region: _azureRegionController.text.trim(),
       );
       
       final audioPath = await service.previewVoice(voiceName: voiceName);
-      
-      await _previewPlayer.setSourceDeviceFile(audioPath);
-      await _previewPlayer.resume();
-      
-      _previewPlayer.onPlayerComplete.listen((_) {
-        if (mounted) {
+
+      await _previewPlayer.setFilePath(audioPath);
+      await _previewPlayer.play();
+
+      // 监听播放完成
+      _previewPlayer.playerStateStream.listen((state) {
+        if (state.processingState == ProcessingState.completed && mounted) {
           setState(() {
             _isPreviewingVoice = false;
             _previewingVoiceName = null;
@@ -1372,6 +1578,289 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
         setDialogState(() {}); // Refresh to show checkmark
       },
+    );
+  }
+
+  /// 构建 AI 偏好设置卡片
+  Widget _buildAIPreferencesCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.tune, color: Colors.purple[400], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  'AI 偏好设置',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '配置全局 System Prompt，对所有 AI 对话生效',
+              style: TextStyle(color: Colors.grey[500], fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+
+            // 当前偏好
+            FutureBuilder<UserPreferenceEntity?>(
+              future: PromptTemplateService.instance.getActivePreference(),
+              builder: (context, snapshot) {
+                final pref = snapshot.data;
+                return ListTile(
+                  leading: Icon(Icons.person_outline, color: Colors.purple[300]),
+                  title: Text(pref?.name ?? '默认偏好'),
+                  subtitle: Text(
+                    pref?.systemPrompt.split('\n').first ?? '点击编辑偏好设置',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                  ),
+                  trailing: const Icon(Icons.edit, size: 18),
+                  onTap: () => _showPreferenceEditor(pref),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: BorderSide(color: Colors.grey.shade300),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 显示偏好编辑器
+  void _showPreferenceEditor(UserPreferenceEntity? preference) async {
+    // 如果没有偏好，先获取
+    preference ??= await PromptTemplateService.instance.getActivePreference();
+
+    final nameController = TextEditingController(text: preference?.name ?? '默认偏好');
+    final contentController = TextEditingController(text: preference?.systemPrompt ?? '');
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('编辑 AI 偏好'),
+        content: SizedBox(
+          width: 500,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'System Prompt 会添加到所有 AI 对话的开头',
+                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: '偏好名称',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: contentController,
+                maxLines: 10,
+                decoration: const InputDecoration(
+                  labelText: 'System Prompt',
+                  hintText: '例如：\n- 总是使用简体中文回答\n- 从第一性原理思考\n- 回复简洁',
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = nameController.text.trim();
+              final content = contentController.text.trim();
+
+              if (preference != null) {
+                preference.name = name;
+                preference.systemPrompt = content;
+                await PromptTemplateService.instance.updatePreference(preference);
+              } else {
+                await PromptTemplateService.instance.createPreference(
+                  name: name,
+                  systemPrompt: content,
+                  setActive: true,
+                );
+              }
+
+              Navigator.pop(context);
+              setState(() {}); // 刷新界面
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('AI 偏好已保存'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建 Provider 管理入口卡片
+  Widget _buildProviderManagementCard() {
+    final providerService = AIProviderService.instance;
+    final activeProvider = providerService.activeProvider;
+    final activeModel = providerService.activeModel;
+    final hasProviders = providerService.providers.isNotEmpty;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.cloud, color: Colors.green[400], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  'AI Provider 管理',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const Spacer(),
+                if (hasProviders)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.green[100],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${providerService.validProviders.length} 个可用',
+                      style: TextStyle(fontSize: 12, color: Colors.green[700]),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hasProviders
+                  ? '当前: ${activeProvider?.name ?? "未选择"} / ${activeModel?.displayName ?? "未选择模型"}'
+                  : '从 Cherry Studio 备份导入 AI 配置，快速使用多个模型',
+              style: TextStyle(color: Colors.grey[500], fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const AIProviderScreen(),
+                        ),
+                      ).then((_) => setState(() {})); // 返回时刷新状态
+                    },
+                    icon: const Icon(Icons.settings, size: 18),
+                    label: Text(hasProviders ? '管理 Provider' : '导入配置'),
+                  ),
+                ),
+                if (hasProviders) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _useProviderConfig,
+                    icon: const Icon(Icons.sync, size: 18),
+                    label: const Text('应用到上方'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.green[700],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 获取节奏倍率的显示文本
+  String _getRhythmLabel(double scale) {
+    if (scale <= 0.6) return '快速';
+    if (scale <= 0.8) return '较快';
+    if (scale <= 1.1) return '正常';
+    if (scale <= 1.3) return '舒缓';
+    if (scale <= 1.5) return '慢速';
+    return '很慢';
+  }
+
+  /// 构建节奏预设按钮
+  Widget _buildRhythmPresetChip(String label, double scale, IconData icon) {
+    final isSelected = (_ttsSettings.rhythmScale - scale).abs() < 0.05;
+    return ActionChip(
+      avatar: Icon(icon, size: 16, color: isSelected ? Colors.white : null),
+      label: Text(label),
+      backgroundColor: isSelected ? Colors.green : null,
+      labelStyle: TextStyle(color: isSelected ? Colors.white : null),
+      onPressed: () async {
+        setState(() {
+          _ttsSettings.rhythmScale = scale;
+        });
+        // 保存设置
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+        // 通知 TtsProvider
+        if (mounted) {
+          final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+          await ttsProvider.reloadSettings();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('已切换到「$label」节奏'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 1),
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  /// 将 Provider 配置应用到传统配置字段
+  void _useProviderConfig() {
+    final config = AIProviderService.instance.getActiveConfig();
+    if (config == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先选择一个有效的 Provider 和模型')),
+      );
+      return;
+    }
+
+    setState(() {
+      _apiUrlController.text = config.baseUrl;
+      _apiKeyController.text = config.apiKey;
+      _modelController.text = config.modelId;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('已应用 Provider 配置: ${config.modelId}'),
+        backgroundColor: Colors.green,
+      ),
     );
   }
 }

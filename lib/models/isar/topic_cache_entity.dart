@@ -25,6 +25,9 @@ class TopicCacheEntity {
   /// 消息数量
   late int messageCount;
 
+  /// 对话轮数（用户消息数量）
+  late int roundCount;
+
   /// 创建时间（毫秒时间戳）
   late int createdAt;
 
@@ -47,6 +50,7 @@ class TopicCacheEntity {
     String name,
     String assistantId,
     int messageCount,
+    int roundCount,
     String dataJson,
   ) {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -55,6 +59,7 @@ class TopicCacheEntity {
       ..name = name
       ..assistantId = assistantId
       ..messageCount = messageCount
+      ..roundCount = roundCount
       ..createdAt = now
       ..updatedAt = now
       ..dataJson = dataJson

@@ -104,6 +104,14 @@ class DataPersistenceManager {
       final assistantId = topic['assistantId'] as String? ?? 'default';
       final messages = topic['messages'] as List<dynamic>? ?? [];
 
+      // 计算轮数：统计用户消息数量
+      int roundCount = 0;
+      for (final msg in messages) {
+        if (msg is Map<String, dynamic> && msg['role'] == 'user') {
+          roundCount++;
+        }
+      }
+
       // 将话题完整数据序列化为 JSON
       final dataJson = json.encode(topic);
 
@@ -112,6 +120,7 @@ class DataPersistenceManager {
         name,
         assistantId,
         messages.length,
+        roundCount,
         dataJson,
       );
 
@@ -148,6 +157,7 @@ class DataPersistenceManager {
           'name': entity.name,
           'assistantId': entity.assistantId,
           'messageCount': entity.messageCount,
+          'roundCount': entity.roundCount,
           'createdAt': entity.createdAt,
           'updatedAt': entity.updatedAt,
         };

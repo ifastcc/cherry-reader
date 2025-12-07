@@ -4,8 +4,15 @@ import 'unified_markdown_renderer.dart';
 /// 用户消息卡片 - 简单展示用户输入，支持双击展开/收起
 class UserMessageCard extends StatefulWidget {
   final Map<String, dynamic> data;
+  final int? roundIndex; // 轮次索引（可选，用于显示 Q1, Q2...）
+  final int? totalRounds; // 总轮次数（可选）
 
-  const UserMessageCard({super.key, required this.data});
+  const UserMessageCard({
+    super.key,
+    required this.data,
+    this.roundIndex,
+    this.totalRounds,
+  });
 
   @override
   State<UserMessageCard> createState() => _UserMessageCardState();
@@ -53,52 +60,75 @@ class _UserMessageCardState extends State<UserMessageCard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 顶部：@提及的模型标签
-              if (mentions.isNotEmpty) ...[
+              // 顶部：轮次标记 + @提及的模型标签
+              if (widget.roundIndex != null || mentions.isNotEmpty) ...[
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: mentions.map((m) {
-                    final modelName =
-                        (m as Map)['name'] as String? ?? 'Unknown';
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _getModelColor(
-                          modelName,
-                        ).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: _getModelColor(
-                            modelName,
-                          ).withValues(alpha: 0.35),
-                          width: 1,
+                  children: [
+                    // 轮次标记
+                    if (widget.roundIndex != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6366F1).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'Q${widget.roundIndex! + 1}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF6366F1),
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.alternate_email,
-                            size: 11,
-                            color: _getModelColor(modelName),
-                          ),
-                          const SizedBox(width: 3),
-                          Text(
+                    // @提及标签
+                    ...mentions.map((m) {
+                      final modelName =
+                          (m as Map)['name'] as String? ?? 'Unknown';
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _getModelColor(
                             modelName,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: _getModelColor(modelName),
-                              fontWeight: FontWeight.w600,
-                            ),
+                          ).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _getModelColor(
+                              modelName,
+                            ).withValues(alpha: 0.35),
+                            width: 1,
                           ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.alternate_email,
+                              size: 11,
+                              color: _getModelColor(modelName),
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              modelName,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: _getModelColor(modelName),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
                 ),
                 const SizedBox(height: 12),
               ],

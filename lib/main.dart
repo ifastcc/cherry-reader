@@ -4,6 +4,7 @@ import 'no_scrollbar_behavior.dart';
 import 'screens/home_screen.dart';
 import 'services/analysis_cache_manager.dart';
 import 'services/isar_database.dart';
+import 'services/ai_provider_service.dart';
 
 import 'package:provider/provider.dart';
 import 'providers/tts_provider.dart';
@@ -19,6 +20,9 @@ void main() async {
 
   // 初始化缓存管理器（后续会迁移到 Isar）
   await AnalysisCacheManager().init();
+
+  // 初始化 AI Provider 服务
+  await AIProviderService.instance.init();
 
   runApp(
     MultiProvider(

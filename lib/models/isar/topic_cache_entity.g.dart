@@ -42,18 +42,23 @@ const TopicCacheEntitySchema = CollectionSchema(
       name: r'name',
       type: IsarType.string,
     ),
-    r'topicId': PropertySchema(
+    r'roundCount': PropertySchema(
       id: 5,
+      name: r'roundCount',
+      type: IsarType.long,
+    ),
+    r'topicId': PropertySchema(
+      id: 6,
       name: r'topicId',
       type: IsarType.string,
     ),
     r'updatedAt': PropertySchema(
-      id: 6,
+      id: 7,
       name: r'updatedAt',
       type: IsarType.long,
     ),
     r'version': PropertySchema(
-      id: 7,
+      id: 8,
       name: r'version',
       type: IsarType.long,
     )
@@ -123,9 +128,10 @@ void _topicCacheEntitySerialize(
   writer.writeString(offsets[2], object.dataJson);
   writer.writeLong(offsets[3], object.messageCount);
   writer.writeString(offsets[4], object.name);
-  writer.writeString(offsets[5], object.topicId);
-  writer.writeLong(offsets[6], object.updatedAt);
-  writer.writeLong(offsets[7], object.version);
+  writer.writeLong(offsets[5], object.roundCount);
+  writer.writeString(offsets[6], object.topicId);
+  writer.writeLong(offsets[7], object.updatedAt);
+  writer.writeLong(offsets[8], object.version);
 }
 
 TopicCacheEntity _topicCacheEntityDeserialize(
@@ -141,9 +147,10 @@ TopicCacheEntity _topicCacheEntityDeserialize(
   object.id = id;
   object.messageCount = reader.readLong(offsets[3]);
   object.name = reader.readString(offsets[4]);
-  object.topicId = reader.readString(offsets[5]);
-  object.updatedAt = reader.readLong(offsets[6]);
-  object.version = reader.readLong(offsets[7]);
+  object.roundCount = reader.readLong(offsets[5]);
+  object.topicId = reader.readString(offsets[6]);
+  object.updatedAt = reader.readLong(offsets[7]);
+  object.version = reader.readLong(offsets[8]);
   return object;
 }
 
@@ -165,10 +172,12 @@ P _topicCacheEntityDeserializeProp<P>(
     case 4:
       return (reader.readString(offset)) as P;
     case 5:
-      return (reader.readString(offset)) as P;
-    case 6:
       return (reader.readLong(offset)) as P;
+    case 6:
+      return (reader.readString(offset)) as P;
     case 7:
+      return (reader.readLong(offset)) as P;
+    case 8:
       return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -991,6 +1000,62 @@ extension TopicCacheEntityQueryFilter
   }
 
   QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterFilterCondition>
+      roundCountEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'roundCount',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterFilterCondition>
+      roundCountGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'roundCount',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterFilterCondition>
+      roundCountLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'roundCount',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterFilterCondition>
+      roundCountBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'roundCount',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterFilterCondition>
       topicIdEqualTo(
     String value, {
     bool caseSensitive = true,
@@ -1317,6 +1382,20 @@ extension TopicCacheEntityQuerySortBy
   }
 
   QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterSortBy>
+      sortByRoundCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'roundCount', Sort.asc);
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterSortBy>
+      sortByRoundCountDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'roundCount', Sort.desc);
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterSortBy>
       sortByTopicId() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'topicId', Sort.asc);
@@ -1444,6 +1523,20 @@ extension TopicCacheEntityQuerySortThenBy
   }
 
   QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterSortBy>
+      thenByRoundCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'roundCount', Sort.asc);
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterSortBy>
+      thenByRoundCountDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'roundCount', Sort.desc);
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QAfterSortBy>
       thenByTopicId() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'topicId', Sort.asc);
@@ -1523,6 +1616,13 @@ extension TopicCacheEntityQueryWhereDistinct
     });
   }
 
+  QueryBuilder<TopicCacheEntity, TopicCacheEntity, QDistinct>
+      distinctByRoundCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'roundCount');
+    });
+  }
+
   QueryBuilder<TopicCacheEntity, TopicCacheEntity, QDistinct> distinctByTopicId(
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
@@ -1581,6 +1681,12 @@ extension TopicCacheEntityQueryProperty
   QueryBuilder<TopicCacheEntity, String, QQueryOperations> nameProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'name');
+    });
+  }
+
+  QueryBuilder<TopicCacheEntity, int, QQueryOperations> roundCountProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'roundCount');
     });
   }
 

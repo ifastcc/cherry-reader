@@ -46,6 +46,54 @@ class WebDavConfig {
   String toString() => 'WebDavConfig(url: $url, user: $username, path: $path)';
 }
 
+/// 备份文件信息
+class BackupFileInfo {
+  final String name;
+  final String path;
+  final int size;
+  final DateTime modifiedTime;
+  final webdav.File webdavFile;
+
+  const BackupFileInfo({
+    required this.name,
+    required this.path,
+    required this.size,
+    required this.modifiedTime,
+    required this.webdavFile,
+  });
+
+  /// 格式化文件大小
+  String get formattedSize {
+    if (size < 1024) return '$size B';
+    if (size < 1024 * 1024) return '${(size / 1024).toStringAsFixed(1)} KB';
+    return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  /// 从文件名解析时间戳（格式：cherry-studio.20251130164825.hostname.mac.zip）
+  String get displayName {
+    // 尝试从文件名提取时间戳
+    final regex = RegExp(r'cherry-studio\.(\d{14})\.');
+    final match = regex.firstMatch(name);
+    if (match != null) {
+      final timestamp = match.group(1)!;
+      // 格式化为可读时间：20251130164825 -> 2025-11-30 16:48:25
+      try {
+        final year = timestamp.substring(0, 4);
+        final month = timestamp.substring(4, 6);
+        final day = timestamp.substring(6, 8);
+        final hour = timestamp.substring(8, 10);
+        final minute = timestamp.substring(10, 12);
+        final second = timestamp.substring(12, 14);
+        return '$year-$month-$day $hour:$minute:$second';
+      } catch (_) {}
+    }
+    return name;
+  }
+
+  @override
+  String toString() => 'BackupFileInfo($name, $formattedSize, $modifiedTime)';
+}
+
 /// WebDAV 服务
 class WebDavService {
   static const String _keyLoadMode = 'data_load_mode';
@@ -169,6 +217,45 @@ class WebDavService {
     } catch (e) {
       debugPrint('❌ 查找备份文件失败: $e');
       return null;
+    }
+  }
+
+  /// 获取所有备份文件列表（按修改时间降序排列）
+  ///
+  /// 返回格式化的备份文件信息列表
+  static Future<List<BackupFileInfo>> listBackupFiles(WebDavConfig config) async {
+    try {
+      final client = _createClient(config);
+      final files = await client.readDir(config.path);
+
+      // 过滤出备份文件（cherry-studio 开头的 zip 文件）
+      final backupFiles = files.where((f) {
+        final name = f.name ?? '';
+        return name.startsWith('cherry-studio.') && name.endsWith('.zip');
+      }).toList();
+
+      if (backupFiles.isEmpty) {
+        return [];
+      }
+
+      // 按修改时间排序（最新的在前面）
+      backupFiles.sort((a, b) {
+        final aTime = a.mTime ?? DateTime(1970);
+        final bTime = b.mTime ?? DateTime(1970);
+        return bTime.compareTo(aTime);
+      });
+
+      // 转换为 BackupFileInfo 列表
+      return backupFiles.map((f) => BackupFileInfo(
+        name: f.name ?? '',
+        path: '${config.path}/${f.name}',
+        size: f.size ?? 0,
+        modifiedTime: f.mTime ?? DateTime(1970),
+        webdavFile: f,
+      )).toList();
+    } catch (e) {
+      debugPrint('❌ 获取备份列表失败: $e');
+      return [];
     }
   }
 

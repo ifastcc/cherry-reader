@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 import '../models/highlight_data.dart';
+import '../models/isar/unified_conversation_entity.dart';
 import '../services/highlight_service.dart';
+import '../services/unified_conversation_service.dart';
 import '../screens/fullscreen_reader_screen.dart';
+import '../screens/ai_chat_screen.dart';
 import 'unified_markdown_renderer.dart';
 import 'highlight_style_menu.dart';
 import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
-import 'discussion_list_sheet.dart';
 
 /// 统一的可高亮卡片组件
 ///
@@ -52,8 +54,23 @@ class HighlightableCard extends StatefulWidget {
   /// 时间戳
   final String? timestamp;
 
-  /// 卡片最大高度（超出滚动）
-  final double maxHeight;
+  /// 卡片最大高度（超出滚动），设为 null 则自然撑开
+  final double? maxHeight;
+
+  /// 是否使用流式布局（无边框、自然撑开）
+  final bool streamLayout;
+
+  /// 自定义底部操作栏
+  final Widget? actionBar;
+
+  /// 讨论回调
+  final VoidCallback? onDiscuss;
+
+  /// 重新生成回调
+  final VoidCallback? onRegenerate;
+
+  /// 朗读回调
+  final VoidCallback? onSpeak;
 
   const HighlightableCard({
     super.key,
@@ -66,12 +83,23 @@ class HighlightableCard extends StatefulWidget {
     this.showTimestamp = false,
     this.timestamp,
     this.maxHeight = 600,
+    this.streamLayout = false,
+    this.actionBar,
+    this.onDiscuss,
+    this.onRegenerate,
+    this.onSpeak,
   });
 
   /// 创建助手回复卡片
   factory HighlightableCard.assistant({
     Key? key,
     required Map<String, dynamic> data,
+    bool streamLayout = false,
+    double? maxHeight = 600,
+    Widget? actionBar,
+    VoidCallback? onDiscuss,
+    VoidCallback? onRegenerate,
+    VoidCallback? onSpeak,
   }) {
     final blocks = data['blocks'] as List<dynamic>? ?? [];
     final model = data['model'] as Map<String, dynamic>?;
@@ -96,6 +124,12 @@ class HighlightableCard extends StatefulWidget {
       cardType: CardType.assistant,
       showTimestamp: true,
       timestamp: timestamp,
+      streamLayout: streamLayout,
+      maxHeight: maxHeight,
+      actionBar: actionBar,
+      onDiscuss: onDiscuss,
+      onRegenerate: onRegenerate,
+      onSpeak: onSpeak,
     );
   }
 
@@ -150,6 +184,9 @@ class _HighlightableCardState extends State<HighlightableCard> {
   int _selectionEnd = 0;
   int _currentStyleIndex = 0;
 
+  // 讨论数量
+  int _discussionCount = 0;
+
   // 【性能优化】Markdown 渲染缓存（memo 模式）
   Widget? _cachedMarkdownWidget;
   String? _lastRenderedContent;
@@ -163,6 +200,17 @@ class _HighlightableCardState extends State<HighlightableCard> {
   void initState() {
     super.initState();
     _loadHighlights();
+    _loadDiscussionCount();
+  }
+
+  Future<void> _loadDiscussionCount() async {
+    final conversations = await UnifiedConversationService.instance
+        .getConversationsByContext(widget.messageId);
+    if (mounted) {
+      setState(() {
+        _discussionCount = conversations.length;
+      });
+    }
   }
 
   Future<void> _loadHighlights() async {
@@ -324,6 +372,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
           content: widget.content,
           modelName: widget.modelName,
           messageId: widget.messageId,
+          backgroundColor: widget.modelColor, // 传递模型颜色
         ),
       ),
     );
@@ -353,47 +402,132 @@ class _HighlightableCardState extends State<HighlightableCard> {
     }
   }
 
-  /// 显示讨论列表
+  /// 进入讨论界面（直接进入 AIChatScreen）
   void _showDiscussionSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => DiscussionListSheet(
-        messageId: widget.messageId,
-        aiReplyContent: widget.content,
+    // 构建单回复的 contextData
+    final contextData = {
+      'rounds': [
+        {
+          'index': 0,
+          'question': null, // 单回复讨论没有问题
+          'replies': [
+            {
+              'id': widget.messageId,
+              'model': {'name': widget.modelName},
+              'useful': true,
+              'blocks': [
+                {'type': 'main_text', 'content': widget.content}
+              ],
+            }
+          ],
+        }
+      ],
+    };
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AIChatScreen(
+          initialContextId: widget.messageId,
+          initialContextSnapshot: widget.content,
+          initialTitle: '讨论',
+          initialContextData: contextData,
+          contextTypeFilter: ConversationContextType.singleMessage,
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    // 流式布局模式
+    if (widget.streamLayout) {
+      return _buildStreamLayout();
+    }
+
+    // 传统卡片模式
+    return _buildCardLayout();
+  }
+
+  /// 流式布局（无边框、自然撑开）
+  Widget _buildStreamLayout() {
     return GestureDetector(
       onDoubleTap: _openFullscreen,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: widget.modelColor.withValues(alpha: 0.2),
-            width: 1,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 头部
+            _buildStreamHeader(),
+            const SizedBox(height: 8),
+            // 内容（自然撑开）
+            _buildContent(),
+            // 标注标签
+            if (_highlights.isNotEmpty) _buildHighlightTags(),
+            // 操作栏
+            if (widget.actionBar != null) ...[
+              const SizedBox(height: 4),
+              widget.actionBar!,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 流式布局的头部（更简洁）
+  Widget _buildStreamHeader() {
+    return Row(
+      children: [
+        // 时间戳
+        if (widget.showTimestamp && widget.timestamp != null)
+          Text(
+            _formatTime(widget.timestamp!),
+            style: TextStyle(color: Colors.grey[500], fontSize: 11),
+          ),
+        const Spacer(),
+        // 全屏阅读提示
+        GestureDetector(
+          onTap: _openFullscreen,
+          child: Icon(
+            Icons.fullscreen_rounded,
+            size: 18,
+            color: Colors.grey[400],
           ),
         ),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: widget.maxHeight),
-          child: Container(
-            color: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 头部 (固定)
-                _buildHeader(),
-                const SizedBox(height: 12),
-                // 内容 (可滚动)
-                Flexible(
+      ],
+    );
+  }
+
+  /// 传统卡片布局
+  Widget _buildCardLayout() {
+    return GestureDetector(
+      onDoubleTap: _openFullscreen,
+      child: widget.maxHeight != null
+          ? ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: widget.maxHeight!),
+              child: _buildCardContent(),
+            )
+          : _buildCardContent(),
+    );
+  }
+
+  Widget _buildCardContent() {
+    return Container(
+      // 背景透明，让父容器的淡色背景显示出来
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 头部 (固定)
+          _buildHeader(),
+          const SizedBox(height: 6),
+          // 内容 (可滚动)
+          widget.maxHeight != null
+              ? Flexible(
                   fit: FlexFit.loose,
                   child: SingleChildScrollView(
                     child: Column(
@@ -406,57 +540,49 @@ class _HighlightableCardState extends State<HighlightableCard> {
                       ],
                     ),
                   ),
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildContent(),
+                    if (_highlights.isNotEmpty) _buildHighlightTags(),
+                  ],
                 ),
-              ],
-            ),
-          ),
-        ),
+          // 操作栏
+          if (widget.actionBar != null) ...[
+            const SizedBox(height: 4),
+            widget.actionBar!,
+          ],
+        ],
       ),
     );
   }
 
   Widget _buildHeader() {
-    final icon = widget.cardType == CardType.aiAnalysis
-        ? Icons.auto_awesome
-        : Icons.smart_toy;
+    // 讨论按钮颜色：有讨论时紫色，无讨论时灰色
+    final discussionColor = _discussionCount > 0
+        ? const Color(0xFF8B5CF6)  // 紫色
+        : Colors.grey[400]!;
 
     return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        // 模型图标
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: widget.modelColor.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: widget.modelColor.withValues(alpha: 0.3),
-              width: 0.5,
-            ),
+        // 时间戳（移到左边）
+        if (widget.showTimestamp && widget.timestamp != null) ...[
+          Text(
+            _formatTime(widget.timestamp!),
+            style: TextStyle(color: Colors.grey[500], fontSize: 10),
           ),
-          child: Icon(icon, size: 13, color: widget.modelColor),
-        ),
-        const SizedBox(width: 10),
-        // 模型名称
-        Expanded(
-          child: Text(
-            widget.modelName,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-              color: widget.modelColor,
-              letterSpacing: 0.3,
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
+          const Spacer(),
+        ],
 
         // TTS 朗读按钮
         Consumer<TtsProvider>(
           builder: (context, tts, _) {
             if (!tts.hasValidConfig) return const SizedBox.shrink();
-            return IconButton(
-              icon: Icon(Icons.volume_up_rounded, size: 18, color: Colors.grey[500]),
-              onPressed: () {
+            return GestureDetector(
+              onTap: () {
                 final item = TtsItem(
                   id: widget.messageId,
                   text: widget.content,
@@ -468,28 +594,54 @@ class _HighlightableCardState extends State<HighlightableCard> {
                   const SnackBar(content: Text('开始朗读...'), duration: Duration(seconds: 1)),
                 );
               },
-              tooltip: '朗读',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
+              child: Icon(Icons.volume_up_rounded, size: 16, color: Colors.grey[400]),
             );
           },
         ),
-        // 讨论按钮
-        IconButton(
-          icon: Icon(Icons.chat_bubble_outline, size: 18, color: Colors.grey[500]),
-          onPressed: _showDiscussionSheet,
-          tooltip: '讨论',
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-        ),
-        // 时间戳
-        if (widget.showTimestamp && widget.timestamp != null) ...[
-          const SizedBox(width: 8),
-          Text(
-            _formatTime(widget.timestamp!),
-            style: TextStyle(color: Colors.grey[600], fontSize: 10),
+        // 间距
+        const SizedBox(width: 10),
+        // 讨论按钮（带数量角标）
+        GestureDetector(
+          onTap: _showDiscussionSheet,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Icon(
+                _discussionCount > 0
+                    ? Icons.chat_bubble  // 有讨论时实心
+                    : Icons.chat_bubble_outline,  // 无讨论时空心
+                size: 16,
+                color: discussionColor,
+              ),
+              // 数量角标（仅当数量 > 0 时显示）
+              if (_discussionCount > 0)
+                Positioned(
+                  right: -6,
+                  top: -6,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF8B5CF6),
+                      shape: BoxShape.circle,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 14,
+                      minHeight: 14,
+                    ),
+                    child: Text(
+                      '$_discussionCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+            ],
           ),
-        ],
+        ),
       ],
     );
   }

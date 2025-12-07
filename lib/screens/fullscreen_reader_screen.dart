@@ -16,12 +16,14 @@ class FullscreenReaderScreen extends StatefulWidget {
   final String content;
   final String modelName;
   final String messageId;
+  final Color? backgroundColor; // 可选的背景颜色
 
   const FullscreenReaderScreen({
     super.key,
     required this.content,
     required this.modelName,
     required this.messageId,
+    this.backgroundColor,
   });
 
   @override
@@ -210,10 +212,15 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 计算背景色：使用传入的颜色（非常淡）或默认淡黄色
+    final bgColor = widget.backgroundColor != null
+        ? Color.lerp(Colors.white, widget.backgroundColor!, 0.08)! // 约 8% 的颜色混合
+        : const Color(0xFFFAF9DE);
+
     return Scaffold(
-      backgroundColor: const Color(0xFFFAF9DE),
+      backgroundColor: bgColor,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFFAF9DE),
+        backgroundColor: bgColor,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.black87),
         title: Text(

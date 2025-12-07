@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 class TtsSettings {
   // 向后兼容：保留单个 azureApiKey，但优先使用 azureApiKeys 列表
   String azureApiKey;
@@ -19,6 +17,16 @@ class TtsSettings {
   double defaultRate;
   double defaultPitch;
 
+  // SSML 增强选项
+  bool enableSsmlEnhancement; // 启用 Markdown→SSML 转换（更自然但可能稍慢）
+  String ssmlConfigType; // 'default', 'natural', 'audiobook'
+
+  // 全局节奏控制 (0.5 ~ 2.0, 1.0 为正常)
+  double rhythmScale;
+
+  // 音频格式（已简化，只使用 MP3）
+  String audioFormat; // 保留字段以向后兼容，实际固定为 'mp3'
+
   TtsSettings({
     this.azureApiKey = '',
     List<String>? azureApiKeys,
@@ -29,6 +37,10 @@ class TtsSettings {
     List<String>? favoriteVoices,
     this.defaultRate = 1.0,
     this.defaultPitch = 1.0,
+    this.enableSsmlEnhancement = true, // 默认开启
+    this.ssmlConfigType = 'natural', // 默认使用自然配置
+    this.rhythmScale = 1.0, // 默认正常节奏
+    this.audioFormat = 'mp3', // 固定使用 MP3
   }) : azureApiKeys = azureApiKeys ?? [],
        favoriteVoices = favoriteVoices ?? [];
 
@@ -43,6 +55,10 @@ class TtsSettings {
       'favoriteVoices': favoriteVoices,
       'defaultRate': defaultRate,
       'defaultPitch': defaultPitch,
+      'enableSsmlEnhancement': enableSsmlEnhancement,
+      'ssmlConfigType': ssmlConfigType,
+      'rhythmScale': rhythmScale,
+      'audioFormat': audioFormat,
     };
   }
 
@@ -60,11 +76,15 @@ class TtsSettings {
       azureRegion: json['azureRegion'] ?? 'eastus',
       defaultVoiceName: json['defaultVoiceName'] ?? 'zh-CN-XiaoxiaoNeural',
       defaultVoiceLocalName: json['defaultVoiceLocalName'] ?? '',
-      favoriteVoices: json['favoriteVoices'] != null 
+      favoriteVoices: json['favoriteVoices'] != null
           ? List<String>.from(json['favoriteVoices'])
           : <String>[],
       defaultRate: (json['defaultRate'] as num?)?.toDouble() ?? 1.0,
       defaultPitch: (json['defaultPitch'] as num?)?.toDouble() ?? 1.0,
+      enableSsmlEnhancement: json['enableSsmlEnhancement'] ?? true,
+      ssmlConfigType: json['ssmlConfigType'] ?? 'natural',
+      rhythmScale: (json['rhythmScale'] as num?)?.toDouble() ?? 1.0,
+      audioFormat: json['audioFormat'] ?? 'auto',
     );
   }
   

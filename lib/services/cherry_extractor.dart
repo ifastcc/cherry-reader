@@ -81,9 +81,11 @@ class CherryExtractor {
       print('✅ 解压完成');
     } on FormatException catch (e) {
       // ZIP格式错误（如缺少End of Central Directory Record）
+      print('❌ ZIP 解压失败 (FormatException): ${e.message}');
       throw Exception('ZIP 文件损坏或格式无效: ${e.message}');
     } catch (e) {
       // 其他解压错误
+      print('❌ ZIP 解压失败: $e');
       if (e.toString().contains('zipfile') ||
           e.toString().contains('central directory')) {
         throw Exception('ZIP 文件损坏: 文件结构不完整');

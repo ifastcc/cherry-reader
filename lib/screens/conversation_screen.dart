@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'dart:io' show Platform;
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../services/cherry_extractor.dart';
 import '../services/analysis_cache_manager.dart';
-import '../services/openai_service.dart';
 import '../services/highlight_service.dart';
 import '../services/data_persistence_manager.dart';
-import '../widgets/horizontal_scroll_view.dart';
-import '../widgets/streaming_analysis_card.dart';
+import '../services/unified_conversation_service.dart';
+import '../models/isar/unified_conversation_entity.dart';
 import '../widgets/highlightable_card.dart';
-import '../widgets/user_message_card.dart';
+import '../widgets/message_action_bar.dart';
 import '../services/epub_export_service.dart';
 import 'settings_screen.dart';
+import 'ai_chat_screen.dart';
 import 'package:provider/provider.dart';
 import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
@@ -35,16 +34,10 @@ class ConversationScreen extends StatefulWidget {
 
 class _ConversationScreenState extends State<ConversationScreen> {
   late final AnalysisCacheManager _cacheManager;
-  OpenAIService? _openaiService;
 
   Map<String, dynamic>? _conversation;
   // _cacheData 已移除，Isar 自动管理持久化
   Map<int, List<String>> _aiAnalyses = {};
-
-  // 流式生成状态
-  bool _isGenerating = false;
-  int? _generatingGroupIndex;
-  String _currentStreamContent = '';
 
   // 卡片显示配置
   late int _columnsPerView;
@@ -54,36 +47,76 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   final _epubExportService = EpubExportService();
 
-  // API 配置
-  String _apiKey = '';
-  String _baseUrl = 'https://api.openai.com/v1';
-  String _model = 'gpt-4-turbo-preview';
+  // 【轮次导航】使用 scrollable_positioned_list 精确定位
+  final ItemScrollController _itemScrollController = ItemScrollController();
+  final ItemPositionsListener _itemPositionsListener = ItemPositionsListener.create();
+  int _currentVisibleGroup = 0;
+
+  // 【卡片翻页】每个轮次的当前卡片页码
+  final Map<int, int> _cardPageIndexes = {};
 
   @override
   void initState() {
     super.initState();
 
     _cacheManager = AnalysisCacheManager();
-    _initApiConfig();
+    _initColumnsConfig();
     _loadData();
+
+    // 【轮次导航】监听可见位置变化
+    _itemPositionsListener.itemPositions.addListener(_onPositionsChanged);
   }
 
-  /// 初始化 API 配置（从 SharedPreferences 读取）
-  Future<void> _initApiConfig() async {
-    final config = await getApiConfig();
+  @override
+  void dispose() {
+    _itemPositionsListener.itemPositions.removeListener(_onPositionsChanged);
+    super.dispose();
+  }
+
+  /// 位置变化回调：自动更新当前可见轮次
+  void _onPositionsChanged() {
+    final positions = _itemPositionsListener.itemPositions.value;
+    if (positions.isEmpty) return;
+
+    // 找到第一个可见度最高的 item（itemLeadingEdge 最接近 0 的）
+    final visible = positions
+        .where((p) => p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0)
+        .toList();
+
+    if (visible.isEmpty) return;
+
+    // 选择最靠近顶部的 item
+    visible.sort((a, b) => a.itemLeadingEdge.compareTo(b.itemLeadingEdge));
+    final topItem = visible.first;
+
+    if (topItem.index != _currentVisibleGroup) {
+      setState(() {
+        _currentVisibleGroup = topItem.index;
+      });
+    }
+  }
+
+  /// 跳转到指定轮次（简洁实现）
+  void _scrollToGroup(int groupIndex) {
+    final groups = _getConversationGroups();
+    if (groupIndex < 0 || groupIndex >= groups.length) return;
+
+    _itemScrollController.scrollTo(
+      index: groupIndex,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  /// 初始化卡片显示配置
+  Future<void> _initColumnsConfig() async {
     final columnsPerView = await getColumnsPerView();
     setState(() {
-      _apiKey = config['apiKey'] ?? '';
-      _baseUrl = config['apiUrl'] ?? 'https://api.openai.com/v1';
-      _model = config['model'] ?? 'gpt-4-turbo-preview';
-      _openaiService = OpenAIService(apiKey: _apiKey, baseUrl: _baseUrl);
       _columnsPerView = columnsPerView;
     });
   }
 
   Future<void> _loadData() async {
-    final startTime = DateTime.now();
-
     // 【优化】优先从 Isar 加载话题数据（按需加载）
     var conv = await DataPersistenceManager.loadTopicData(widget.topicId);
 
@@ -167,96 +200,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return groups;
   }
 
-  /// 生成 AI 分析
-  Future<void> _generateAnalysis(int groupIndex) async {
-    // 检查 API 配置
-    if (_openaiService == null || _apiKey.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('请先在设置中配置 API Key'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    final groups = _getConversationGroups();
-    if (groupIndex >= groups.length) return;
-
-    final group = groups[groupIndex];
-    final userMsg = group['user_message'] as Map<String, dynamic>;
-    final assistantReplies = group['assistant_replies'] as List<dynamic>;
-
-    if (assistantReplies.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('该问题没有助手回复')));
-      return;
-    }
-
-    // 构建 prompt
-    final prompt = _buildAnalysisPrompt(userMsg, assistantReplies);
-
-    setState(() {
-      _isGenerating = true;
-      _generatingGroupIndex = groupIndex;
-      _currentStreamContent = '';
-    });
-
-    try {
-      // 流式生成
-      final stream = _openaiService!.streamChatCompletion(
-        model: _model,
-        messages: [
-          {'role': 'user', 'content': prompt},
-        ],
-      );
-
-      await for (final chunk in stream) {
-        setState(() {
-          _currentStreamContent += chunk;
-        });
-      }
-
-      // 【优化】保存到 Isar（自动持久化）
-      await _cacheManager.saveAnalysis(
-        widget.topicId,
-        groupIndex,
-        _currentStreamContent,
-      );
-
-      final updatedAnalyses = await _cacheManager.getTopicAnalyses(
-        widget.topicId,
-      );
-
-      setState(() {
-        _aiAnalyses = updatedAnalyses;
-        _isGenerating = false;
-        _generatingGroupIndex = null;
-        _currentStreamContent = '';
-        _cachedGroups = null; // AI 分析可能改变显示，清除缓存
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('✅ 分析已保存')));
-      }
-    } catch (e) {
-      setState(() {
-        _isGenerating = false;
-        _generatingGroupIndex = null;
-        _currentStreamContent = '';
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('生成失败: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
-
   Future<void> _exportToEpub(int groupIndex) async {
     final groups = _getConversationGroups();
     if (groupIndex >= groups.length) return;
@@ -337,8 +280,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
-  /// 构建 AI 分析 prompt（使用元分析模板）
-  String _buildAnalysisPrompt(
+  /// 构建格式化的上下文内容（用户问题 + 模型回复）
+  ///
+  /// 不包含模板内容，模板由用户在 AIChatScreen 中选择
+  String _buildFormattedContext(
     Map<String, dynamic> userMsg,
     List<dynamic> assistantReplies,
   ) {
@@ -369,26 +314,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
       modelResponses += '\n\n### 模型 ${i + 1}: $modelName\n$content';
     }
 
-    // 元分析模板
-    return '''请对以下多个模型的回复进行元分析（Meta-Analysis）。不需要简单的"内容摘要"，而是通过对比，逆向工程出每个模型背后的思维路径，达到降维和建模的效果。语言精炼简洁，直观而不失本质。
-
-## 第一部分：信噪比蒸馏
-
-对每个模型回复，去除修饰性文本，仅保留绝对干货。
-
-**格式**：`[模型名] 核心论点`（用最精炼的语言总结其独特价值主张，犀利、直观）
-
-## 第二部分：思维拓扑学分析
-
-跳出具体文字，在更高维度审视回复差异：
-
-1. **光谱分布**：这些回复在什么光谱上分布？（如：理论↔实践、解构↔建构、抽象↔具体）
-2. **盲区检测**：它们共同忽略了什么？存在什么固有局限？
-3. **认知升维**：综合这些回复，能抽象出什么通用模型或底层规律来彻底解释用户问题？
-
----
-
-**用户问题：**
+    // 返回格式化的上下文（不含模板）
+    return '''**用户问题：**
 
 $userQuery
 
@@ -416,6 +343,8 @@ $modelResponses''';
           : Stack(
               children: [
                 _buildConversation(),
+                // 浮动轮次导航器（集成卡片页码）
+                _buildFloatingNavigation(),
                 const Positioned(
                   left: 0,
                   right: 0,
@@ -430,320 +359,852 @@ $modelResponses''';
   Widget _buildConversation() {
     final groups = _getConversationGroups();
 
-    return ListView.separated(
-      padding: const EdgeInsets.only(left: 12, right: 12, top: 16, bottom: 80), // Add bottom padding for MiniPlayer
+    // 使用 ScrollablePositionedList 实现精确定位
+    return ScrollablePositionedList.separated(
+      itemScrollController: _itemScrollController,
+      itemPositionsListener: _itemPositionsListener,
+      padding: const EdgeInsets.only(left: 12, right: 12, top: 16, bottom: 80),
       itemCount: groups.length,
       separatorBuilder: (context, index) => const SizedBox(height: 24),
-      // 【性能优化】减小缓存范围，提升滚动性能
-      cacheExtent: 300, // 只预渲染必要的内容
-      addAutomaticKeepAlives: true, // 保持已构建的组件
       itemBuilder: (context, index) {
-        // 【性能优化】使用 RepaintBoundary 隔离重绘
         return RepaintBoundary(
-          key: ValueKey('group_$index'),
           child: _buildConversationGroup(groups[index], index),
         );
       },
     );
   }
 
+
+  /// 构建浮动导航组件（垂直布局）- 只用于轮次导航
+  Widget _buildFloatingNavigation() {
+    final groups = _getConversationGroups();
+    final totalGroups = groups.length;
+
+    if (totalGroups <= 1) {
+      return const SizedBox.shrink();
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Positioned(
+      left: 6,
+      bottom: 85,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: (isDark ? Colors.grey[900] : Colors.white)?.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 向上箭头
+            _buildNavArrow(
+              icon: Icons.keyboard_arrow_up_rounded,
+              enabled: _currentVisibleGroup > 0,
+              onTap: () => _scrollToGroup(_currentVisibleGroup - 1),
+            ),
+
+            // 页码（点击弹出完整列表）
+            GestureDetector(
+              onTap: () => _showRoundPicker(totalGroups),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Text(
+                  '${_currentVisibleGroup + 1}/$totalGroups',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.grey[400] : Colors.grey[600],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+
+            // 向下箭头
+            _buildNavArrow(
+              icon: Icons.keyboard_arrow_down_rounded,
+              enabled: _currentVisibleGroup < totalGroups - 1,
+              onTap: () => _scrollToGroup(_currentVisibleGroup + 1),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建导航箭头（紧凑版）
+  Widget _buildNavArrow({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        child: Icon(
+          icon,
+          size: 22,
+          color: enabled
+              ? Theme.of(context).primaryColor
+              : (isDark ? Colors.grey[600] : Colors.grey[300]),
+        ),
+      ),
+    );
+  }
+
+  /// 显示轮次选择器
+  void _showRoundPicker(int totalGroups) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 标题栏
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(Icons.layers_rounded, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    '跳转到轮次',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '共 $totalGroups 轮',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            // 轮次列表
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.5,
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: totalGroups,
+                itemBuilder: (context, index) {
+                  final isActive = index == _currentVisibleGroup;
+                  return ListTile(
+                    onTap: () {
+                      Navigator.pop(context);
+                      _scrollToGroup(index);
+                    },
+                    leading: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? Theme.of(context).primaryColor
+                            : Colors.grey[200],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${index + 1}',
+                          style: TextStyle(
+                            color: isActive ? Colors.white : Colors.grey[700],
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                    title: Text(
+                      'Q${index + 1}',
+                      style: TextStyle(
+                        fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                        color: isActive
+                            ? Theme.of(context).primaryColor
+                            : null,
+                      ),
+                    ),
+                    trailing: isActive
+                        ? Icon(
+                            Icons.check_circle,
+                            color: Theme.of(context).primaryColor,
+                            size: 20,
+                          )
+                        : null,
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildConversationGroup(Map<String, dynamic> group, int groupIndex) {
+    return _buildCleanLayout(group, groupIndex);
+  }
+
+  /// 简洁整合布局 - 问答分区设计
+  /// 特点：左侧色条区分问答 + 问题区域深色背景 + 回答区域浅色
+  Widget _buildCleanLayout(Map<String, dynamic> group, int groupIndex) {
     final userMsg = group['user_message'] as Map<String, dynamic>;
     final assistantReplies = group['assistant_replies'] as List<dynamic>;
 
-    // 计算总卡片数（流式卡片 + AI分析 + 助手回复）
-    final hasStreamingCard =
-        _isGenerating && _generatingGroupIndex == groupIndex;
     final aiAnalysisCount = _aiAnalyses[groupIndex]?.length ?? 0;
-    final totalCards =
-        (hasStreamingCard ? 1 : 0) + aiAnalysisCount + assistantReplies.length;
+    final totalCards = aiAnalysisCount + assistantReplies.length;
+    final isSingleCard = totalCards == 1 && aiAnalysisCount == 0;
 
-    // 判断是否为单卡片模式（只有一个助手回复，无AI分析，无流式生成）
-    final isSingleCard =
-        totalCards == 1 && !hasStreamingCard && aiAnalysisCount == 0;
+    // 提取用户消息文本
+    final blocks = userMsg['blocks'] as List<dynamic>? ?? [];
+    String userText = '';
+    for (final block in blocks) {
+      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+        userText += block['content'] as String? ?? '';
+      }
+    }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // 用户消息
-        UserMessageCard(key: ValueKey(userMsg['id']), data: userMsg),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const questionColor = Color(0xFF6366F1); // 紫色 - 问题
 
-        const SizedBox(height: 12),
-
-        // 整合的回复区域（工具栏 + 卡片）
-        if (assistantReplies.isNotEmpty)
-          Container(
-            // 【修复】移除水平边距，与用户消息卡片宽度一致
-            margin: EdgeInsets.zero,
-            decoration: BoxDecoration(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? Colors.grey[900]?.withOpacity(0.5)
-                  : Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? Colors.grey[800]!
-                    : Colors.grey[200]!,
-                width: 1,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 顶部工具栏
-                _buildIntegratedToolbar(groupIndex),
-                // 分隔线
-                Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.grey[800]
-                      : Colors.grey[100],
-                ),
-                // 卡片区域
-                isSingleCard
-                    ? Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: SizedBox(
-                          height: 580,
-                          child: HighlightableCard.assistant(
-                            key: ValueKey(
-                              (assistantReplies.first
-                                  as Map<String, dynamic>)['id'],
-                            ),
-                            data:
-                                assistantReplies.first as Map<String, dynamic>,
-                          ),
-                        ),
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.only(
-                          left: 4,
-                          right: 4,
-                          bottom: 12,
-                          top: 8,
-                        ),
-                        child: HorizontalScrollView(
-                          columnsPerView: _columnsPerView,
-                          cards: [
-                            if (hasStreamingCard)
-                              StreamingAnalysisCard(
-                                content: _currentStreamContent,
-                                analysisIndex: aiAnalysisCount + 1,
-                              ),
-                            ...(_aiAnalyses[groupIndex] ?? [])
-                                .asMap()
-                                .entries
-                                .map((entry) {
-                              return HighlightableCard.aiAnalysis(
-                                key: ValueKey('ai_${groupIndex}_${entry.key}'),
-                                content: entry.value,
-                              );
-                            }),
-                            ...assistantReplies.map((reply) {
-                              final replyMap = reply as Map<String, dynamic>;
-                              return HighlightableCard.assistant(
-                                key: ValueKey(replyMap['id']),
-                                data: replyMap,
-                              );
-                            }),
-                          ],
-                        ),
-                      ),
-              ],
-            ),
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? Colors.grey[900] : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.grey[800]! : Colors.grey[200]!,
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(15),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ========== 问题区域 ==========
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 左侧紫色色条
+                  Container(
+                    width: 4,
+                    decoration: BoxDecoration(
+                      color: questionColor,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(15),
+                      ),
+                    ),
+                  ),
+                  // 问题内容区
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? questionColor.withValues(alpha: 0.08)
+                            : questionColor.withValues(alpha: 0.03),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Q标记
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: questionColor.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Q${groupIndex + 1}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: questionColor,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                          // 用户问题内容
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                            child: _buildUserContent(userText),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // ========== 回答区域 ==========
+            if (assistantReplies.isNotEmpty)
+              _buildCleanReplyContent(groupIndex, assistantReplies, isSingleCard),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 简洁布局：用户内容区域（双击展开收起）
+  Widget _buildUserContent(String userText) {
+    final isLong = userText.length > 200;
+    final displayText = isLong ? '${userText.substring(0, 200)}...' : userText;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return _UserContentWidget(
+      userText: userText,
+      displayText: displayText,
+      isLong: isLong,
+      isDark: isDark,
+    );
+  }
+
+  /// 简洁布局：操作按钮（更紧凑）
+  Widget _buildCleanActionButtons(int groupIndex) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // AI 讨论
+        _buildIconOnlyButton(
+          icon: Icons.chat_bubble_outline,
+          tooltip: 'AI 讨论',
+          color: const Color(0xFF8B5CF6),
+          onPressed: () => _openAnalysisChat(groupIndex),
+        ),
+        // TTS 朗读
+        Consumer<TtsProvider>(
+          builder: (context, tts, _) {
+            if (!tts.hasValidConfig) return const SizedBox.shrink();
+            return _buildIconOnlyButton(
+              icon: Icons.volume_up_rounded,
+              tooltip: '朗读',
+              color: const Color(0xFF8B5CF6),
+              onPressed: () => _playGroupAudio(groupIndex),
+            );
+          },
+        ),
+        // 导出
+        _buildIconOnlyButton(
+          icon: Icons.menu_book_rounded,
+          tooltip: '导出',
+          color: isDark ? Colors.grey[400]! : Colors.grey[600]!,
+          onPressed: () => _exportToEpub(groupIndex),
+        ),
       ],
     );
   }
 
-  /// 构建整合式工具栏（作为卡片区域的标题栏）
-  Widget _buildIntegratedToolbar(int groupIndex) {
-    const primaryColor = Color(0xFF8B5CF6); // AI Purple
+  /// 简洁布局：图标按钮
+  Widget _buildIconOnlyButton({
+    required IconData icon,
+    required String tooltip,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return IconButton(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      color: color,
+      tooltip: tooltip,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      padding: EdgeInsets.zero,
+      splashRadius: 18,
+    );
+  }
+
+  /// 简洁布局：回复内容区域（流式布局）
+  Widget _buildCleanReplyContent(int groupIndex, List<dynamic> assistantReplies, bool isSingleCard) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final isCurrentGenerating =
-        _isGenerating && _generatingGroupIndex == groupIndex;
-    final analysisCount = _aiAnalyses[groupIndex]?.length ?? 0;
+    // 单回复模式 - 直接展示，不需要 Tab
+    if (isSingleCard) {
+      final reply = assistantReplies.first as Map<String, dynamic>;
+      return _buildStreamReplyItem(
+        reply: reply,
+        groupIndex: groupIndex,
+        isDark: isDark,
+        showDivider: false,
+      );
+    }
+
+    final aiAnalysisCount = _aiAnalyses[groupIndex]?.length ?? 0;
+    final currentPage = _cardPageIndexes[groupIndex] ?? 0;
+
+    // 构建所有卡片信息列表
+    final cardInfoList = <Map<String, dynamic>>[];
+
+    for (var i = 0; i < aiAnalysisCount; i++) {
+      cardInfoList.add({
+        'type': 'analysis',
+        'name': 'AI 分析 ${i + 1}',
+        'index': i,
+      });
+    }
+
+    for (var i = 0; i < assistantReplies.length; i++) {
+      final reply = assistantReplies[i] as Map<String, dynamic>;
+      final model = reply['model'] as Map<String, dynamic>?;
+      final modelName = model?['name'] as String? ?? 'Assistant';
+      cardInfoList.add({
+        'type': 'assistant',
+        'name': modelName,
+        'index': aiAnalysisCount + i,
+        'data': reply,
+      });
+    }
+
+    final startIdx = currentPage * _columnsPerView;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 顶部：模型选择器（简洁线条风格）
+        _buildStreamModelSelector(
+          cardInfoList: cardInfoList,
+          currentPage: currentPage,
+          groupIndex: groupIndex,
+          isDark: isDark,
+        ),
+
+        // 分隔线
+        Container(
+          height: 1,
+          color: isDark ? Colors.grey[800] : Colors.grey[200],
+        ),
+
+        // 内容区域 - 流式布局，自然撑开
+        _buildStreamReplyArea(
+          cardInfoList: cardInfoList,
+          startIdx: startIdx,
+          groupIndex: groupIndex,
+          assistantReplies: assistantReplies,
+          isDark: isDark,
+        ),
+      ],
+    );
+  }
+
+  /// 流式布局：模型选择器（简洁线条风格）
+  Widget _buildStreamModelSelector({
+    required List<Map<String, dynamic>> cardInfoList,
+    required int currentPage,
+    required int groupIndex,
+    required bool isDark,
+  }) {
+    final startIdx = currentPage * _columnsPerView;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
       child: Row(
         children: [
-          // 左侧：本轮对话标题
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: primaryColor.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.chat_bubble_outline_rounded,
-                  size: 14,
-                  color: primaryColor,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '本轮对话',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: primaryColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          // 模型选择器（横向滚动）
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: cardInfoList.asMap().entries.map((entry) {
+                  final cardIndex = entry.key;
+                  final info = entry.value;
+                  final isSelected = cardIndex >= startIdx && cardIndex < startIdx + _columnsPerView;
+                  final targetPage = cardIndex ~/ _columnsPerView;
 
-          // 分析计数徽章
-          if (analysisCount > 0) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '$analysisCount 条分析',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.green[700],
-                ),
+                  return _buildStreamModelTab(
+                    modelName: info['name'] as String,
+                    isSelected: isSelected,
+                    isAnalysis: info['type'] == 'analysis',
+                    isDark: isDark,
+                    onTap: () {
+                      setState(() {
+                        _cardPageIndexes[groupIndex] = targetPage;
+                      });
+                    },
+                  );
+                }).toList(),
               ),
             ),
-          ],
-
-          const Spacer(),
-
-          // 右侧：操作按钮
-          _buildCompactButton(
-            onPressed:
-                _isGenerating ? null : () => _showAnalysisDialog(groupIndex),
-            icon: isCurrentGenerating
-                ? SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
-                    ),
-                  )
-                : Icon(Icons.auto_awesome_rounded, size: 15, color: primaryColor),
-            label: isCurrentGenerating ? '分析中' : 'AI 分析',
-            backgroundColor: primaryColor.withOpacity(0.1),
-            textColor: primaryColor,
           ),
-          const SizedBox(width: 8),
-          // TTS 播放按钮
-          Consumer<TtsProvider>(
-            builder: (context, tts, _) {
-              if (!tts.hasValidConfig) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: _buildCompactButton(
-                  onPressed: () => _playGroupAudio(groupIndex),
-                  icon: Icon(Icons.volume_up_rounded, size: 15, color: primaryColor),
-                  label: '朗读',
-                  backgroundColor: primaryColor.withOpacity(0.1),
-                  textColor: primaryColor,
-                ),
-              );
-            },
-          ),
-          _buildCompactButton(
-            onPressed: () => _exportToEpub(groupIndex),
-            icon: Icon(
-              Icons.menu_book_rounded,
-              size: 15,
-              color: isDark ? Colors.grey[400] : Colors.grey[600],
-            ),
-            label: '导出',
-            backgroundColor: isDark
-                ? Colors.grey[800]!.withOpacity(0.5)
-                : Colors.grey[100]!,
-            textColor: isDark ? Colors.grey[300]! : Colors.grey[700]!,
-          ),
+          // 操作按钮
+          _buildCleanActionButtons(groupIndex),
         ],
       ),
     );
   }
 
-  /// 构建紧凑型按钮
-  Widget _buildCompactButton({
-    required VoidCallback? onPressed,
-    required Widget icon,
-    required String label,
-    required Color backgroundColor,
-    required Color textColor,
+  /// 流式布局：单个模型 Tab（更简洁）
+  Widget _buildStreamModelTab({
+    required String modelName,
+    required bool isSelected,
+    required bool isDark,
+    bool isAnalysis = false,
+    VoidCallback? onTap,
   }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: BoxDecoration(
-            color: backgroundColor,
-            borderRadius: BorderRadius.circular(8),
+    final baseColor = isAnalysis ? const Color(0xFF10B981) : _getModelColor(modelName);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: isSelected ? baseColor : Colors.transparent,
+              width: 2,
+            ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              icon,
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: onPressed == null
-                      ? textColor.withOpacity(0.5)
-                      : textColor,
-                ),
-              ),
-            ],
+        ),
+        child: Text(
+          modelName,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+            color: isSelected
+                ? baseColor
+                : (isDark ? Colors.grey[500] : Colors.grey[600]),
           ),
         ),
       ),
     );
   }
 
+  /// 流式布局：回复内容区域
+  Widget _buildStreamReplyArea({
+    required List<Map<String, dynamic>> cardInfoList,
+    required int startIdx,
+    required int groupIndex,
+    required List<dynamic> assistantReplies,
+    required bool isDark,
+  }) {
+    // 获取当前选中的卡片信息
+    if (startIdx >= cardInfoList.length) return const SizedBox.shrink();
 
-  /// 显示生成分析对话框
-  void _showAnalysisDialog(int groupIndex) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('生成 AI 分析'),
-        content: const Text('使用元分析模板对多个模型的回复进行对比分析？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+    final currentInfo = cardInfoList[startIdx];
+    final isAnalysis = currentInfo['type'] == 'analysis';
+
+    if (isAnalysis) {
+      // AI 分析内容
+      final analysisIndex = currentInfo['index'] as int;
+      final analyses = _aiAnalyses[groupIndex] ?? [];
+      if (analysisIndex >= analyses.length) return const SizedBox.shrink();
+
+      return _buildStreamAnalysisItem(
+        content: analyses[analysisIndex],
+        groupIndex: groupIndex,
+        analysisIndex: analysisIndex,
+        isDark: isDark,
+      );
+    } else {
+      // 助手回复
+      final reply = currentInfo['data'] as Map<String, dynamic>;
+      return _buildStreamReplyItem(
+        reply: reply,
+        groupIndex: groupIndex,
+        isDark: isDark,
+        showDivider: false,
+      );
+    }
+  }
+
+  /// 流式布局：单条回复
+  Widget _buildStreamReplyItem({
+    required Map<String, dynamic> reply,
+    required int groupIndex,
+    required bool isDark,
+    bool showDivider = true,
+  }) {
+    final model = reply['model'] as Map<String, dynamic>?;
+    final modelName = model?['name'] as String? ?? 'Assistant';
+    final messageId = reply['id'] as String? ?? '';
+    final modelColor = _getModelColor(modelName);
+
+    // 提取内容
+    final blocks = reply['blocks'] as List<dynamic>? ?? [];
+    String content = '';
+    for (final block in blocks) {
+      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+        content += block['content'] as String? ?? '';
+      }
+    }
+
+    return Container(
+      color: modelColor.withValues(alpha: isDark ? 0.04 : 0.02),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          HighlightableCard.assistant(
+            key: ValueKey(messageId),
+            data: reply,
+            streamLayout: true,
+            maxHeight: null, // 自然撑开
+            actionBar: MessageActionBar(
+              content: content,
+              messageId: messageId,
+              modelName: modelName,
+              onDiscuss: () => _openSingleMessageDiscussion(reply),
+              onRegenerate: null, // TODO: 实现重新生成
+              showRegenerate: false, // 查看模式暂不支持重新生成
+              showSpeak: Provider.of<TtsProvider>(context, listen: false).hasValidConfig,
+              onSpeak: () => _speakContent(content, modelName),
+            ),
           ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _generateAnalysis(groupIndex);
-            },
-            child: const Text('生成'),
+          if (showDivider)
+            Divider(
+              height: 1,
+              color: isDark ? Colors.grey[800] : Colors.grey[200],
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 流式布局：AI 分析内容
+  Widget _buildStreamAnalysisItem({
+    required String content,
+    required int groupIndex,
+    required int analysisIndex,
+    required bool isDark,
+  }) {
+    const analysisColor = Color(0xFF10B981);
+
+    return Container(
+      color: analysisColor.withValues(alpha: isDark ? 0.04 : 0.02),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          HighlightableCard.aiAnalysis(
+            key: ValueKey('ai_${groupIndex}_$analysisIndex'),
+            content: content,
+          ),
+          // 操作栏
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: MessageActionBar(
+              content: content,
+              messageId: 'ai_${groupIndex}_$analysisIndex',
+              modelName: 'AI 分析',
+              showRegenerate: false,
+              showSpeak: Provider.of<TtsProvider>(context, listen: false).hasValidConfig,
+              onSpeak: () => _speakContent(content, 'AI 分析'),
+            ),
           ),
         ],
       ),
     );
+  }
+
+  /// 朗读内容
+  void _speakContent(String content, String title) {
+    final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+    final item = TtsItem(
+      id: 'tts_${content.hashCode}',
+      text: content,
+      title: title,
+      author: title,
+    );
+    ttsProvider.setPlaylist([item]);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('开始朗读...'), duration: Duration(seconds: 1)),
+    );
+  }
+
+  /// 打开单条消息的讨论
+  void _openSingleMessageDiscussion(Map<String, dynamic> reply) {
+    final model = reply['model'] as Map<String, dynamic>?;
+    final modelName = model?['name'] as String? ?? 'Assistant';
+    final messageId = reply['id'] as String? ?? '';
+
+    // 提取内容
+    final blocks = reply['blocks'] as List<dynamic>? ?? [];
+    String content = '';
+    for (final block in blocks) {
+      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+        content += block['content'] as String? ?? '';
+      }
+    }
+
+    // 构建上下文数据
+    final contextData = {
+      'rounds': [
+        {
+          'index': 0,
+          'question': null,
+          'replies': [reply],
+        }
+      ],
+    };
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AIChatScreen(
+          initialContextId: messageId,
+          initialContextSnapshot: content,
+          initialTitle: '讨论: $modelName',
+          initialContextData: contextData,
+          contextTypeFilter: ConversationContextType.singleMessage,
+        ),
+      ),
+    );
+  }
+
+  /// 获取模型颜色
+  Color _getModelColor(String modelName) {
+    final name = modelName.toLowerCase();
+    if (name.contains('claude')) {
+      return const Color(0xFFD4A574);
+    } else if (name.contains('gpt') || name.contains('openai')) {
+      return const Color(0xFF10A37F);
+    } else if (name.contains('gemini') || name.contains('google')) {
+      return const Color(0xFF4285F4);
+    } else if (name.contains('qwen') || name.contains('通义')) {
+      return const Color(0xFF6366F1);
+    } else if (name.contains('deepseek')) {
+      return const Color(0xFF06B6D4);
+    } else {
+      return const Color(0xFF8B5CF6);
+    }
+  }
+
+
+  /// 打开 AI 分析对话界面（多轮对话模式）
+  Future<void> _openAnalysisChat(int groupIndex) async {
+    final groups = _getConversationGroups();
+    if (groupIndex >= groups.length) return;
+
+    final group = groups[groupIndex];
+    final userMsg = group['user_message'] as Map<String, dynamic>;
+    final assistantReplies = group['assistant_replies'] as List<dynamic>;
+
+    if (assistantReplies.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('该问题没有助手回复')),
+      );
+      return;
+    }
+
+    // 构建上下文快照（markdown 格式）
+    final contextSnapshot = _buildContextSnapshot(userMsg, assistantReplies);
+
+    // 构建原始上下文数据（结构化数据）
+    final contextData = _buildContextData(groups, groupIndex);
+
+    // 构建格式化的上下文内容（用户问题 + 模型回复，不含模板）
+    final formattedContext = _buildFormattedContext(userMsg, assistantReplies);
+    contextData['formattedContext'] = formattedContext;
+
+    // 创建消息组分析对话（不发送 initialPrompt，让用户在编辑器中确认后发送）
+    final conversationService = UnifiedConversationService.instance;
+    final conversationId = await conversationService.createMessageGroupAnalysis(
+      topicId: widget.topicId,
+      groupIndex: groupIndex,
+      contextSnapshot: contextSnapshot,
+      initialPrompt: null, // ← 不自动发送
+    );
+
+    // 跳转到 AI 对话界面
+    if (mounted) {
+      final contextId = '${widget.topicId}:$groupIndex';
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => AIChatScreen(
+            initialConversationId: conversationId,
+            initialContextId: contextId,
+            initialContextSnapshot: contextSnapshot,
+            initialContextData: contextData, // ← 传递原始数据
+            contextTypeFilter: ConversationContextType.messageGroup,
+          ),
+        ),
+      );
+    }
+  }
+
+  /// 构建原始上下文数据（结构化数据，包含所有轮次和完整字段）
+  Map<String, dynamic> _buildContextData(
+    List<Map<String, dynamic>> groups,
+    int currentGroupIndex,
+  ) {
+    final rounds = <Map<String, dynamic>>[];
+
+    // 提取所有轮次的原始数据
+    for (var i = 0; i < groups.length; i++) {
+      final group = groups[i];
+      final userMsg = group['user_message'] as Map<String, dynamic>;
+      final assistantReplies = group['assistant_replies'] as List<dynamic>;
+
+      rounds.add({
+        'index': i,
+        'question': userMsg, // 保留完整的用户消息数据
+        'replies': assistantReplies, // 保留完整的助手回复数据（包含 useful 字段）
+      });
+    }
+
+    return {
+      'rounds': rounds,
+      'currentRoundIndex': currentGroupIndex, // 当前轮次索引
+    };
+  }
+
+  /// 构建上下文快照（用于保存到对话中）
+  String _buildContextSnapshot(
+    Map<String, dynamic> userMsg,
+    List<dynamic> assistantReplies,
+  ) {
+    // 提取用户问题
+    final userBlocks = userMsg['blocks'] as List<dynamic>? ?? [];
+    var userQuery = '';
+    for (final block in userBlocks) {
+      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+        userQuery += block['content'] as String? ?? '';
+      }
+    }
+
+    // 构建快照
+    var snapshot = '## 用户问题\n\n$userQuery\n\n## 模型回复\n\n';
+    for (var i = 0; i < assistantReplies.length; i++) {
+      final reply = assistantReplies[i] as Map<String, dynamic>;
+      final model = reply['model'] as Map<String, dynamic>?;
+      final modelName = model?['name'] as String? ?? 'Unknown';
+
+      final blocks = reply['blocks'] as List<dynamic>? ?? [];
+      var content = '';
+      for (final block in blocks) {
+        if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+          content += block['content'] as String? ?? '';
+        }
+      }
+
+      snapshot += '### $modelName\n\n$content\n\n';
+    }
+
+    return snapshot;
   }
 
   /// 播放本轮对话音频
@@ -800,5 +1261,71 @@ $modelResponses''';
         const SnackBar(content: Text('开始朗读...')),
       );
     }
+  }
+}
+
+/// 独立的用户内容 Widget（保持状态，用于双击展开）
+class _UserContentWidget extends StatefulWidget {
+  final String userText;
+  final String displayText;
+  final bool isLong;
+  final bool isDark;
+
+  const _UserContentWidget({
+    required this.userText,
+    required this.displayText,
+    required this.isLong,
+    required this.isDark,
+  });
+
+  @override
+  State<_UserContentWidget> createState() => _UserContentWidgetState();
+}
+
+class _UserContentWidgetState extends State<_UserContentWidget> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onDoubleTap: widget.isLong
+          ? () => setState(() => _expanded = !_expanded)
+          : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _expanded ? widget.userText : widget.displayText,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.6,
+              color: widget.isDark ? Colors.grey[300] : Colors.grey[800],
+            ),
+          ),
+          if (widget.isLong)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _expanded ? Icons.unfold_less : Icons.unfold_more,
+                    size: 14,
+                    color: Colors.grey[500],
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _expanded ? '双击收起' : '双击展开',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[500],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

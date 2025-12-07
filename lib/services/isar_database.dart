@@ -5,6 +5,8 @@ import '../models/isar/topic_cache_entity.dart';
 import '../models/isar/ai_analysis_entity.dart';
 import '../models/isar/discussion_entity.dart';
 import '../models/isar/discussion_message_entity.dart';
+import '../models/isar/unified_conversation_entity.dart';
+import '../models/isar/prompt_template_entity.dart';
 
 /// Isar 数据库管理器（单例模式）
 ///
@@ -57,6 +59,10 @@ class IsarDatabase {
           AIAnalysisEntitySchema,
           DiscussionEntitySchema,
           DiscussionMessageEntitySchema,
+          UnifiedConversationEntitySchema,
+          UnifiedMessageEntitySchema,
+          UserPreferenceEntitySchema,
+          TaskTemplateEntitySchema,
         ],
         directory: dir.path,
         name: 'cherry_viewer', // 数据库名称
@@ -442,5 +448,171 @@ class IsarDatabase {
         .filter()
         .discussionIdEqualTo(discussionId)
         .watch(fireImmediately: true);
+  }
+
+  // ============ 统一对话相关操作 ============
+
+  /// 保存统一对话
+  Future<void> saveUnifiedConversation(UnifiedConversationEntity conv) async {
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      await isar.unifiedConversationEntitys.put(conv);
+    });
+  }
+
+  /// 获取统一对话列表
+  Future<List<UnifiedConversationEntity>> getUnifiedConversations({
+    ConversationContextType? contextType,
+    bool includeArchived = false,
+  }) async {
+    final isar = await instance;
+
+    // 根据条件构建查询
+    if (contextType != null && !includeArchived) {
+      return isar.unifiedConversationEntitys
+          .filter()
+          .isArchivedEqualTo(false)
+          .contextTypeEqualTo(contextType)
+          .sortByCreatedAtDesc()
+          .findAll();
+    } else if (contextType != null) {
+      return isar.unifiedConversationEntitys
+          .filter()
+          .contextTypeEqualTo(contextType)
+          .sortByCreatedAtDesc()
+          .findAll();
+    } else if (!includeArchived) {
+      return isar.unifiedConversationEntitys
+          .filter()
+          .isArchivedEqualTo(false)
+          .sortByCreatedAtDesc()
+          .findAll();
+    } else {
+      return isar.unifiedConversationEntitys
+          .where()
+          .sortByCreatedAtDesc()
+          .findAll();
+    }
+  }
+
+  /// 根据上下文 ID 获取对话列表
+  Future<List<UnifiedConversationEntity>> getUnifiedConversationsByContextId(
+    String contextId,
+  ) async {
+    final isar = await instance;
+    return isar.unifiedConversationEntitys
+        .filter()
+        .contextIdEqualTo(contextId)
+        .sortByUpdatedAtDesc()
+        .findAll();
+  }
+
+  /// 根据话题 ID 前缀获取所有相关对话
+  ///
+  /// contextId 格式：topicId:groupIndex 或 messageId
+  /// 通过前缀匹配获取同一话题下所有轮次的讨论
+  Future<List<UnifiedConversationEntity>> getUnifiedConversationsByTopicPrefix(
+    String topicId,
+  ) async {
+    final isar = await instance;
+    return isar.unifiedConversationEntitys
+        .filter()
+        .contextIdStartsWith('$topicId:')
+        .sortByUpdatedAtDesc()
+        .findAll();
+  }
+
+  /// 获取单个统一对话
+  Future<UnifiedConversationEntity?> getUnifiedConversation(
+    String conversationId,
+  ) async {
+    final isar = await instance;
+    return isar.unifiedConversationEntitys
+        .filter()
+        .conversationIdEqualTo(conversationId)
+        .findFirst();
+  }
+
+  /// 删除统一对话（包括所有消息）
+  Future<void> deleteUnifiedConversation(String conversationId) async {
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      // 删除对话
+      await isar.unifiedConversationEntitys
+          .filter()
+          .conversationIdEqualTo(conversationId)
+          .deleteAll();
+      // 删除所有相关消息
+      await isar.unifiedMessageEntitys
+          .filter()
+          .conversationIdEqualTo(conversationId)
+          .deleteAll();
+    });
+  }
+
+  /// 保存统一消息
+  Future<void> saveUnifiedMessage(UnifiedMessageEntity message) async {
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      await isar.unifiedMessageEntitys.put(message);
+    });
+  }
+
+  /// 批量保存统一消息
+  Future<void> saveUnifiedMessages(List<UnifiedMessageEntity> messages) async {
+    if (messages.isEmpty) return;
+
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      await isar.unifiedMessageEntitys.putAll(messages);
+    });
+  }
+
+  /// 获取统一消息
+  Future<UnifiedMessageEntity?> getUnifiedMessage(String messageId) async {
+    final isar = await instance;
+    return isar.unifiedMessageEntitys
+        .filter()
+        .messageIdEqualTo(messageId)
+        .findFirst();
+  }
+
+  /// 删除统一消息
+  Future<bool> deleteUnifiedMessage(String messageId) async {
+    final isar = await instance;
+    return isar.writeTxn(() async {
+      return isar.unifiedMessageEntitys
+          .filter()
+          .messageIdEqualTo(messageId)
+          .deleteFirst();
+    });
+  }
+
+  /// 获取对话的所有消息
+  Future<List<UnifiedMessageEntity>> getUnifiedMessages(
+    String conversationId,
+  ) async {
+    final isar = await instance;
+    return isar.unifiedMessageEntitys
+        .filter()
+        .conversationIdEqualTo(conversationId)
+        .sortByCreatedAt()
+        .findAll();
+  }
+
+  /// 监听统一消息变化
+  Stream<List<UnifiedMessageEntity>> watchUnifiedMessages(
+    String conversationId,
+  ) {
+    return instanceSync.unifiedMessageEntitys
+        .filter()
+        .conversationIdEqualTo(conversationId)
+        .sortByCreatedAt()
+        .watch(fireImmediately: true);
+  }
+
+  /// 获取所有独立对话（topic 类型）
+  Future<List<UnifiedConversationEntity>> getTopicConversations() async {
+    return getUnifiedConversations(contextType: ConversationContextType.topic);
   }
 }

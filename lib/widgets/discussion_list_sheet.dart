@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
-import '../models/isar/discussion_entity.dart';
-import '../services/discussion_service.dart';
-import '../screens/discussion_chat_screen.dart';
+import '../models/isar/unified_conversation_entity.dart';
+import '../services/unified_conversation_service.dart';
+import '../screens/ai_chat_screen.dart';
 
 /// 讨论列表 BottomSheet
 ///
 /// 显示某个AI回复的所有讨论线程
+/// 已迁移至统一对话系统
 class DiscussionListSheet extends StatefulWidget {
   final String messageId; // 关联的AI回复消息ID
   final String aiReplyContent; // AI回复内容（用于创建讨论时的上下文）
@@ -21,8 +22,8 @@ class DiscussionListSheet extends StatefulWidget {
 }
 
 class _DiscussionListSheetState extends State<DiscussionListSheet> {
-  final DiscussionService _discussionService = DiscussionService();
-  List<DiscussionEntity> _discussions = [];
+  final UnifiedConversationService _conversationService = UnifiedConversationService.instance;
+  List<UnifiedConversationEntity> _discussions = [];
   bool _loading = true;
 
   @override
@@ -33,7 +34,12 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
 
   Future<void> _loadDiscussions() async {
     setState(() => _loading = true);
-    final discussions = await _discussionService.getDiscussions(widget.messageId);
+    // 获取与当前消息关联的所有讨论（contextType = singleMessage, contextId = messageId）
+    final allConversations = await _conversationService.getConversationsByContext(widget.messageId);
+    // 只筛选 singleMessage 类型
+    final discussions = allConversations
+        .where((c) => c.contextType == ConversationContextType.singleMessage)
+        .toList();
     setState(() {
       _discussions = discussions;
       _loading = false;
@@ -71,27 +77,49 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
     );
 
     if (result != null && result.trim().isNotEmpty) {
-      // 创建讨论
-      final discussionId = await _discussionService.createDiscussion(
+      // 创建讨论（不发送初始消息，让用户在编辑器中确认）
+      final conversationId = await _conversationService.createSingleMessageDiscussion(
         messageId: widget.messageId,
+        contextSnapshot: widget.aiReplyContent,
         title: result.length > 50 ? '${result.substring(0, 50)}...' : result,
-        initialUserMessage: result,
-        aiReplyContent: widget.aiReplyContent,
+        initialMessage: null, // ← 不自动发送，让用户在编辑器确认
       );
+
+      // 构建 contextData（包含上下文和用户问题）
+      final contextData = {
+        'rounds': [
+          {
+            'index': 0,
+            'question': {'blocks': []}, // 单个回复没有问题
+            'replies': [
+              // TODO: 这里应该传递完整的回复数据，但现在只有文本
+              // 暂时用简单结构
+            ],
+          },
+        ],
+        'currentRoundIndex': 0,
+        // 格式化的上下文内容（AI 回复）
+        'formattedContext': '**AI 回复内容：**\n\n${widget.aiReplyContent}',
+        // 用户输入的问题作为追加问题
+        'userQuery': result,
+      };
 
       // 关闭当前sheet
       if (mounted) {
         Navigator.pop(context);
       }
 
-      // 进入讨论对话页面
+      // 进入新的 AI 对话界面
       if (mounted) {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => DiscussionChatScreen(
-              discussionId: discussionId,
-              aiReplyContent: widget.aiReplyContent,
+            builder: (context) => AIChatScreen(
+              initialConversationId: conversationId,
+              initialContextId: widget.messageId,
+              initialContextSnapshot: widget.aiReplyContent,
+              initialContextData: contextData, // ← 传递原始数据
+              contextTypeFilter: ConversationContextType.singleMessage,
             ),
           ),
         );
@@ -100,14 +128,16 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
   }
 
   /// 进入讨论对话页面
-  void _enterDiscussion(DiscussionEntity discussion) {
+  void _enterDiscussion(UnifiedConversationEntity conversation) {
     Navigator.pop(context); // 关闭当前sheet
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => DiscussionChatScreen(
-          discussionId: discussion.discussionId,
-          aiReplyContent: widget.aiReplyContent,
+        builder: (context) => AIChatScreen(
+          initialConversationId: conversation.conversationId,
+          initialContextId: widget.messageId, // 传入 contextId 用于数据隔离
+          initialContextSnapshot: widget.aiReplyContent,
+          contextTypeFilter: ConversationContextType.singleMessage,
         ),
       ),
     );
@@ -245,12 +275,12 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
     );
   }
 
-  Widget _buildDiscussionItem(DiscussionEntity discussion) {
-    final lastUpdate = DateTime.fromMillisecondsSinceEpoch(discussion.updatedAt);
-    final relativeTime = _discussionService.formatRelativeTime(lastUpdate);
+  Widget _buildDiscussionItem(UnifiedConversationEntity conversation) {
+    final lastUpdate = DateTime.fromMillisecondsSinceEpoch(conversation.updatedAt);
+    final relativeTime = _formatRelativeTime(lastUpdate);
 
     return InkWell(
-      onTap: () => _enterDiscussion(discussion),
+      onTap: () => _enterDiscussion(conversation),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(12),
@@ -273,7 +303,7 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    discussion.title,
+                    conversation.title,
                     style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w500,
@@ -291,7 +321,7 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
                 Icon(Icons.chat_bubble_outline, size: 14, color: Colors.grey[600]),
                 const SizedBox(width: 4),
                 Text(
-                  '${discussion.messageCount} 条消息',
+                  '${conversation.roundCount} 轮对话，${conversation.messageCount} 条消息',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.grey[600],
@@ -313,5 +343,23 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
         ),
       ),
     );
+  }
+
+  /// 格式化相对时间
+  String _formatRelativeTime(DateTime time) {
+    final now = DateTime.now();
+    final diff = now.difference(time);
+
+    if (diff.inMinutes < 1) {
+      return '刚刚';
+    } else if (diff.inHours < 1) {
+      return '${diff.inMinutes} 分钟前';
+    } else if (diff.inDays < 1) {
+      return '${diff.inHours} 小时前';
+    } else if (diff.inDays < 7) {
+      return '${diff.inDays} 天前';
+    } else {
+      return '${time.month}/${time.day}';
+    }
   }
 }
