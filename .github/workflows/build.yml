@@ -35,7 +35,7 @@ on:
       - 'v*'
 
 env:
-  FLUTTER_VERSION: '3.32.0'
+  FLUTTER_CHANNEL: 'stable'
 
 jobs:
   # 从 tag 或输入获取版本号
@@ -80,8 +80,7 @@ jobs:
       - name: 设置 Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: 创建 .env 文件
@@ -125,8 +124,7 @@ jobs:
       - name: 设置 Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: 创建 .env 文件
@@ -171,8 +169,7 @@ jobs:
       - name: 设置 Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: 创建 .env 文件
@@ -219,8 +216,7 @@ jobs:
       - name: 设置 Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: 创建 .env 文件
