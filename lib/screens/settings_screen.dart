@@ -14,6 +14,7 @@ import '../models/tts_settings.dart';
 import '../providers/tts_provider.dart';
 import 'package:just_audio/just_audio.dart';
 import 'ai_provider_screen.dart';
+import 'onboarding_screen.dart';
 import '../services/prompt_template_service.dart';
 import '../models/isar/prompt_template_entity.dart';
 
@@ -423,6 +424,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const SizedBox(height: 16),
 
+                    // 关于与帮助部分
+                    _buildAboutSection(),
+
+                    const SizedBox(height: 16),
+
                     // 反馈部分
                     _buildFeedbackSection(),
                   ],
@@ -782,6 +788,112 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     );
                   }
                 }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建关于与帮助部分
+  Widget _buildAboutSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.help_outline, color: Colors.blue[300], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '关于与帮助',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // 重新查看引导
+            ListTile(
+              leading: const Icon(Icons.school_outlined),
+              title: const Text('新手引导'),
+              subtitle: const Text('重新查看首次使用引导'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+              onTap: () async {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('重新查看引导'),
+                    content: const Text('是否重新查看新手引导？\n\n这将返回引导页面，你可以重新配置数据来源。'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('取消'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('确定'),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (confirmed == true && mounted) {
+                  await OnboardingScreen.resetOnboarding();
+                  Navigator.of(context).pushNamedAndRemoveUntil(
+                    '/onboarding',
+                    (route) => false,
+                  );
+                }
+              },
+            ),
+
+            const Divider(),
+
+            // 应用信息
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('关于 Cherry Reader'),
+              subtitle: const Text('查看应用信息'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+              onTap: () {
+                showAboutDialog(
+                  context: context,
+                  applicationName: 'Cherry Reader',
+                  applicationVersion: '1.0.0',
+                  applicationIcon: Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Theme.of(context).colorScheme.primary,
+                          Theme.of(context).colorScheme.secondary,
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.menu_book_rounded,
+                      size: 28,
+                      color: Colors.white,
+                    ),
+                  ),
+                  children: [
+                    const Text('优雅地阅读你的 AI 对话'),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '专为 Cherry Studio 用户打造的对话阅读器，'
+                      '支持 WebDAV 自动同步、语音朗读等功能。',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ],
+                );
               },
             ),
           ],

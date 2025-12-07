@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'no_scrollbar_behavior.dart';
 import 'screens/home_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'services/analysis_cache_manager.dart';
 import 'services/isar_database.dart';
 import 'services/ai_provider_service.dart';
@@ -24,18 +25,23 @@ void main() async {
   // 初始化 AI Provider 服务
   await AIProviderService.instance.init();
 
+  // 检查是否需要显示引导页
+  final showOnboarding = await OnboardingScreen.shouldShowOnboarding();
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => TtsProvider()),
       ],
-      child: const CherryViewerApp(),
+      child: CherryViewerApp(showOnboarding: showOnboarding),
     ),
   );
 }
 
 class CherryViewerApp extends StatelessWidget {
-  const CherryViewerApp({Key? key}) : super(key: key);
+  final bool showOnboarding;
+
+  const CherryViewerApp({Key? key, this.showOnboarding = false}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +49,11 @@ class CherryViewerApp extends StatelessWidget {
       scrollBehavior: NoScrollbarBehavior(),
       title: 'Cherry Reader',
       debugShowCheckedModeBanner: false,
+      // 路由配置
+      routes: {
+        '/home': (context) => const HomeScreen(),
+        '/onboarding': (context) => const OnboardingScreen(),
+      },
       theme: ThemeData(
         // 使用 Material 3 设计语言
         useMaterial3: true,
@@ -133,7 +144,7 @@ class CherryViewerApp extends StatelessWidget {
           elevation: 2,
         ),
       ),
-      home: const HomeScreen(),
+      home: showOnboarding ? const OnboardingScreen() : const HomeScreen(),
     );
   }
 }

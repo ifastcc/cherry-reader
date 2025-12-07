@@ -1318,61 +1318,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       // 无数据且未在同步，显示空状态提示
-      // 【优化】区分"未配置 WebDAV"和"已配置但无数据"
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              _loadMode == DataLoadMode.webdav
-                  ? (_hasValidWebDavConfig ? Icons.cloud_queue : Icons.cloud_off)
-                  : Icons.folder_open,
-              size: 80,
-              color: Colors.grey[600],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _loadMode == DataLoadMode.webdav
-                  ? (_hasValidWebDavConfig ? '暂无数据' : '请在设置中配置 WebDAV')
-                  : '请选择 Cherry Studio 导出文件',
-              style: const TextStyle(fontSize: 18),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _loadMode == DataLoadMode.webdav
-                  ? (_hasValidWebDavConfig
-                      ? '点击刷新按钮从云端同步数据'
-                      : '配置后可自动同步对话记录')
-                  : '支持 .zip 或 .json 格式',
-              style: TextStyle(color: Colors.grey[400]),
-            ),
-            const SizedBox(height: 24),
-            if (_loadMode == DataLoadMode.webdav) ...[
-              if (_hasValidWebDavConfig)
-                // 已配置，显示刷新按钮
-                ElevatedButton.icon(
-                  onPressed: _isLoading ? null : _refreshData,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('立即同步'),
-                )
-              else
-                // 未配置，显示去设置按钮
-                ElevatedButton.icon(
-                  onPressed: _isLoading ? null : () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                    ).then((_) {
-                      if (mounted) _initAndLoad();
-                    });
-                  },
-                  icon: const Icon(Icons.settings),
-                  label: const Text('去设置'),
-                ),
-            ],
-          ],
-        ),
-      );
+      // 【优化】更美观的空状态页面
+      return _buildEmptyState();
     }
 
     return _buildTopicList();
@@ -1483,6 +1430,292 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           );
         },
+    );
+  }
+
+  /// 【优化】美观的空状态页面
+  Widget _buildEmptyState() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(height: 40),
+
+          // 图标
+          Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              color: _loadMode == DataLoadMode.webdav
+                  ? (_hasValidWebDavConfig ? Colors.blue[50] : Colors.orange[50])
+                  : Colors.grey[100],
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Icon(
+              _loadMode == DataLoadMode.webdav
+                  ? (_hasValidWebDavConfig ? Icons.cloud_queue : Icons.cloud_off)
+                  : Icons.folder_open,
+              size: 48,
+              color: _loadMode == DataLoadMode.webdav
+                  ? (_hasValidWebDavConfig ? Colors.blue[400] : Colors.orange[400])
+                  : Colors.grey[500],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // 标题
+          Text(
+            _loadMode == DataLoadMode.webdav
+                ? (_hasValidWebDavConfig ? '暂无数据' : '配置 WebDAV 同步')
+                : '选择数据文件',
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // 描述
+          Text(
+            _loadMode == DataLoadMode.webdav
+                ? (_hasValidWebDavConfig
+                    ? '点击下方按钮从云端同步你的对话记录'
+                    : '配置与 Cherry Studio 相同的 WebDAV 设置')
+                : '导入 Cherry Studio 导出的 ZIP 或 JSON 文件',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 15,
+              height: 1.5,
+            ),
+            textAlign: TextAlign.center,
+          ),
+
+          const SizedBox(height: 32),
+
+          // 操作按钮
+          if (_loadMode == DataLoadMode.webdav) ...[
+            if (_hasValidWebDavConfig)
+              // 已配置，显示同步按钮
+              ElevatedButton.icon(
+                onPressed: _isLoading ? null : _refreshData,
+                icon: const Icon(Icons.cloud_sync),
+                label: const Text('立即同步'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                ),
+              )
+            else
+              // 未配置，显示配置按钮
+              ElevatedButton.icon(
+                onPressed: _isLoading ? null : () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                  ).then((_) {
+                    if (mounted) _initAndLoad();
+                  });
+                },
+                icon: const Icon(Icons.settings),
+                label: const Text('去配置'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                ),
+              ),
+          ] else ...[
+            // 手动模式，提示使用浮动按钮
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue[100]!),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.touch_app, color: Colors.blue[700], size: 20),
+                  const SizedBox(width: 12),
+                  Text(
+                    '点击右下角按钮选择文件',
+                    style: TextStyle(
+                      color: Colors.blue[800],
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 48),
+
+          // 快速开始指南
+          _buildQuickStartGuide(),
+        ],
+      ),
+    );
+  }
+
+  /// 快速开始指南
+  Widget _buildQuickStartGuide() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.lightbulb_outline, color: Colors.amber[700], size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                '快速开始',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          if (_loadMode == DataLoadMode.webdav && !_hasValidWebDavConfig) ...[
+            _buildGuideStep(
+              number: '1',
+              title: '在 Cherry Studio 中配置 WebDAV',
+              description: '设置 → 数据设置 → WebDAV → 填写配置并开启自动备份',
+            ),
+            const SizedBox(height: 12),
+            _buildGuideStep(
+              number: '2',
+              title: '在本应用中填写相同配置',
+              description: '点击上方"去配置"按钮，填写与 Cherry Studio 相同的 WebDAV 信息',
+            ),
+            const SizedBox(height: 12),
+            _buildGuideStep(
+              number: '3',
+              title: '自动同步',
+              description: '配置完成后，应用会自动从云端同步你的对话记录',
+            ),
+          ] else if (_loadMode == DataLoadMode.manual) ...[
+            _buildGuideStep(
+              number: '1',
+              title: '导出 Cherry Studio 数据',
+              description: '在 Cherry Studio 中：设置 → 数据设置 → 导出菜单设置',
+            ),
+            const SizedBox(height: 12),
+            _buildGuideStep(
+              number: '2',
+              title: '导入到本应用',
+              description: '点击右下角按钮，选择导出的 ZIP 或 JSON 文件',
+            ),
+          ] else ...[
+            _buildGuideStep(
+              number: '1',
+              title: '点击同步按钮',
+              description: '点击上方"立即同步"从云端获取最新数据',
+            ),
+          ],
+
+          const SizedBox(height: 16),
+
+          // 切换模式提示
+          Divider(color: Colors.grey[200]),
+          const SizedBox(height: 12),
+
+          GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              ).then((_) {
+                if (mounted) _initAndLoad();
+              });
+            },
+            child: Row(
+              children: [
+                Icon(Icons.swap_horiz, color: Colors.grey[500], size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _loadMode == DataLoadMode.webdav
+                        ? '想手动导入文件？去设置切换模式'
+                        : '想自动同步？去设置配置 WebDAV',
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                Icon(Icons.arrow_forward_ios, color: Colors.grey[400], size: 14),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 引导步骤项
+  Widget _buildGuideStep({
+    required String number,
+    required String title,
+    required String description,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primaryContainer,
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                description,
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
