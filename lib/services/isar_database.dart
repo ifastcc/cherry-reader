@@ -1,4 +1,5 @@
-import 'package:isar/isar.dart';
+import 'package:flutter/foundation.dart';
+import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/isar/highlight_entity.dart';
 import '../models/isar/topic_cache_entity.dart';
@@ -65,8 +66,8 @@ class IsarDatabase {
           TaskTemplateEntitySchema,
         ],
         directory: dir.path,
-        name: 'cherry_viewer', // 数据库名称
-        inspector: true, // 启用 Isar Inspector（调试工具）
+        name: 'cherry_viewer',
+        inspector: kDebugMode, // 仅在调试模式启用 Isar Inspector
       );
 
       _initialized = true;

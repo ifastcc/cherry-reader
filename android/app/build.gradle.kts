@@ -42,3 +42,14 @@ android {
 flutter {
     source = "../.."
 }
+
+// 修复 "android:attr/lStar not found" 错误
+// 原因：旧插件（如 isar_flutter_libs）使用较低的 compileSdk，缺少 lStar 属性
+// 解决方案：强制所有依赖使用兼容的 androidx.core 版本
+// 参考：https://stackoverflow.com/questions/69033022/message-error-resource-androidattr-lstar-not-found
+configurations.all {
+    resolutionStrategy {
+        force("androidx.core:core:1.13.1")
+        force("androidx.core:core-ktx:1.13.1")
+    }
+}

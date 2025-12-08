@@ -1,4 +1,4 @@
-import 'package:isar/isar.dart';
+import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 import '../models/isar/prompt_template_entity.dart';
 import 'isar_database.dart';

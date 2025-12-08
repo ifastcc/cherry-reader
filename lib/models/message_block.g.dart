@@ -7,23 +7,23 @@ part of 'message_block.dart';
 // **************************************************************************
 
 MessageBlock _$MessageBlockFromJson(Map<String, dynamic> json) => MessageBlock(
-      id: json['id'] as String,
-      messageId: json['messageId'] as String,
-      type: json['type'] as String,
-      createdAt: json['createdAt'] as String,
-      status: json['status'] as String,
-      content: json['content'] as String?,
-      model: json['model'] as Map<String, dynamic>?,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-      thinkingMillsec: (json['thinking_millsec'] as num?)?.toDouble(),
-      file: json['file'] as Map<String, dynamic>?,
-      url: json['url'] as String?,
-      error: json['error'] as Map<String, dynamic>?,
-      toolId: json['toolId'] as String?,
-      toolName: json['toolName'] as String?,
-      arguments: json['arguments'] as Map<String, dynamic>?,
-      targetLanguage: json['targetLanguage'] as String?,
-    );
+  id: json['id'] as String,
+  messageId: json['messageId'] as String,
+  type: json['type'] as String,
+  createdAt: json['createdAt'] as String,
+  status: json['status'] as String,
+  content: json['content'] as String?,
+  model: json['model'] as Map<String, dynamic>?,
+  metadata: json['metadata'] as Map<String, dynamic>?,
+  thinkingMillsec: (json['thinking_millsec'] as num?)?.toDouble(),
+  file: json['file'] as Map<String, dynamic>?,
+  url: json['url'] as String?,
+  error: json['error'] as Map<String, dynamic>?,
+  toolId: json['toolId'] as String?,
+  toolName: json['toolName'] as String?,
+  arguments: json['arguments'] as Map<String, dynamic>?,
+  targetLanguage: json['targetLanguage'] as String?,
+);
 
 Map<String, dynamic> _$MessageBlockToJson(MessageBlock instance) =>
     <String, dynamic>{
