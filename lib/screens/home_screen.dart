@@ -1391,45 +1391,63 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             subtitle: Text('${topics.length} 个话题'),
-            // 【优化】ExpansionTile 的 children 仍使用 map，因为这只在展开时渲染
-            children: topics.map((topic) {
-              final topicName = topic['name'] as String? ?? '未命名话题';
-              final topicId = topic['id'] as String;
-              final messageCount = topic['messageCount'] as int? ?? 0;
-              final roundCount = topic['roundCount'] as int? ?? 0;
-
-              return ListTile(
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 8,
+            // 【性能优化】使用虚拟化列表替代 map().toList()
+            // 避免一次性创建大量 Widget，特别是当助手有很多话题时
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  // 限制最大高度：最多显示 6 个话题的高度，超出可滚动
+                  // 每个 ListTile 高度约 72px
+                  maxHeight: topics.length > 6 ? 432 : topics.length * 72.0,
                 ),
-                title: Text(topicName),
-                subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
-                trailing: const Icon(Icons.chevron_right),
-                  onTap: () async {
-                    if (_extractor == null) {
-                      ScaffoldMessenger.of(
-                        context,
-                      ).showSnackBar(const SnackBar(content: Text('数据加载器未就绪')));
-                      return;
-                    }
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  physics: topics.length > 6
+                      ? const ClampingScrollPhysics()
+                      : const NeverScrollableScrollPhysics(),
+                  itemCount: topics.length,
+                  itemBuilder: (context, topicIndex) {
+                    final topic = topics[topicIndex];
+                    final topicName = topic['name'] as String? ?? '未命名话题';
+                    final topicId = topic['id'] as String;
+                    final messageCount = topic['messageCount'] as int? ?? 0;
+                    final roundCount = topic['roundCount'] as int? ?? 0;
 
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ConversationScreen(
-                          extractor: _extractor!,
-                          topicId: topicId,
-                          topicName: topicName,
-                        ),
+                    return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 8,
                       ),
+                      title: Text(topicName),
+                      subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () async {
+                        if (_extractor == null) {
+                          ScaffoldMessenger.of(
+                            context,
+                          ).showSnackBar(const SnackBar(content: Text('数据加载器未就绪')));
+                          return;
+                        }
+
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ConversationScreen(
+                              extractor: _extractor!,
+                              topicId: topicId,
+                              topicName: topicName,
+                            ),
+                          ),
+                        );
+                      },
                     );
                   },
-                );
-              }).toList(),
-            ),
-          );
-        },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
