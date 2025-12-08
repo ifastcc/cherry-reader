@@ -249,39 +249,74 @@ jobs:
 
   # 创建 Release
   release:
-    needs: [prepare, build-android]
+    needs: [prepare, build-android, build-ios, build-macos, build-windows]
+    # 即使某些构建被跳过也继续，只要不是全部失败
     if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+      always() &&
+      !cancelled() &&
+      (needs.build-android.result == 'success' || needs.build-android.result == 'skipped') &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 20  # 获取最近 20 条 commit 用于生成日志
+
+      - name: 获取更新记录
+        id: changelog
+        run: |
+          echo "获取最近 5 条 commit..."
+          CHANGELOG=$(git log -5 --pretty=format:"- %s (%h)" --no-merges)
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "生成的更新记录:"
+          echo "$CHANGELOG"
+
       - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
       - name: 显示下载的文件
-        run: ls -R artifacts
+        run: |
+          echo "=== 构建产物 ==="
+          ls -R artifacts || echo "没有找到构建产物"
+
+      - name: 整理文件
+        run: |
+          mkdir -p release_files
+          find artifacts -name "*.apk" -exec cp {} release_files/ \; 2>/dev/null || true
+          find artifacts -name "*.zip" -exec cp {} release_files/ \; 2>/dev/null || true
+          echo "=== Release 文件 ==="
+          ls -la release_files/
 
       - name: 创建 Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: v${{ needs.prepare.outputs.version }}
           name: Cherry Reader v${{ needs.prepare.outputs.version }}
           body: |
             ## Cherry Reader v${{ needs.prepare.outputs.version }}
 
-            ### 下载
-            - **Android**: 下载 APK 文件直接安装
-            - **Windows**: 解压后运行 exe 文件
-            - **macOS**: 解压后将 app 拖入应用程序文件夹
-            - **iOS**: 未签名版本，需自行签名
+            ### 下载说明
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | Android | `*.apk` | 直接安装 |
+            | Windows | `*-windows-*.zip` | 解压后运行 exe |
+            | macOS | `*-macos-*.zip` | 解压后拖入应用程序 |
+            | iOS | `*-ios-*.zip` | 未签名，需自行签名 |
 
             ### 更新内容
-            请查看 commit 记录
-          files: |
-            artifacts/**/*.apk
-            artifacts/**/*.zip
+            ${{ steps.changelog.outputs.changelog }}
+
+            ---
+            > 🤖 由 GitHub Actions 自动构建发布
+          files: release_files/*
           draft: false
           prerelease: false
+          generate_release_notes: false
