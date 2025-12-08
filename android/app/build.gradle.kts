@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.example.cherry_reader"
-    compileSdk = 34  // isar_flutter_libs 需要 API 31+ (android:attr/lStar)
+    compileSdk = 36  // AndroidX 1.17+ 需要 API 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -24,8 +24,8 @@ android {
         applicationId = "com.example.cherry_reader"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 21  // 支持 Android 5.0+
-        targetSdk = 34
+        minSdk = flutter.minSdkVersion  // 支持 Android 5.0+
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
