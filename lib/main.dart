@@ -4,7 +4,7 @@ import 'no_scrollbar_behavior.dart';
 import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/analysis_cache_manager.dart';
-import 'services/isar_database.dart';
+import 'services/repository_provider.dart';
 import 'services/ai_provider_service.dart';
 
 import 'package:provider/provider.dart';
@@ -16,8 +16,9 @@ void main() async {
   // 加载环境变量
   await dotenv.load(fileName: ".env");
 
-  // 初始化 Isar 数据库（优先初始化，提供高性能存储）
-  await IsarDatabase().init();
+  // 初始化 RepositoryProvider（会自动初始化 IsarDatabase）
+  // 必须在其他依赖数据库的服务之前初始化
+  await RepositoryProvider.init();
 
   // 初始化缓存管理器（后续会迁移到 Isar）
   await AnalysisCacheManager().init();

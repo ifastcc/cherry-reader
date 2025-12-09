@@ -2,24 +2,25 @@ import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/isar/highlight_entity.dart';
-import '../models/isar/topic_cache_entity.dart';
 import '../models/isar/ai_analysis_entity.dart';
 import '../models/isar/discussion_entity.dart';
 import '../models/isar/discussion_message_entity.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../models/isar/prompt_template_entity.dart';
+// 新架构：消息级存储
+import '../models/isar/assistant_entity.dart';
+import '../models/isar/topic_entity.dart';
+import '../models/isar/message_entity.dart';
+import '../models/isar/message_block_entity.dart';
+import '../models/isar/file_entity.dart';
 
 /// Isar 数据库管理器（单例模式）
 ///
 /// 统一管理所有 Isar 数据库操作：
 /// - 标注数据（HighlightEntity）
-/// - 话题缓存（TopicCacheEntity）
 /// - AI 分析缓存（AIAnalysisEntity）
-///
-/// 优势：
-/// - 单例模式保证全局唯一数据库实例
-/// - 延迟初始化，按需开启
-/// - 提供类型安全的查询接口
+/// - 讨论对话（DiscussionEntity）
+/// - 消息级存储（AssistantEntity, TopicEntity, MessageEntity, MessageBlockEntity）
 class IsarDatabase {
   static final IsarDatabase _instance = IsarDatabase._internal();
   factory IsarDatabase() => _instance;
@@ -55,8 +56,8 @@ class IsarDatabase {
 
       _isar = await Isar.open(
         [
+          // 基础功能
           HighlightEntitySchema,
-          TopicCacheEntitySchema,
           AIAnalysisEntitySchema,
           DiscussionEntitySchema,
           DiscussionMessageEntitySchema,
@@ -64,6 +65,12 @@ class IsarDatabase {
           UnifiedMessageEntitySchema,
           UserPreferenceEntitySchema,
           TaskTemplateEntitySchema,
+          // 消息级存储
+          AssistantEntitySchema,
+          TopicEntitySchema,
+          MessageEntitySchema,
+          MessageBlockEntitySchema,
+          FileEntitySchema,
         ],
         directory: dir.path,
         name: 'cherry_viewer',
@@ -170,65 +177,6 @@ class IsarDatabase {
         .watch(fireImmediately: true);
   }
 
-  // ============ 话题缓存相关操作 ============
-
-  /// 保存话题缓存
-  Future<void> saveTopicCache(TopicCacheEntity topic) async {
-    final isar = await instance;
-    await isar.writeTxn(() async {
-      await isar.topicCacheEntitys.put(topic);
-    });
-  }
-
-  /// 批量保存话题缓存
-  Future<void> saveTopicCaches(List<TopicCacheEntity> topics) async {
-    if (topics.isEmpty) return;
-
-    final isar = await instance;
-    await isar.writeTxn(() async {
-      await isar.topicCacheEntitys.putAll(topics);
-    });
-  }
-
-  /// 获取话题缓存
-  Future<TopicCacheEntity?> getTopicCache(String topicId) async {
-    final isar = await instance;
-    return isar.topicCacheEntitys.filter().topicIdEqualTo(topicId).findFirst();
-  }
-
-  /// 获取指定 Assistant 的所有话题
-  Future<List<TopicCacheEntity>> getTopicsByAssistant(
-    String assistantId,
-  ) async {
-    final isar = await instance;
-    return isar.topicCacheEntitys
-        .filter()
-        .assistantIdEqualTo(assistantId)
-        .sortByUpdatedAtDesc()
-        .findAll();
-  }
-
-  /// 获取所有话题（按 Assistant 分组）
-  Future<Map<String, List<TopicCacheEntity>>> getAllTopicsGrouped() async {
-    final isar = await instance;
-    final allTopics = await isar.topicCacheEntitys.where().findAll();
-
-    final grouped = <String, List<TopicCacheEntity>>{};
-    for (final topic in allTopics) {
-      grouped.putIfAbsent(topic.assistantId, () => []).add(topic);
-    }
-
-    return grouped;
-  }
-
-  /// 清空话题缓存（重新加载数据时使用）
-  Future<void> clearTopicCaches() async {
-    final isar = await instance;
-    await isar.writeTxn(() async {
-      await isar.topicCacheEntitys.clear();
-    });
-  }
-
   // ============ AI 分析缓存相关操作 ============
 
   /// 保存 AI 分析
@@ -310,7 +258,8 @@ class IsarDatabase {
     final isar = await instance;
 
     final highlightCount = await isar.highlightEntitys.count();
-    final topicCount = await isar.topicCacheEntitys.count();
+    final topicCount = await isar.topicEntitys.count();
+    final messageCount = await isar.messageEntitys.count();
     final analysisCount = await isar.aIAnalysisEntitys.count();
 
     final dbSize = await isar.getSize(includeIndexes: true);
@@ -318,6 +267,7 @@ class IsarDatabase {
     return {
       'highlights': highlightCount,
       'topics': topicCount,
+      'messages': messageCount,
       'analyses': analysisCount,
       'database_size_mb': (dbSize / 1024 / 1024).toStringAsFixed(2),
     };
@@ -336,6 +286,19 @@ class IsarDatabase {
       await isar.clear();
     });
     print('🗑️  已清空所有数据库数据');
+  }
+
+  /// 清空导入的数据（保留用户数据如标注、分析等）
+  Future<void> clearImportedData() async {
+    final isar = await instance;
+    await isar.writeTxn(() async {
+      await isar.assistantEntitys.clear();
+      await isar.topicEntitys.clear();
+      await isar.messageEntitys.clear();
+      await isar.messageBlockEntitys.clear();
+      await isar.fileEntitys.clear();
+    });
+    print('🗑️  已清空导入的数据');
   }
 
   /// 压缩数据库（释放空间）

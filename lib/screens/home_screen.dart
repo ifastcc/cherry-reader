@@ -3,13 +3,15 @@ import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:webdav_client/webdav_client.dart' as wd;
+import 'package:dio/dio.dart';
 import 'dart:io';
 import 'dart:async'; // For Timer
 import '../services/cherry_extractor.dart';
 import '../services/data_persistence_manager.dart';
-import '../services/isar_database.dart';
+import '../services/repository_provider.dart';
 import '../services/webdav_service.dart';
 import '../services/ai_provider_service.dart';
+import '../services/unified_import_manager.dart';
 import 'conversation_screen.dart';
 import 'settings_screen.dart';
 import 'package:intl/intl.dart';
@@ -506,8 +508,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await DataPersistenceManager.clearCache();
       debugPrint('✅ 已清除所有缓存');
 
-      // 3. 清除Isar数据库
-      await IsarDatabase().clearTopicCaches();
+      // 3. 清除Isar数据库中的导入数据
+      await RepositoryProvider.instance.database.clearImportedData();
       debugPrint('✅ 已清除Isar缓存');
     } catch (e) {
       debugPrint('❌ 清理失败: $e');
@@ -718,51 +720,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final elapsed = DateTime.now().difference(startTime).inMilliseconds;
       debugPrint('💡 文件加载完成，耗时 ${elapsed}ms');
 
-      // 保存轻量级索引到缓存
+      // 保存数据到 Isar 数据库
       if (saveCache) {
         try {
-          // 【修复】构建完整话题数据（包含解析后的 blocks）
-          final allTopics = <Map<String, dynamic>>[];
-          for (final entry in grouped.entries) {
-            final assistantData = entry.value;
-            final topics = assistantData['topics'] as List<dynamic>;
-            for (final t in topics) {
-              final topic = t as Map<String, dynamic>;
+          final importManager = DataImportManager(RepositoryProvider.instance.database);
+          final result = await importManager.importData(
+            extractor,
+            onProgress: (progress, message) {
+              debugPrint('📦 导入进度: ${(progress * 100).toInt()}% - $message');
+            },
+          );
 
-              // 【关键修复】解析每个消息的 blocks
-              final messages = topic['messages'] as List<dynamic>? ?? [];
-              final processedMessages = <Map<String, dynamic>>[];
-
-              for (final msg in messages) {
-                if (msg is! Map<String, dynamic>) continue;
-
-                // 提取 block IDs 并查找完整 block 数据
-                final blockIds =
-                    (msg['blocks'] as List<dynamic>?)
-                        ?.map((e) => e.toString())
-                        .toList() ??
-                    [];
-                final resolvedBlocks = extractor.getMessageBlocks(blockIds);
-
-                // 创建包含完整 blocks 的消息副本
-                final processedMsg = Map<String, dynamic>.from(msg);
-                processedMsg['blocks'] = resolvedBlocks;
-                processedMessages.add(processedMsg);
-              }
-
-              // 创建包含解析后消息的话题副本
-              final processedTopic = Map<String, dynamic>.from(topic);
-              processedTopic['messages'] = processedMessages;
-              processedTopic['assistantId'] = entry.key;
-
-              allTopics.add(processedTopic);
-            }
+          if (result.success) {
+            await DataPersistenceManager.saveFileTimestamp(filePath);
+            debugPrint('✅ 已保存话题缓存 (${result.importedTopics} 话题, ${result.importedMessages} 消息)');
+          } else {
+            debugPrint('⚠️ 导入失败: ${result.error}');
           }
-
-          await DataPersistenceManager.saveTopicIndexCache(allTopics);
-          await DataPersistenceManager.markCacheAsValid();
-          await DataPersistenceManager.saveFileTimestamp(filePath);
-          debugPrint('✅ 已保存话题缓存');
         } catch (e) {
           debugPrint('⚠️  保存缓存失败: $e');
         }
@@ -1030,7 +1004,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (confirm == true) {
                 try {
                   await DataPersistenceManager.clearCache();
-                  await IsarDatabase().clearAll();
+                  await RepositoryProvider.instance.database.clearAll();
 
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
