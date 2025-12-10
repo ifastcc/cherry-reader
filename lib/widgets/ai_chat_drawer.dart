@@ -262,6 +262,7 @@ class _AIChatDrawerState extends State<AIChatDrawer>
                         widget.onSelectConversation?.call(conv.conversationId);
                       },
                       onDelete: () => _confirmDelete(conv),
+                      onRename: (newTitle) => _renameConversation(conv, newTitle),
                     );
                   },
                 ),
@@ -427,9 +428,25 @@ class _AIChatDrawerState extends State<AIChatDrawer>
     );
   }
 
+  /// 重命名对话
+  Future<void> _renameConversation(
+    UnifiedConversationEntity conv,
+    String newTitle,
+  ) async {
+    await _conversationService.updateTitle(conv.conversationId, newTitle);
+    await _loadData();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已重命名为"$newTitle"'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
   void _showCleanupDialog() {
-    // 统计空对话数量
-    final emptyCount = _conversations.where((c) => c.roundCount == 0).length;
     // 在进入 dialog 前保存 ScaffoldMessenger 引用，避免 dialog 关闭后 context 失效
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
@@ -448,13 +465,8 @@ class _AIChatDrawerState extends State<AIChatDrawer>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('当前共 ${_conversations.length} 个对话'),
-            if (emptyCount > 0)
-              Text(
-                '其中 $emptyCount 个空对话（无实际对话内容）',
-                style: TextStyle(color: Colors.grey[600], fontSize: 13),
-              ),
             const SizedBox(height: 16),
-            const Text('选择清理方式：'),
+            const Text('确定要删除全部对话吗？'),
           ],
         ),
         actions: [
@@ -462,20 +474,6 @@ class _AIChatDrawerState extends State<AIChatDrawer>
             onPressed: () => Navigator.pop(context),
             child: const Text('取消'),
           ),
-          if (emptyCount > 0)
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                final count = await _conversationService.deleteEmptyConversations();
-                await _loadData();
-                if (mounted) {
-                  scaffoldMessenger.showSnackBar(
-                    SnackBar(content: Text('已清理 $count 个空对话')),
-                  );
-                }
-              },
-              child: Text('清理空对话 ($emptyCount)'),
-            ),
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
@@ -685,6 +683,7 @@ class _ConversationTile extends StatelessWidget {
   final bool showRoundInfo; // 是否显示轮次信息（全部模式下）
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final void Function(String newTitle)? onRename; // 重命名回调
 
   const _ConversationTile({
     required this.conversation,
@@ -692,6 +691,7 @@ class _ConversationTile extends StatelessWidget {
     this.showRoundInfo = false,
     required this.onTap,
     required this.onDelete,
+    this.onRename,
   });
 
   /// 从 contextId 中提取轮次信息
@@ -765,9 +765,22 @@ class _ConversationTile extends StatelessWidget {
         style: TextStyle(fontSize: 11, color: Colors.grey[500]),
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: IconButton(
-        icon: Icon(Icons.delete_outline, size: 18, color: Colors.grey[400]),
-        onPressed: onDelete,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 重命名按钮
+          IconButton(
+            icon: Icon(Icons.edit_outlined, size: 18, color: Colors.grey[400]),
+            onPressed: () => _showRenameDialog(context),
+            tooltip: '重命名',
+          ),
+          // 删除按钮
+          IconButton(
+            icon: Icon(Icons.delete_outline, size: 18, color: Colors.grey[400]),
+            onPressed: onDelete,
+            tooltip: '删除',
+          ),
+        ],
       ),
       onTap: onTap,
     );
@@ -794,6 +807,50 @@ class _ConversationTile extends StatelessWidget {
     if (diff.inDays < 7) return '${diff.inDays}天前';
 
     return DateFormat('MM/dd').format(time);
+  }
+
+  /// 显示重命名对话框
+  void _showRenameDialog(BuildContext context) {
+    final controller = TextEditingController(text: conversation.title);
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('重命名对话'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '对话名称',
+            border: OutlineInputBorder(),
+            hintText: '输入新的对话名称',
+          ),
+          onSubmitted: (value) {
+            final newTitle = value.trim();
+            if (newTitle.isNotEmpty && newTitle != conversation.title) {
+              onRename?.call(newTitle);
+            }
+            Navigator.pop(dialogContext);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final newTitle = controller.text.trim();
+              if (newTitle.isNotEmpty && newTitle != conversation.title) {
+                onRename?.call(newTitle);
+              }
+              Navigator.pop(dialogContext);
+            },
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
   }
 }
 

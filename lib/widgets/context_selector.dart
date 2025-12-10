@@ -748,12 +748,15 @@ class _TreeNode extends StatelessWidget {
                           Expanded(
                             child: Row(
                               children: [
-                                Text(
-                                  title,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.grey[800],
+                                Flexible(
+                                  child: Text(
+                                    title,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey[800],
+                                    ),
                                   ),
                                 ),
                                 if (isCurrent) ...[

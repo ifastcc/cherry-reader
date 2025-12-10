@@ -186,6 +186,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
 
   // 讨论数量
   int _discussionCount = 0;
+  // 【性能优化】标记是否已加载过讨论数量，避免重复加载
+  bool _discussionCountLoaded = false;
 
   // 【性能优化】Markdown 渲染缓存（memo 模式）
   Widget? _cachedMarkdownWidget;
@@ -200,10 +202,18 @@ class _HighlightableCardState extends State<HighlightableCard> {
   void initState() {
     super.initState();
     _loadHighlights();
-    _loadDiscussionCount();
+    // 【性能优化】延迟加载讨论数量，不阻塞首次渲染
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_discussionCountLoaded) {
+        _loadDiscussionCount();
+      }
+    });
   }
 
   Future<void> _loadDiscussionCount() async {
+    if (_discussionCountLoaded) return; // 避免重复加载
+    _discussionCountLoaded = true;
+
     final conversations = await UnifiedConversationService.instance
         .getConversationsByContext(widget.messageId);
     if (mounted) {
@@ -578,11 +588,14 @@ class _HighlightableCardState extends State<HighlightableCard> {
         ],
 
         // TTS 朗读按钮
-        Consumer<TtsProvider>(
-          builder: (context, tts, _) {
-            if (!tts.hasValidConfig) return const SizedBox.shrink();
+        // 【性能优化】使用 Selector 只监听 hasValidConfig，避免 TTS 状态变化时重建
+        Selector<TtsProvider, bool>(
+          selector: (_, tts) => tts.hasValidConfig,
+          builder: (context, hasValidConfig, _) {
+            if (!hasValidConfig) return const SizedBox.shrink();
             return GestureDetector(
               onTap: () {
+                final tts = Provider.of<TtsProvider>(context, listen: false);
                 final item = TtsItem(
                   id: widget.messageId,
                   text: widget.content,

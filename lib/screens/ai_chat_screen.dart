@@ -423,20 +423,27 @@ class _AIChatScreenState extends State<AIChatScreen> {
         .replaceAll('\t', '\\t');
   }
 
-  Future<void> _createNewConversation() async {
-    final title = widget.initialTitle ?? '新对话';
+  /// 构建创建对话所需的配置
+  ConversationConfig _buildConversationConfig() {
+    // 确定对话标题：优先使用模板名，其次使用传入的标题，最后使用默认值
+    String title;
+    if (_selectedTemplate != null) {
+      title = _selectedTemplate!.name;
+    } else if (widget.initialTitle != null) {
+      title = widget.initialTitle!;
+    } else {
+      title = '新对话';
+    }
+
     final contextType =
         widget.contextTypeFilter ?? ConversationContextType.topic;
 
-    final id = await _service.createConversation(
+    return ConversationConfig(
       title: title,
       contextType: contextType,
       contextId: widget.initialContextId,
       contextSnapshot: widget.initialContextSnapshot,
     );
-
-    _activeConversationId = id;
-    await _loadConversations();
   }
 
   Future<void> _selectConversation(String conversationId) async {
@@ -462,10 +469,10 @@ class _AIChatScreenState extends State<AIChatScreen> {
     final parseResult = _mentionParser.parse(userQuery);
     final hasMultipleModels = parseResult.mentionedModels.length > 1;
 
-    // 如果没有活跃对话，创建一个
-    if (_activeConversationId == null) {
-      await _createNewConversation();
-    }
+    // 懒创建：不在这里创建对话，而是在发送方法中处理
+    // 如果没有活跃对话，准备对话配置供发送方法使用
+    final isNewConversation = _activeConversationId == null;
+    final conversationConfig = isNewConversation ? _buildConversationConfig() : null;
 
     _inputController.clear();
     _hideModelSelectorOverlay();
@@ -501,6 +508,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
           parseResult: parseResult,
           effectiveUserQuery: effectiveUserQuery,
           contextDataJson: contextDataJson,
+          conversationConfig: conversationConfig,
         );
       } else {
         // 单模型调用（可能使用 @mention 指定的单个模型，或默认模型）
@@ -508,6 +516,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
           parseResult: parseResult,
           effectiveUserQuery: effectiveUserQuery,
           contextDataJson: contextDataJson,
+          conversationConfig: conversationConfig,
         );
       }
 
@@ -531,11 +540,12 @@ class _AIChatScreenState extends State<AIChatScreen> {
     }
   }
 
-  /// 单模型调用
+  /// 单模型调用（支持懒创建）
   Future<void> _sendSingleModelMessage({
     required MentionParseResult parseResult,
     String? effectiveUserQuery,
     String? contextDataJson,
+    ConversationConfig? conversationConfig,
   }) async {
     // 如果指定了单个模型，临时切换 Provider
     String? originalProviderId;
@@ -555,15 +565,24 @@ class _AIChatScreenState extends State<AIChatScreen> {
     }
 
     try {
-      await for (final chunk in _service.sendStructuredMessageAndStream(
-        _activeConversationId!,
+      // 使用支持懒创建的新方法
+      final result = _service.sendStructuredMessageAndStreamWithLazyCreate(
+        conversationId: _activeConversationId,
+        conversationConfig: conversationConfig,
         templateId: _selectedTemplate?.templateId,
         contextContent: _currentContextContent,
         contextSummary: _currentContextSummary,
         userQuery: effectiveUserQuery,
         contextDataJson: contextDataJson,
         debugContextData: widget.initialContextData,
-      )) {
+      );
+
+      // 如果是新对话，更新 _activeConversationId
+      if (_activeConversationId == null) {
+        _activeConversationId = result.conversationId;
+      }
+
+      await for (final chunk in result.stream) {
         setState(() {
           _streamingContent += chunk;
         });
@@ -581,15 +600,17 @@ class _AIChatScreenState extends State<AIChatScreen> {
     }
   }
 
-  /// 多模型并行调用
+  /// 多模型并行调用（支持懒创建）
   Future<void> _sendMultiModelMessage({
     required MentionParseResult parseResult,
     String? effectiveUserQuery,
     String? contextDataJson,
+    ConversationConfig? conversationConfig,
   }) async {
-    // 1. 先保存用户消息到数据库，获取用户消息 ID 用于 askId
-    final userMessageId = await _service.addStructuredUserMessage(
-      _activeConversationId!,
+    // 1. 使用懒创建方法：创建对话（如果需要）并保存用户消息
+    final result = await _service.createConversationAndAddUserMessage(
+      conversationId: _activeConversationId,
+      conversationConfig: conversationConfig,
       templateId: _selectedTemplate?.templateId,
       templateName: _selectedTemplate?.name,
       templateContent: _selectedTemplate?.content,
@@ -599,8 +620,13 @@ class _AIChatScreenState extends State<AIChatScreen> {
       contextDataJson: contextDataJson,
     );
 
+    // 如果是新对话，更新 _activeConversationId
+    if (_activeConversationId == null) {
+      _activeConversationId = result.conversationId;
+    }
+
     // 保存用户消息 ID，用于重试时设置 askId
-    _lastUserMessageId = userMessageId;
+    _lastUserMessageId = result.userMessageId;
 
     // 2. 构建发送给 API 的消息列表
     final messages = <Map<String, String>>[];
@@ -654,11 +680,11 @@ class _AIChatScreenState extends State<AIChatScreen> {
       final response = entry.value;
       if (response.fullContent.isNotEmpty && response.error == null) {
         await _service.addAssistantMessage(
-          _activeConversationId!,
+          result.conversationId,
           response.fullContent,
           modelId: response.modelId,
           modelName: response.modelName,
-          askId: userMessageId,  // 设置 askId 关联到用户问题
+          askId: result.userMessageId,  // 设置 askId 关联到用户问题
           isMainline: isFirstSuccess,  // 第一个成功的回复是主线
         );
         isFirstSuccess = false;

@@ -3,6 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'no_scrollbar_behavior.dart';
 import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/settings_screen.dart';
 import 'services/analysis_cache_manager.dart';
 import 'services/repository_provider.dart';
 import 'services/ai_provider_service.dart';
@@ -54,6 +55,7 @@ class CherryViewerApp extends StatelessWidget {
       routes: {
         '/home': (context) => const HomeScreen(),
         '/onboarding': (context) => const OnboardingScreen(),
+        '/settings': (context) => const SettingsScreen(),
       },
       theme: ThemeData(
         // 使用 Material 3 设计语言

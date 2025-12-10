@@ -61,9 +61,16 @@ else
         echo ""
     fi
 
+    # 构建运行参数
+    RUN_ARGS="-d macos"
+
+    # 添加 DevTools 支持（运行后按 'd' 打开）
+    echo -e "${BLUE}💡 提示: 运行后按 'd' 打开 DevTools 性能分析${NC}"
+    echo ""
+
     if [[ -n "$OPENAI_API_KEY" ]]; then
-        flutter run -d macos --dart-define=OPENAI_API_KEY="$OPENAI_API_KEY"
+        flutter run $RUN_ARGS --dart-define=OPENAI_API_KEY="$OPENAI_API_KEY"
     else
-        flutter run -d macos
+        flutter run $RUN_ARGS
     fi
 fi

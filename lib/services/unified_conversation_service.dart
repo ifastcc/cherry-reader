@@ -7,6 +7,23 @@ import 'ai_provider_service.dart';
 import 'openai_service.dart';
 import 'prompt_template_service.dart';
 
+/// 创建对话所需的配置
+///
+/// 用于懒创建对话时传递对话的元信息
+class ConversationConfig {
+  final String title;
+  final ConversationContextType contextType;
+  final String? contextId;
+  final String? contextSnapshot;
+
+  const ConversationConfig({
+    required this.title,
+    required this.contextType,
+    this.contextId,
+    this.contextSnapshot,
+  });
+}
+
 /// 日志开关：控制是否打印 AI 请求的详细日志
 const bool kEnableAIRequestLog = true;
 
@@ -416,22 +433,6 @@ class UnifiedConversationService {
     return conversations.length;
   }
 
-  /// 清理空对话（没有用户消息的对话）
-  Future<int> deleteEmptyConversations() async {
-    final conversations = await _db.getUnifiedConversations(includeArchived: true);
-    int deletedCount = 0;
-
-    for (final conv in conversations) {
-      // roundCount 是用户问答轮数，为 0 表示没有实际对话
-      if (conv.roundCount == 0) {
-        await _db.deleteUnifiedConversation(conv.conversationId);
-        deletedCount++;
-      }
-    }
-
-    return deletedCount;
-  }
-
   /// 归档对话
   Future<void> archiveConversation(String conversationId) async {
     final entity = await _db.getUnifiedConversation(conversationId);
@@ -515,6 +516,68 @@ class UnifiedConversationService {
     return message.messageId;
   }
 
+  /// 创建对话并添加结构化用户消息（懒创建版本）
+  ///
+  /// 用于多模型调用等场景，将创建对话和添加用户消息合并为原子操作
+  ///
+  /// [conversationId] 可以为 null，此时会自动生成新 ID
+  /// [conversationConfig] 创建对话所需的配置（仅当需要创建新对话时使用）
+  ///
+  /// 返回 (conversationId, userMessageId)
+  Future<({String conversationId, String userMessageId})>
+      createConversationAndAddUserMessage({
+    String? conversationId,
+    ConversationConfig? conversationConfig,
+    String? templateId,
+    String? templateName,
+    String? templateContent,
+    String? contextSummary,
+    String? contextContent,
+    String? userQuery,
+    String? contextDataJson,
+  }) async {
+    // 生成或使用传入的 conversationId
+    final effectiveConversationId = conversationId ?? _uuid.v4();
+    final isNewConversation = conversationId == null;
+
+    // 如果是新对话，先创建对话记录
+    if (isNewConversation && conversationConfig != null) {
+      final providerService = AIProviderService.instance;
+      final entity = UnifiedConversationEntity.create(
+        conversationId: effectiveConversationId,
+        title: conversationConfig.title,
+        contextType: conversationConfig.contextType,
+        contextId: conversationConfig.contextId ?? '',
+        contextSnapshot: conversationConfig.contextSnapshot,
+        providerId: providerService.activeProvider?.id,
+        modelId: providerService.activeModelId,
+      );
+      await _db.saveUnifiedConversation(entity);
+    }
+
+    // 创建结构化用户消息
+    final userMessageId = _uuid.v4();
+    final message = UnifiedMessageEntity.createStructuredUserMessage(
+      messageId: userMessageId,
+      conversationId: effectiveConversationId,
+      templateId: templateId,
+      templateName: templateName,
+      templateContent: templateContent,
+      contextSummary: contextSummary,
+      contextContent: contextContent,
+      userQuery: userQuery,
+      contextDataJson: contextDataJson,
+    );
+
+    await _db.saveUnifiedMessage(message);
+    await _updateMessageCount(effectiveConversationId);
+
+    return (
+      conversationId: effectiveConversationId,
+      userMessageId: userMessageId,
+    );
+  }
+
   /// 添加助手消息
   ///
   /// [askId] 关联的用户问题 ID，指向触发这个回复的用户消息
@@ -590,11 +653,114 @@ class UnifiedConversationService {
 
   // ============ AI 交互 ============
 
+  /// 发送结构化消息并获取 AI 回复（流式）- 支持懒创建
+  ///
+  /// 这是推荐的发送方式，支持模版、上下文和追问问题的分离
+  ///
+  /// [conversationId] 可以为 null，此时会在发送消息时自动创建对话
+  /// [conversationConfig] 创建对话所需的配置（仅当 conversationId 为 null 时使用）
+  /// [debugContextData] 原始对话数据，用于调试日志，展示对话结构和选择情况
+  ///
+  /// 返回一个 Record：(Stream<String> stream, Future<String> conversationId)
+  /// - stream: AI 回复的流
+  /// - conversationId: 创建或使用的对话 ID（在流开始前即可获取）
+  ({Stream<String> stream, String conversationId}) sendStructuredMessageAndStreamWithLazyCreate({
+    String? conversationId,
+    ConversationConfig? conversationConfig,
+    String? templateId,
+    String? contextContent,
+    String? contextSummary,
+    String? userQuery,
+    String? contextDataJson,
+    Map<String, dynamic>? debugContextData,
+  }) {
+    // 如果没有传入 conversationId，生成一个新的
+    final effectiveConversationId = conversationId ?? _uuid.v4();
+
+    final stream = _sendStructuredMessageAndStreamInternal(
+      conversationId: effectiveConversationId,
+      isNewConversation: conversationId == null,
+      conversationConfig: conversationConfig,
+      templateId: templateId,
+      contextContent: contextContent,
+      contextSummary: contextSummary,
+      userQuery: userQuery,
+      contextDataJson: contextDataJson,
+      debugContextData: debugContextData,
+    );
+
+    return (stream: stream, conversationId: effectiveConversationId);
+  }
+
+  /// 内部方法：发送结构化消息并获取 AI 回复
+  Stream<String> _sendStructuredMessageAndStreamInternal({
+    required String conversationId,
+    required bool isNewConversation,
+    ConversationConfig? conversationConfig,
+    String? templateId,
+    String? contextContent,
+    String? contextSummary,
+    String? userQuery,
+    String? contextDataJson,
+    Map<String, dynamic>? debugContextData,
+  }) async* {
+    // 1. 获取模版
+    TaskTemplateEntity? template;
+    if (templateId != null) {
+      template = await PromptTemplateService.instance.getTemplate(templateId);
+      if (template != null) {
+        await PromptTemplateService.instance.incrementUsage(templateId);
+      }
+    }
+
+    // 2. 如果是新对话，先创建对话记录
+    if (isNewConversation && conversationConfig != null) {
+      final providerService = AIProviderService.instance;
+      final entity = UnifiedConversationEntity.create(
+        conversationId: conversationId,
+        title: conversationConfig.title,
+        contextType: conversationConfig.contextType,
+        contextId: conversationConfig.contextId ?? '',
+        contextSnapshot: conversationConfig.contextSnapshot,
+        providerId: providerService.activeProvider?.id,
+        modelId: providerService.activeModelId,
+      );
+      await _db.saveUnifiedConversation(entity);
+    }
+
+    // 3. 创建结构化消息
+    final userMessageId = _uuid.v4();
+    final message = UnifiedMessageEntity.createStructuredUserMessage(
+      messageId: userMessageId,
+      conversationId: conversationId,
+      templateId: templateId,
+      templateName: template?.name,
+      templateContent: template?.content,
+      contextSummary: contextSummary,
+      contextContent: contextContent,
+      userQuery: userQuery,
+      contextDataJson: contextDataJson,
+    );
+
+    await _db.saveUnifiedMessage(message);
+    await _updateMessageCount(conversationId);
+
+    // 4. 继续发送给 AI
+    yield* _streamAIResponse(
+      conversationId,
+      message.content,
+      userMessageId: userMessageId,
+      debugContextData: debugContextData,
+      debugContextSnapshot: contextContent,
+    );
+  }
+
   /// 发送结构化消息并获取 AI 回复（流式）
   ///
   /// 这是推荐的发送方式，支持模版、上下文和追加问题的分离
   ///
   /// [debugContextData] 原始对话数据，用于调试日志，展示对话结构和选择情况
+  @Deprecated('Use sendStructuredMessageAndStreamWithLazyCreate instead')
   Stream<String> sendStructuredMessageAndStream(
     String conversationId, {
     String? templateId,
