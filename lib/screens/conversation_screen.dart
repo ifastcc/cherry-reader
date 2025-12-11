@@ -130,6 +130,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   /// 滚动变化回调：更新当前轮次和滚动进度
+  ///
+  /// 核心逻辑：
+  /// 1. 找到当前与视口顶部相交或最接近的轮次
+  /// 2. 判断该轮次的内联 Tab 是否可见
+  /// 3. 计算滚动进度
   void _onScrollChanged() {
     // 【性能优化】节流：限制计算频率
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -143,17 +148,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final viewportTop = MediaQuery.of(context).padding.top + kToolbarHeight;
     final viewportHeight = MediaQuery.of(context).size.height - viewportTop;
 
-    // 遍历已渲染的 AutoScrollTag，找到当前可见的轮次
-    int visibleGroup = 0;
-    double progress = 0.0;
-    bool tabVisible = true; // 内联 Tab 是否可见
-
     // 通过 AutoScrollController 的 tagMap 获取已渲染的 items
     final tagMap = _scrollController.tagMap;
 
     // 【性能优化】从上次可见位置开始搜索，减少遍历次数
     final lastVisible = _currentVisibleGroupNotifier.value;
     final searchStart = (lastVisible - 2).clamp(0, groups.length - 1);
+
+    // 查找结果
+    int visibleGroup = _currentVisibleGroupNotifier.value; // 保持上次值作为默认
+    double progress = 0.0;
+    bool tabVisible = true;
+    bool found = false;
 
     for (var i = searchStart; i < groups.length; i++) {
       final tagState = tagMap[i];
@@ -169,19 +175,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
       final itemHeight = box.size.height;
       final itemBottom = itemTop + itemHeight;
 
-      // 判断这个 item 是否与视口顶部相交
+      // 情况 1：item 与视口顶部相交（主要可见区域）
       if (itemBottom > viewportTop && itemTop < viewportTop + 100) {
         visibleGroup = i;
+        tabVisible = _isInlineTabVisibleForGroup(i, viewportTop);
 
-        // 【性能优化】直接从 itemTop 推导内联 Tab 是否可见
-        // 内联 Tab 大约在 item 顶部 60px 的位置（Q标记 + padding）
-        // 如果 itemTop + 60 < viewportTop，说明 Tab 已滚出
-        tabVisible = itemTop + 60 > viewportTop;
-
-        // 已滚过的距离 = viewportTop - itemTop
         final scrolledDistance = viewportTop - itemTop;
-
-        // 对于最后一个 item，调整有效高度
         final isLastItem = i == groups.length - 1;
 
         double effectiveHeight;
@@ -190,25 +189,38 @@ class _ConversationScreenState extends State<ConversationScreen> {
         } else if (isLastItem && itemHeight <= viewportHeight) {
           effectiveHeight = 1;
           progress = scrolledDistance > 0 ? 1.0 : 0.0;
-          break;
         } else {
           effectiveHeight = itemHeight;
+          progress = (scrolledDistance / effectiveHeight).clamp(0.0, 1.0);
         }
 
-        progress = (scrolledDistance / effectiveHeight).clamp(0.0, 1.0);
+        found = true;
         break;
       }
 
-      // 如果 item 完全在视口上方（已滚过），继续找下一个
+      // 情况 2：item 完全在视口上方（已滚过）
       if (itemBottom <= viewportTop) {
         visibleGroup = i;
         progress = 1.0;
-        tabVisible = false; // 整个 item 都滚过了，Tab 肯定不可见
+        tabVisible = false;
+        // 不 break，继续找下一个（可能有更接近视口的 item）
         continue;
       }
 
-      // 如果 item 还在视口下方，跳出
-      if (itemTop > viewportTop + 100) {
+      // 情况 3：item 顶部刚好在视口顶部下方（即将进入）
+      // 这是从上一个轮次切换到这个轮次的过渡期
+      if (itemTop > viewportTop && itemTop <= viewportTop + 200) {
+        // 上一个轮次已滚出，这个轮次即将进入
+        // 切换到这个轮次，它的内联 Tab 应该是可见的
+        visibleGroup = i;
+        tabVisible = _isInlineTabVisibleForGroup(i, viewportTop);
+        progress = 0.0;
+        found = true;
+        break;
+      }
+
+      // 情况 4：item 还在视口下方太远，跳出
+      if (itemTop > viewportTop + 200) {
         break;
       }
     }
@@ -220,17 +232,37 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if ((progress - _currentGroupProgressNotifier.value).abs() > 0.01) {
       _currentGroupProgressNotifier.value = progress;
     }
-
-    // 【性能优化】Sticky Tab 可见性变化时更新 ValueNotifier，不触发 setState
     if (tabVisible != _currentGroupTabVisibleNotifier.value) {
       _currentGroupTabVisibleNotifier.value = tabVisible;
     }
   }
 
+  /// 【新增】精确判断指定轮次的内联 Tab 是否可见
+  /// 使用 GlobalKey 获取内联 Tab 的实际位置，而非估算
+  bool _isInlineTabVisibleForGroup(int groupIndex, double viewportTop) {
+    final tabKey = _inlineTabKeys[groupIndex];
+    if (tabKey?.currentContext == null) {
+      // Tab 还没渲染，默认可见（避免闪烁）
+      return true;
+    }
+
+    final RenderBox? tabBox = tabKey!.currentContext!.findRenderObject() as RenderBox?;
+    if (tabBox == null || !tabBox.hasSize) {
+      return true;
+    }
+
+    // 获取内联 Tab 相对于屏幕的位置
+    final tabPosition = tabBox.localToGlobal(Offset.zero);
+    final tabTop = tabPosition.dy;
+    final tabHeight = tabBox.size.height;
+    final tabBottom = tabTop + tabHeight;
+
+    // 如果 Tab 的底部还在视口顶部以下，说明 Tab 还可见
+    // 留 8px 的缓冲区，让切换更平滑
+    return tabBottom > viewportTop + 8;
+  }
+
   int _lastScrollUpdate = 0; // 节流用
-
-
-  // 【已废弃】_isInlineTabVisible 的计算已集成到 _onScrollChanged 中
 
   /// 处理滚动通知
   /// 【性能优化】使用 ValueNotifier 避免 setState

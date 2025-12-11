@@ -42,6 +42,9 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
   bool _showColorPicker = false;
   int _currentStyleIndex = 0;
 
+  // 悬浮工具栏展开状态
+  bool _fabExpanded = false;
+
   Color get _currentHighlightColor =>
       kHighlightStyles[_currentStyleIndex].color;
   String get _currentHighlightType => kHighlightStyles[_currentStyleIndex].type;
@@ -305,17 +308,6 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
               onPressed: _clearAllHighlights,
               tooltip: '清除所有高亮',
             ),
-          // TTS 播放按钮
-          Consumer<TtsProvider>(
-            builder: (context, tts, _) {
-              if (!tts.hasValidConfig) return const SizedBox.shrink();
-              return IconButton(
-                icon: const Icon(Icons.volume_up_rounded, color: Colors.black87),
-                onPressed: _playContent,
-                tooltip: '朗读全文',
-              );
-            },
-          ),
         ],
       ),
       body: GestureDetector(
@@ -407,7 +399,10 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
             // 高亮颜色选择器
             if (_showColorPicker && _toolbarPosition != null)
               _buildStylePicker(),
-            
+
+            // 悬浮操作工具栏
+            _buildFloatingToolbar(),
+
             // Mini Player
             const Positioned(
               left: 0,
@@ -496,14 +491,14 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
 
   void _playContent() {
     final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
-    
+
     // Split content by paragraphs to avoid too long text for one request
-    // Or just send the whole thing if it's not too huge. 
+    // Or just send the whole thing if it's not too huge.
     // Azure has limits. Better to split.
     // Simple split by double newline.
     final paragraphs = widget.content.split(RegExp(r'\n\s*\n'));
     final items = <TtsItem>[];
-    
+
     for (var i = 0; i < paragraphs.length; i++) {
       final text = paragraphs[i].trim();
       if (text.isNotEmpty) {
@@ -522,5 +517,184 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
         const SnackBar(content: Text('开始朗读全文...')),
       );
     }
+  }
+
+  void _copyContent() {
+    Clipboard.setData(ClipboardData(text: widget.content));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('已复制到剪贴板'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  /// 构建悬浮操作工具栏
+  Widget _buildFloatingToolbar() {
+    return Consumer<TtsProvider>(
+      builder: (context, tts, _) {
+        final hasValidTts = tts.hasValidConfig;
+
+        return Positioned(
+          right: 16,
+          bottom: 80, // 在 TtsMiniPlayer 上方
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // 展开的操作按钮
+              AnimatedOpacity(
+                opacity: _fabExpanded ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: AnimatedSlide(
+                  offset: _fabExpanded ? Offset.zero : const Offset(0, 0.5),
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  child: IgnorePointer(
+                    ignoring: !_fabExpanded,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // 朗读按钮（仅在配置有效时显示）
+                        if (hasValidTts) ...[
+                          _FloatingActionItem(
+                            icon: Icons.volume_up_rounded,
+                            label: '朗读',
+                            color: const Color(0xFF8B5CF6),
+                            onTap: () {
+                              setState(() => _fabExpanded = false);
+                              _playContent();
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        // 复制按钮
+                        _FloatingActionItem(
+                          icon: Icons.copy_rounded,
+                          label: '复制',
+                          color: const Color(0xFF10B981),
+                          onTap: () {
+                            setState(() => _fabExpanded = false);
+                            _copyContent();
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              // 主按钮
+              GestureDetector(
+                onTap: () {
+                  setState(() => _fabExpanded = !_fabExpanded);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: _fabExpanded
+                        ? Colors.grey[800]
+                        : const Color(0xFF8B5CF6),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: (_fabExpanded
+                            ? Colors.grey[800]!
+                            : const Color(0xFF8B5CF6)).withValues(alpha: 0.4),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: AnimatedRotation(
+                    turns: _fabExpanded ? 0.125 : 0, // 45度旋转
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(
+                      Icons.add,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 悬浮操作按钮项
+class _FloatingActionItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _FloatingActionItem({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 标签
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: Colors.grey[800],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // 图标按钮
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.4),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Icon(
+              icon,
+              color: Colors.white,
+              size: 22,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

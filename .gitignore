@@ -56,6 +56,11 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# iOS release artifacts (xcarchive, dSYM, ipa)
+release_ios/
+*.xcarchive
+*.ipa
+
 # act 本地测试
 .actrc
 .github/workflows/act-event.json
