@@ -46,7 +46,10 @@ class _ContextSelectorState extends State<ContextSelector> {
   @override
   void didUpdateWidget(ContextSelector oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.contextData != widget.contextData) {
+    // 检查 contextData 或 contextSnapshot 变化
+    if (oldWidget.contextData != widget.contextData ||
+        oldWidget.contextSnapshot != widget.contextSnapshot ||
+        oldWidget.currentRoundIndex != widget.currentRoundIndex) {
       _parseContextData();
       _initDefaultSelection();
     }

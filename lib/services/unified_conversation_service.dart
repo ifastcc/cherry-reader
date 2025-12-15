@@ -6,6 +6,7 @@ import 'isar_database.dart';
 import 'ai_provider_service.dart';
 import 'openai_service.dart';
 import 'prompt_template_service.dart';
+import 'streaming_session_manager.dart';
 
 /// 创建对话所需的配置
 ///
@@ -431,6 +432,32 @@ class UnifiedConversationService {
       await _db.deleteUnifiedConversation(conv.conversationId);
     }
     return conversations.length;
+  }
+
+  /// 删除空对话（没有用户消息的对话）
+  ///
+  /// 只删除 roundCount == 0 的对话（没有用户交互的对话），保留有内容的对话
+  /// 注意：即使对话有系统消息（contextSnapshot），但没有用户消息也视为空对话
+  /// 返回删除的对话数量
+  Future<int> deleteEmptyConversations() async {
+    final conversations = await _db.getUnifiedConversations(includeArchived: true);
+    int deletedCount = 0;
+
+    for (final conv in conversations) {
+      // 只删除没有用户消息的空对话（roundCount 统计的是用户消息数量）
+      if (conv.roundCount == 0) {
+        await _db.deleteUnifiedConversation(conv.conversationId);
+        deletedCount++;
+      }
+    }
+
+    return deletedCount;
+  }
+
+  /// 获取空对话数量（用于 UI 显示）
+  Future<int> getEmptyConversationCount() async {
+    final conversations = await _db.getUnifiedConversations(includeArchived: true);
+    return conversations.where((c) => c.roundCount == 0).length;
   }
 
   /// 归档对话
@@ -861,11 +888,12 @@ class UnifiedConversationService {
 
     // 4. 根据上下文类型构建要发送给模型的消息
     if (conversation?.contextType == ConversationContextType.messageGroup) {
-      // 对于「本轮对话的 AI 分析」，只使用：
-      // - 本轮对话的上下文快照（contextSnapshot）
-      // - 当前这次发送的用户消息（模版 + 追问）
+      // 对于「本轮对话的 AI 分析」：
+      // 1. 原始对话的上下文快照（contextSnapshot）
+      // 2. 完整的分析对话历史（之前的 user + assistant 消息）
+      // 这样 AI 能看到完整的对话上下文，包括之前的追问和回答
 
-      // 4.1 上下文快照（本轮对话的内容）
+      // 4.1 上下文快照（原始对话的内容，作为参考）
       final snapshot = conversation?.contextSnapshot;
       if (snapshot != null && snapshot.isNotEmpty) {
         apiMessages.add({
@@ -874,43 +902,65 @@ class UnifiedConversationService {
         });
       }
 
-      // 4.2 当前这一轮的用户消息（取最新的 user 消息）
-      UnifiedMessageEntity? lastUserMessage;
-      for (final m in messages.reversed) {
-        if (m.role == 'user') {
-          lastUserMessage = m;
-          break;
+      // 4.2 添加完整的对话历史（跳过 system 消息，因为 snapshot 已经包含了）
+      // 按 askId 分组找出主线消息
+      final mainlineAssistantIds = <String>{};
+      final assistantsByAskId = <String, List<UnifiedMessageEntity>>{};
+
+      for (final m in messages) {
+        if (m.role == 'assistant' && m.askId != null) {
+          assistantsByAskId.putIfAbsent(m.askId!, () => []).add(m);
         }
       }
 
-      if (lastUserMessage != null) {
-        // 如果是结构化消息，则用模版 + 用户追加问题组装本轮指令
-        final template = lastUserMessage.templateSnapshot;
-        final userQuery = lastUserMessage.userQuery;
+      // 每个 askId 组选择主线消息（isMainline=true 的，或第一个）
+      for (final entry in assistantsByAskId.entries) {
+        final group = entry.value;
+        final mainline = group.firstWhere(
+          (m) => m.isMainline,
+          orElse: () => group.first,
+        );
+        mainlineAssistantIds.add(mainline.messageId);
+      }
 
-        if ((template != null && template.isNotEmpty) ||
-            (userQuery != null && userQuery.isNotEmpty)) {
-          final buffer = StringBuffer();
+      // 构建消息列表（跳过 system 类型，因为 snapshot 已经作为 user 消息添加了）
+      for (final m in messages) {
+        if (m.role == 'system') {
+          // 跳过 system 消息，上面已经添加了 snapshot
+          continue;
+        } else if (m.role == 'user') {
+          // 用户消息：处理结构化消息
+          final template = m.templateSnapshot;
+          final userQuery = m.userQuery;
 
-          if (template != null && template.isNotEmpty) {
-            buffer.write(template);
+          if ((template != null && template.isNotEmpty) ||
+              (userQuery != null && userQuery.isNotEmpty)) {
+            final buffer = StringBuffer();
+            if (template != null && template.isNotEmpty) {
+              buffer.write(template);
+            }
+            if (userQuery != null && userQuery.isNotEmpty) {
+              if (buffer.isNotEmpty) buffer.write('\n\n');
+              buffer.write(userQuery);
+            }
+            apiMessages.add({
+              'role': 'user',
+              'content': buffer.isEmpty ? m.content : buffer.toString(),
+            });
+          } else {
+            apiMessages.add({
+              'role': 'user',
+              'content': m.content,
+            });
           }
-
-          if (userQuery != null && userQuery.isNotEmpty) {
-            if (buffer.isNotEmpty) buffer.write('\n\n');
-            buffer.write(userQuery);
+        } else if (m.role == 'assistant') {
+          // assistant 消息：只添加主线消息
+          if (m.askId == null || mainlineAssistantIds.contains(m.messageId)) {
+            apiMessages.add({
+              'role': 'assistant',
+              'content': m.content,
+            });
           }
-
-          apiMessages.add({
-            'role': 'user',
-            'content': buffer.isEmpty ? lastUserMessage.content : buffer.toString(),
-          });
-        } else {
-          // 兼容非结构化的老消息，直接使用内容
-          apiMessages.add({
-            'role': 'user',
-            'content': lastUserMessage.content,
-          });
         }
       }
     } else {
@@ -1008,7 +1058,14 @@ class UnifiedConversationService {
     );
     await _db.saveUnifiedMessage(assistantMessage);
 
-    // 6. 调用 API 并流式更新
+    // 6. 创建 StreamingSession（支持后台继续运行）
+    final sessionManager = StreamingSessionManager.instance;
+    final session = sessionManager.createSession(
+      conversationId: conversationId,
+      messageId: assistantMessageId,
+    );
+
+    // 7. 调用 API 并流式更新
     final service = OpenAIService(
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
@@ -1021,6 +1078,10 @@ class UnifiedConversationService {
         messages: apiMessages,
       )) {
         fullContent += chunk;
+
+        // 更新 session（支持后台继续和重新连接）
+        session.appendContent(chunk);
+
         yield chunk;
 
         // 每次收到内容都更新数据库
@@ -1032,6 +1093,7 @@ class UnifiedConversationService {
       }
 
       // 完成
+      session.complete();
       await updateMessageContent(
         assistantMessageId,
         fullContent,
@@ -1040,6 +1102,7 @@ class UnifiedConversationService {
       await _updateMessageCount(conversationId);
     } catch (e) {
       // 错误处理
+      session.setError(e.toString());
       final message = await _db.getUnifiedMessage(assistantMessageId);
       if (message != null) {
         message.status = 'error';
@@ -1197,7 +1260,14 @@ class UnifiedConversationService {
     final resetMessage = UnifiedMessageEntity.resetForRetry(message);
     await _db.saveUnifiedMessage(resetMessage);
 
-    // 6. 调用 API
+    // 6. 创建 StreamingSession（支持后台继续运行）
+    final sessionManager = StreamingSessionManager.instance;
+    final session = sessionManager.createSession(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+
+    // 7. 调用 API
     final service = OpenAIService(
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
@@ -1210,6 +1280,10 @@ class UnifiedConversationService {
         messages: apiMessages,
       )) {
         fullContent += chunk;
+
+        // 更新 session（支持后台继续和重新连接）
+        session.appendContent(chunk);
+
         yield chunk;
 
         // 更新数据库
@@ -1221,6 +1295,7 @@ class UnifiedConversationService {
       }
 
       // 完成
+      session.complete();
       await updateMessageContent(
         messageId,
         fullContent,
@@ -1228,6 +1303,7 @@ class UnifiedConversationService {
       );
     } catch (e) {
       // 错误处理
+      session.setError(e.toString());
       final msg = await _db.getUnifiedMessage(messageId);
       if (msg != null) {
         msg.status = 'error';

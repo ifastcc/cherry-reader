@@ -38,6 +38,9 @@ class UserPreferenceEntity {
   @Index()
   late bool isActive;
 
+  /// 默认模板 ID（用于新对话自动选择模板）
+  String? defaultTemplateId;
+
   /// 创建时间戳（毫秒）
   late int createdAt;
 

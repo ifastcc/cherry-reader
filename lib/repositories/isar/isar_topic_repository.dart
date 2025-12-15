@@ -41,7 +41,7 @@ class IsarTopicRepository implements ITopicRepository {
   @override
   Future<TopicModel?> getTopic(String topicId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entity = await isar.topicEntitys
           .filter()
           .topicIdEqualTo(topicId)
@@ -56,7 +56,7 @@ class IsarTopicRepository implements ITopicRepository {
   @override
   Future<List<TopicModel>> getAllTopics() async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entities = await isar.topicEntitys
           .where()
           .sortByUpdatedAtDesc()
@@ -71,7 +71,7 @@ class IsarTopicRepository implements ITopicRepository {
   @override
   Future<List<TopicModel>> getTopicsByAssistant(String assistantId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entities = await isar.topicEntitys
           .filter()
           .assistantIdEqualTo(assistantId)
@@ -87,7 +87,7 @@ class IsarTopicRepository implements ITopicRepository {
   @override
   Future<int> getTopicCount() async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       return isar.topicEntitys.count();
     } on IsarError catch (e) {
       print('❌ 获取话题数量失败: $e');
@@ -98,7 +98,7 @@ class IsarTopicRepository implements ITopicRepository {
   @override
   Future<int> getTopicCountByAssistant(String assistantId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       return isar.topicEntitys
           .filter()
           .assistantIdEqualTo(assistantId)
@@ -189,7 +189,7 @@ class IsarTopicRepository implements ITopicRepository {
     if (keyword.isEmpty) return [];
 
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entities = await isar.topicEntitys
           .filter()
           .nameContains(keyword, caseSensitive: false)

@@ -64,6 +64,7 @@ class ModelResponse {
 /// 1. 并行调用多个模型
 /// 2. 每个模型独立的流式返回
 /// 3. 聚合结果管理
+/// 4. 请求取消机制
 class MultiModelService {
   static MultiModelService? _instance;
   static MultiModelService get instance {
@@ -74,6 +75,17 @@ class MultiModelService {
   MultiModelService._();
 
   final AIProviderService _providerService = AIProviderService.instance;
+
+  // 当前活跃的 HTTP 客户端（用于取消请求）
+  final List<http.Client> _activeClients = [];
+
+  /// 取消所有正在进行的请求
+  void cancelAllRequests() {
+    for (final client in _activeClients) {
+      client.close();
+    }
+    _activeClients.clear();
+  }
 
   /// 并行调用多个模型
   ///
@@ -155,6 +167,10 @@ class MultiModelService {
     required ModelResponse response,
     required StreamController<String> streamController,
   }) async {
+    // 创建可取消的 HTTP 客户端
+    final client = http.Client();
+    _activeClients.add(client);
+
     try {
       final baseUrl = _normalizeBaseUrl(provider.apiHost);
       final url = Uri.parse('$baseUrl/chat/completions');
@@ -174,7 +190,7 @@ class MultiModelService {
       });
       request.body = json.encode(requestBody);
 
-      final streamedResponse = await request.send();
+      final streamedResponse = await client.send(request);
 
       if (streamedResponse.statusCode != 200) {
         final errorBody = await streamedResponse.stream.bytesToString();
@@ -215,6 +231,10 @@ class MultiModelService {
       response.setError(e.toString());
       streamController.addError(e);
       await streamController.close();
+    } finally {
+      // 清理客户端
+      _activeClients.remove(client);
+      client.close();
     }
   }
 

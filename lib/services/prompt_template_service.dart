@@ -116,6 +116,32 @@ class PromptTemplateService {
     }
   }
 
+  /// 获取默认模板
+  Future<TaskTemplateEntity?> getDefaultTemplate() async {
+    final preference = await getActivePreference();
+    if (preference?.defaultTemplateId == null) return null;
+
+    return getTemplate(preference!.defaultTemplateId!);
+  }
+
+  /// 设置默认模板
+  ///
+  /// [templateId] 模板 ID，传 null 表示取消默认模板
+  Future<void> setDefaultTemplate(String? templateId) async {
+    final preference = await getActivePreference();
+    if (preference == null) return;
+
+    final isar = await _db.instance;
+    preference.defaultTemplateId = templateId;
+    preference.updatedAt = DateTime.now().millisecondsSinceEpoch;
+
+    await isar.writeTxn(() async {
+      await isar.userPreferenceEntitys.put(preference);
+    });
+
+    _activePreference = preference;
+  }
+
   /// 删除偏好（不能删除唯一的偏好）
   Future<bool> deletePreference(String preferenceId) async {
     final isar = await _db.instance;

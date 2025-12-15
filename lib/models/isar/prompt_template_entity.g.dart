@@ -23,20 +23,25 @@ const UserPreferenceEntitySchema = CollectionSchema(
       name: r'createdAt',
       type: IsarType.long,
     ),
-    r'isActive': PropertySchema(id: 1, name: r'isActive', type: IsarType.bool),
-    r'name': PropertySchema(id: 2, name: r'name', type: IsarType.string),
+    r'defaultTemplateId': PropertySchema(
+      id: 1,
+      name: r'defaultTemplateId',
+      type: IsarType.string,
+    ),
+    r'isActive': PropertySchema(id: 2, name: r'isActive', type: IsarType.bool),
+    r'name': PropertySchema(id: 3, name: r'name', type: IsarType.string),
     r'preferenceId': PropertySchema(
-      id: 3,
+      id: 4,
       name: r'preferenceId',
       type: IsarType.string,
     ),
     r'systemPrompt': PropertySchema(
-      id: 4,
+      id: 5,
       name: r'systemPrompt',
       type: IsarType.string,
     ),
     r'updatedAt': PropertySchema(
-      id: 5,
+      id: 6,
       name: r'updatedAt',
       type: IsarType.long,
     ),
@@ -90,6 +95,12 @@ int _userPreferenceEntityEstimateSize(
   Map<Type, List<int>> allOffsets,
 ) {
   var bytesCount = offsets.last;
+  {
+    final value = object.defaultTemplateId;
+    if (value != null) {
+      bytesCount += 3 + value.length * 3;
+    }
+  }
   bytesCount += 3 + object.name.length * 3;
   bytesCount += 3 + object.preferenceId.length * 3;
   bytesCount += 3 + object.systemPrompt.length * 3;
@@ -103,11 +114,12 @@ void _userPreferenceEntitySerialize(
   Map<Type, List<int>> allOffsets,
 ) {
   writer.writeLong(offsets[0], object.createdAt);
-  writer.writeBool(offsets[1], object.isActive);
-  writer.writeString(offsets[2], object.name);
-  writer.writeString(offsets[3], object.preferenceId);
-  writer.writeString(offsets[4], object.systemPrompt);
-  writer.writeLong(offsets[5], object.updatedAt);
+  writer.writeString(offsets[1], object.defaultTemplateId);
+  writer.writeBool(offsets[2], object.isActive);
+  writer.writeString(offsets[3], object.name);
+  writer.writeString(offsets[4], object.preferenceId);
+  writer.writeString(offsets[5], object.systemPrompt);
+  writer.writeLong(offsets[6], object.updatedAt);
 }
 
 UserPreferenceEntity _userPreferenceEntityDeserialize(
@@ -118,12 +130,13 @@ UserPreferenceEntity _userPreferenceEntityDeserialize(
 ) {
   final object = UserPreferenceEntity();
   object.createdAt = reader.readLong(offsets[0]);
+  object.defaultTemplateId = reader.readStringOrNull(offsets[1]);
   object.id = id;
-  object.isActive = reader.readBool(offsets[1]);
-  object.name = reader.readString(offsets[2]);
-  object.preferenceId = reader.readString(offsets[3]);
-  object.systemPrompt = reader.readString(offsets[4]);
-  object.updatedAt = reader.readLong(offsets[5]);
+  object.isActive = reader.readBool(offsets[2]);
+  object.name = reader.readString(offsets[3]);
+  object.preferenceId = reader.readString(offsets[4]);
+  object.systemPrompt = reader.readString(offsets[5]);
+  object.updatedAt = reader.readLong(offsets[6]);
   return object;
 }
 
@@ -137,14 +150,16 @@ P _userPreferenceEntityDeserializeProp<P>(
     case 0:
       return (reader.readLong(offset)) as P;
     case 1:
-      return (reader.readBool(offset)) as P;
+      return (reader.readStringOrNull(offset)) as P;
     case 2:
-      return (reader.readString(offset)) as P;
+      return (reader.readBool(offset)) as P;
     case 3:
       return (reader.readString(offset)) as P;
     case 4:
       return (reader.readString(offset)) as P;
     case 5:
+      return (reader.readString(offset)) as P;
+    case 6:
       return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -503,6 +518,213 @@ extension UserPreferenceEntityQueryFilter
           upper: upper,
           includeUpper: includeUpper,
         ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdIsNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        const FilterCondition.isNull(property: r'defaultTemplateId'),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdIsNotNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        const FilterCondition.isNotNull(property: r'defaultTemplateId'),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdEqualTo(String? value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.equalTo(
+          property: r'defaultTemplateId',
+          value: value,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdGreaterThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.greaterThan(
+          include: include,
+          property: r'defaultTemplateId',
+          value: value,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdLessThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.lessThan(
+          include: include,
+          property: r'defaultTemplateId',
+          value: value,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdBetween(
+    String? lower,
+    String? upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.between(
+          property: r'defaultTemplateId',
+          lower: lower,
+          includeLower: includeLower,
+          upper: upper,
+          includeUpper: includeUpper,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdStartsWith(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.startsWith(
+          property: r'defaultTemplateId',
+          value: value,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdEndsWith(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.endsWith(
+          property: r'defaultTemplateId',
+          value: value,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.contains(
+          property: r'defaultTemplateId',
+          value: value,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.matches(
+          property: r'defaultTemplateId',
+          wildcard: pattern,
+          caseSensitive: caseSensitive,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.equalTo(property: r'defaultTemplateId', value: ''),
+      );
+    });
+  }
+
+  QueryBuilder<
+    UserPreferenceEntity,
+    UserPreferenceEntity,
+    QAfterFilterCondition
+  >
+  defaultTemplateIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.greaterThan(property: r'defaultTemplateId', value: ''),
       );
     });
   }
@@ -1239,6 +1461,20 @@ extension UserPreferenceEntityQuerySortBy
   }
 
   QueryBuilder<UserPreferenceEntity, UserPreferenceEntity, QAfterSortBy>
+  sortByDefaultTemplateId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'defaultTemplateId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<UserPreferenceEntity, UserPreferenceEntity, QAfterSortBy>
+  sortByDefaultTemplateIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'defaultTemplateId', Sort.desc);
+    });
+  }
+
+  QueryBuilder<UserPreferenceEntity, UserPreferenceEntity, QAfterSortBy>
   sortByIsActive() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'isActive', Sort.asc);
@@ -1322,6 +1558,20 @@ extension UserPreferenceEntityQuerySortThenBy
   thenByCreatedAtDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'createdAt', Sort.desc);
+    });
+  }
+
+  QueryBuilder<UserPreferenceEntity, UserPreferenceEntity, QAfterSortBy>
+  thenByDefaultTemplateId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'defaultTemplateId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<UserPreferenceEntity, UserPreferenceEntity, QAfterSortBy>
+  thenByDefaultTemplateIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'defaultTemplateId', Sort.desc);
     });
   }
 
@@ -1420,6 +1670,16 @@ extension UserPreferenceEntityQueryWhereDistinct
   }
 
   QueryBuilder<UserPreferenceEntity, UserPreferenceEntity, QDistinct>
+  distinctByDefaultTemplateId({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(
+        r'defaultTemplateId',
+        caseSensitive: caseSensitive,
+      );
+    });
+  }
+
+  QueryBuilder<UserPreferenceEntity, UserPreferenceEntity, QDistinct>
   distinctByIsActive() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'isActive');
@@ -1472,6 +1732,13 @@ extension UserPreferenceEntityQueryProperty
   createdAtProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'createdAt');
+    });
+  }
+
+  QueryBuilder<UserPreferenceEntity, String?, QQueryOperations>
+  defaultTemplateIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'defaultTemplateId');
     });
   }
 

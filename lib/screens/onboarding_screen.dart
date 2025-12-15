@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:file_picker/file_picker.dart';
 import '../services/webdav_service.dart';
+import '../services/local_folder_sync_service.dart';
+import '../utils/platform_utils.dart';
 
 /// 首次启动引导页面
 class OnboardingScreen extends StatefulWidget {
@@ -71,6 +74,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _isTestingConnection = false;
   bool _connectionTestPassed = false;
 
+  // 本地文件夹配置控制器
+  final _localFolderPathController = TextEditingController();
+  bool _isValidatingFolder = false;
+  bool _localFolderValidated = false;
+
   @override
   void dispose() {
     _pageController.dispose();
@@ -78,6 +86,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _webdavUsernameController.dispose();
     _webdavPasswordController.dispose();
     _webdavPathController.dispose();
+    _localFolderPathController.dispose();
     super.dispose();
   }
 
@@ -104,6 +113,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (_selectedMode == DataLoadMode.webdav) {
       return 4; // 欢迎 + 原理 + 选择模式 + WebDAV配置
     }
+    // 如果选择了本地文件夹模式，也多一个配置页
+    if (_selectedMode == DataLoadMode.localFolder) {
+      return 4; // 欢迎 + 原理 + 选择模式 + 本地文件夹配置
+    }
     return 3; // 欢迎 + 原理 + 选择模式
   }
 
@@ -121,6 +134,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           path: _webdavPathController.text.trim(),
         );
         await WebDavService.saveConfig(config);
+      }
+
+      // 如果选择了本地文件夹，保存配置
+      if (_selectedMode == DataLoadMode.localFolder) {
+        final config = LocalFolderConfig(
+          folderPath: _localFolderPathController.text.trim(),
+        );
+        await LocalFolderSyncService.saveConfig(config);
       }
     }
 
@@ -199,6 +220,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   _buildHowItWorksPage(),
                   _buildChooseModePage(),
                   if (_selectedMode == DataLoadMode.webdav) _buildWebDavConfigPage(),
+                  if (_selectedMode == DataLoadMode.localFolder) _buildLocalFolderConfigPage(),
                 ],
               ),
             ),
@@ -577,6 +599,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   /// 选择模式页
   Widget _buildChooseModePage() {
+    // 桌面端默认推荐本地文件夹
+    final isDesktop = PlatformUtils.supportsLocalFolderSync;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxHeight < 500;
@@ -609,13 +634,26 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
               SizedBox(height: isCompact ? 24 : 48),
 
-              // WebDAV 选项（推荐）
+              // 桌面端：本地文件夹选项（推荐）
+              if (isDesktop) ...[
+                _buildModeCard(
+                  mode: DataLoadMode.localFolder,
+                  icon: Icons.folder_copy,
+                  title: '本地文件夹监听',
+                  description: '选择 Cherry Studio 备份目录\n自动监听文件变化并加载',
+                  isRecommended: true,
+                  compact: isCompact,
+                ),
+                SizedBox(height: isCompact ? 12 : 16),
+              ],
+
+              // WebDAV 选项
               _buildModeCard(
                 mode: DataLoadMode.webdav,
                 icon: Icons.cloud_sync,
                 title: 'WebDAV 自动同步',
                 description: '配置一次，自动保持同步\n推荐与 Cherry Studio 配合使用',
-                isRecommended: true,
+                isRecommended: !isDesktop, // 移动端推荐
                 compact: isCompact,
               ),
 
@@ -957,6 +995,192 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ],
       ),
     );
+  }
+
+  /// 本地文件夹配置页
+  Widget _buildLocalFolderConfigPage() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Text(
+              '选择备份目录',
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          Center(
+            child: Text(
+              '选择 Cherry Studio 的备份文件夹',
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 16,
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 32),
+
+          // 配置提示
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.blue[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue[200]!),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.lightbulb_outline, color: Colors.blue[800], size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      '如何找到备份目录',
+                      style: TextStyle(
+                        color: Colors.blue[900],
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '在 Cherry Studio 中：\n'
+                  '设置 → 数据设置 → 本地备份 → 备份目录\n\n'
+                  '选择与 Cherry Studio 相同的备份目录即可',
+                  style: TextStyle(
+                    color: Colors.blue[900],
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // 文件夹选择
+          const Text(
+            '备份文件夹',
+            style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _localFolderPathController,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    hintText: '点击右侧按钮选择',
+                    prefixIcon: Icon(Icons.folder),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: _selectLocalFolder,
+                icon: const Icon(Icons.folder_open),
+                label: const Text('选择'),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 24),
+
+          // 验证按钮
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _isValidatingFolder ? null : _validateLocalFolder,
+              icon: _isValidatingFolder
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      _localFolderValidated ? Icons.check_circle : Icons.search,
+                      color: _localFolderValidated ? Colors.green : null,
+                    ),
+              label: Text(
+                _isValidatingFolder
+                    ? '验证中...'
+                    : (_localFolderValidated ? '验证通过' : '验证文件夹'),
+              ),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                foregroundColor: _localFolderValidated ? Colors.green : null,
+                side: _localFolderValidated
+                    ? const BorderSide(color: Colors.green)
+                    : null,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 选择本地文件夹
+  Future<void> _selectLocalFolder() async {
+    final result = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: '选择 Cherry Studio 备份目录',
+    );
+
+    if (result != null) {
+      setState(() {
+        _localFolderPathController.text = result;
+        _localFolderValidated = false; // 重置验证状态
+      });
+    }
+  }
+
+  /// 验证本地文件夹
+  Future<void> _validateLocalFolder() async {
+    final path = _localFolderPathController.text.trim();
+    if (path.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('请先选择文件夹'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() {
+      _isValidatingFolder = true;
+      _localFolderValidated = false;
+    });
+
+    final (success, message) = await LocalFolderSyncService.validateFolder(path);
+
+    setState(() {
+      _isValidatingFolder = false;
+      _localFolderValidated = success;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '✅ $message' : '❌ $message'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
   }
 
   /// 底部导航按钮

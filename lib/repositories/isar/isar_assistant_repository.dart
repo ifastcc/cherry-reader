@@ -43,7 +43,7 @@ class IsarAssistantRepository implements IAssistantRepository {
   @override
   Future<List<AssistantModel>> getAllAssistants() async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entities = await isar.assistantEntitys
           .where()
           .sortByName()
@@ -58,7 +58,7 @@ class IsarAssistantRepository implements IAssistantRepository {
   @override
   Future<AssistantModel?> getAssistant(String assistantId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entity = await isar.assistantEntitys
           .filter()
           .assistantIdEqualTo(assistantId)
@@ -73,7 +73,7 @@ class IsarAssistantRepository implements IAssistantRepository {
   @override
   Future<int> getAssistantCount() async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       return isar.assistantEntitys.count();
     } on IsarError catch (e) {
       print('❌ 获取助手数量失败: $e');

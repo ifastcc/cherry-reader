@@ -23,6 +23,7 @@ dependencies:
   # 文件操作
   file_picker: ^8.1.6             # 文件选择器（需要 8.x 支持新 Flutter embedding API）
   path_provider: ^2.1.1           # 获取应用目录
+  watcher: ^1.1.0                 # 文件系统监听（桌面端本地文件夹同步）
 
   # 网络请求
   http: ^1.1.0                    # HTTP 客户端

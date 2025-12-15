@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/isar/unified_conversation_entity.dart';
@@ -7,6 +8,7 @@ import '../services/unified_conversation_service.dart';
 import '../services/ai_provider_service.dart';
 import '../services/prompt_template_service.dart';
 import '../services/multi_model_service.dart' as multi_model;
+import '../services/streaming_session_manager.dart';
 import '../utils/mention_parser.dart';
 import '../widgets/unified_markdown_renderer.dart';
 import '../widgets/context_selector.dart';
@@ -56,11 +58,19 @@ class _AIChatScreenState extends State<AIChatScreen> {
   final _service = UnifiedConversationService.instance;
   final _templateService = PromptTemplateService.instance;
   final _multiModelService = multi_model.MultiModelService.instance;
+  final _sessionManager = StreamingSessionManager.instance;
   final _mentionParser = MentionParser();
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _inputFocusNode = FocusNode();
   final _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // Session 订阅（用于监听后台继续的流式响应）
+  StreamSubscription<String>? _sessionContentSubscription;
+  StreamSubscription<StreamingSessionStatus>? _sessionStatusSubscription;
+
+  // 重试订阅（用于监听多模型重试的流式响应）
+  StreamSubscription<String>? _retrySubscription;
 
   List<UnifiedConversationEntity> _conversations = [];
   String? _activeConversationId;
@@ -69,6 +79,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
   // 模版相关
   List<TaskTemplateEntity> _templates = [];
   TaskTemplateEntity? _selectedTemplate;
+  String? _defaultTemplateId;  // 默认模板 ID
 
   bool _isLoading = true;
   bool _isSending = false;
@@ -108,11 +119,73 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
   @override
   void dispose() {
+    // 取消所有订阅（但不取消后台任务）
+    _sessionContentSubscription?.cancel();
+    _sessionStatusSubscription?.cancel();
+    _retrySubscription?.cancel();
     _hideModelSelectorOverlay();
     _inputController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
     super.dispose();
+  }
+
+  /// 检查并重新连接到活跃的 session
+  ///
+  /// 当用户返回到之前离开的对话时，如果后台有正在运行的流式响应，
+  /// 可以重新连接并继续显示
+  void _checkAndReconnectSession(String conversationId) {
+    // 先取消之前的订阅
+    _sessionContentSubscription?.cancel();
+    _sessionStatusSubscription?.cancel();
+
+    final session = _sessionManager.getSession(conversationId);
+    if (session == null) return;
+
+    if (session.isActive) {
+      // 有活跃的 session，重新连接
+      setState(() {
+        _isSending = true;
+        _streamingContent = session.content;
+      });
+
+      // 监听后续内容
+      _sessionContentSubscription = session.contentStream.listen(
+        (content) {
+          if (mounted) {
+            setState(() {
+              _streamingContent = content;
+            });
+            _scrollToBottom();
+          }
+        },
+        onError: (e) {
+          if (mounted) {
+            setState(() {
+              _isSending = false;
+              _streamingContent = '';
+            });
+          }
+        },
+      );
+
+      // 监听状态变化
+      _sessionStatusSubscription = session.statusStream.listen(
+        (status) {
+          if (mounted && status != StreamingSessionStatus.streaming) {
+            setState(() {
+              _isSending = false;
+              _streamingContent = '';
+            });
+            // 刷新消息列表
+            _loadMessages();
+          }
+        },
+      );
+    } else if (session.status == StreamingSessionStatus.completed) {
+      // Session 已完成，刷新消息列表即可
+      _loadMessages();
+    }
   }
 
   /// 设置输入监听器，检测 @mention
@@ -267,8 +340,19 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
   Future<void> _loadTemplates() async {
     _templates = await _templateService.getAllTemplates();
-    // 默认不使用模板，让用户自行选择
-    _selectedTemplate = null;
+
+    // 获取默认模板 ID
+    final preference = await _templateService.getActivePreference();
+    _defaultTemplateId = preference?.defaultTemplateId;
+
+    // 如果是新对话（没有消息），加载默认模板
+    final hasUserMessage = _messages.any((m) => m.role == 'user');
+    if (!hasUserMessage) {
+      _selectedTemplate = await _templateService.getDefaultTemplate();
+    } else {
+      // 已有对话历史，不使用模板
+      _selectedTemplate = null;
+    }
   }
 
   Future<void> _loadMessages() async {
@@ -297,6 +381,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
       _currentContextSummary = contextSummary;
       _structuredContext = structuredContext;
     });
+
+    // 检查是否有后台继续运行的流式响应，如果有则重新连接
+    _checkAndReconnectSession(_activeConversationId!);
 
     _scrollToBottom();
   }
@@ -523,6 +610,13 @@ class _AIChatScreenState extends State<AIChatScreen> {
       // 重新加载消息和对话列表
       await _loadMessages();
       await _loadConversations();
+
+      // 第一次发送后清除模板（模板只用于第一轮）
+      if (mounted) {
+        setState(() {
+          _selectedTemplate = null;
+        });
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -533,10 +627,13 @@ class _AIChatScreenState extends State<AIChatScreen> {
         );
       }
     } finally {
-      setState(() {
-        _isSending = false;
-        _streamingContent = '';
-      });
+      // 检查 mounted 再 setState（后台任务会继续运行）
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+          _streamingContent = '';
+        });
+      }
     }
   }
 
@@ -583,6 +680,8 @@ class _AIChatScreenState extends State<AIChatScreen> {
       }
 
       await for (final chunk in result.stream) {
+        // 如果 widget 已 dispose，流会在后台继续运行
+        if (!mounted) break;
         setState(() {
           _streamingContent += chunk;
         });
@@ -664,6 +763,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
       messages: messages,
     );
 
+    // 【修复】检查 mounted 再 setState
+    if (!mounted) return;
+
     setState(() {
       _multiModelResponses = responses;
     });
@@ -692,6 +794,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
     }
 
     // 6. 清空临时展示数据（已保存到数据库）
+    // 【修复】检查 mounted 再 setState
+    if (!mounted) return;
+
     setState(() {
       _multiModelResponses = null;
       _isMultiModelMode = false;
@@ -1550,11 +1655,16 @@ class _AIChatScreenState extends State<AIChatScreen> {
     try {
       // 调用 service 层的重试方法
       await for (final chunk in _service.regenerateAssistantMessage(messageId)) {
+        // 如果 widget 已 dispose，流会在后台继续运行
+        if (!mounted) break;
         setState(() {
           _streamingContent += chunk;
         });
         _scrollToBottom();
       }
+
+      // 检查 mounted 再继续
+      if (!mounted) return;
 
       // 完成后刷新消息列表
       await _loadMessages();
@@ -1564,6 +1674,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
         _streamingContent = '';
       });
     } catch (e) {
+      // 检查 mounted 再 setState
+      if (!mounted) return;
+
       setState(() {
         _isSending = false;
         _streamingContent = '';
@@ -1611,6 +1724,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
         messages: _lastMultiModelMessages!,
       );
 
+      // 检查 mounted 再 setState
+      if (!mounted) return;
+
       // 更新响应 Map
       setState(() {
         _multiModelResponses = {
@@ -1619,12 +1735,18 @@ class _AIChatScreenState extends State<AIChatScreen> {
         };
       });
 
+      // 取消之前的重试订阅
+      _retrySubscription?.cancel();
+
       // 监听流完成
-      newResponse.contentStream.listen(
+      _retrySubscription = newResponse.contentStream.listen(
         (_) {
           // 流式更新会通过 ModelResponseCard 的监听自动处理
         },
         onDone: () async {
+          // 检查 mounted 再继续
+          if (!mounted) return;
+
           // 完成后保存到数据库
           if (newResponse.fullContent.isNotEmpty && newResponse.error == null) {
             await _service.addAssistantMessage(
@@ -1636,11 +1758,15 @@ class _AIChatScreenState extends State<AIChatScreen> {
               isMainline: false,  // 重试的回复默认不是主线
             );
           }
-          setState(() {});
+          if (mounted) {
+            setState(() {});
+          }
         },
         onError: (e) {
           // 错误已在 response 中处理
-          setState(() {});
+          if (mounted) {
+            setState(() {});
+          }
         },
       );
     } catch (e) {
@@ -1905,6 +2031,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
     final hasUserMessage = _messages.any((m) => m.role == 'user');
     final showContextButton = hasContext && !hasUserMessage;
 
+    // 模板只在第一轮显示（没有用户消息时）
+    final showTemplateSelector = !hasUserMessage;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1923,86 +2052,90 @@ class _AIChatScreenState extends State<AIChatScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 工具 chips 行
-          Row(
-            children: [
-              // Context 按钮（首次发送前显示）
-              if (showContextButton) ...[
-                _buildContextChip(),
-                const SizedBox(width: 8),
-              ],
+          // 工具 chips 行（只在第一轮显示）
+          if (showContextButton || showTemplateSelector)
+            Row(
+              children: [
+                // Context 按钮（首次发送前显示）
+                if (showContextButton) ...[
+                  _buildContextChip(),
+                  const SizedBox(width: 8),
+                ],
 
-              // 模版选择
-              InkWell(
-                onTap: _showTemplateSelector,
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _selectedTemplate != null
-                        ? Colors.purple.withAlpha(26)
-                        : Colors.grey.withAlpha(26),
+                // 模版选择（只在第一轮显示）
+                if (showTemplateSelector)
+                  InkWell(
+                    onTap: _showTemplateSelector,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _selectedTemplate != null
-                          ? Colors.purple.withAlpha(77)
-                          : Colors.grey.withAlpha(77),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _selectedTemplate != null
+                            ? Colors.purple.withAlpha(26)
+                            : Colors.grey.withAlpha(26),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _selectedTemplate != null
+                              ? Colors.purple.withAlpha(77)
+                              : Colors.grey.withAlpha(77),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.description,
+                            size: 14,
+                            color: _selectedTemplate != null
+                                ? Colors.purple
+                                : Colors.grey[600],
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _selectedTemplate?.name ?? '模板',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: _selectedTemplate != null
+                                  ? Colors.purple
+                                  : Colors.grey[600],
+                            ),
+                          ),
+                          if (_selectedTemplate != null) ...[
+                            const SizedBox(width: 4),
+                            InkWell(
+                              onTap: () => _showTemplateContent(_selectedTemplate!),
+                              child: Icon(
+                                Icons.visibility_outlined,
+                                size: 14,
+                                color: Colors.purple[400],
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            InkWell(
+                              onTap: () => setState(() => _selectedTemplate = null),
+                              child: Icon(
+                                Icons.close,
+                                size: 14,
+                                color: Colors.purple[400],
+                              ),
+                            ),
+                          ] else
+                            Icon(
+                              Icons.arrow_drop_down,
+                              size: 16,
+                              color: Colors.grey[600],
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.description,
-                        size: 14,
-                        color: _selectedTemplate != null
-                            ? Colors.purple
-                            : Colors.grey[600],
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _selectedTemplate?.name ?? '模板',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _selectedTemplate != null
-                              ? Colors.purple
-                              : Colors.grey[600],
-                        ),
-                      ),
-                      if (_selectedTemplate != null) ...[
-                        const SizedBox(width: 4),
-                        InkWell(
-                          onTap: () => _showTemplateContent(_selectedTemplate!),
-                          child: Icon(
-                            Icons.visibility_outlined,
-                            size: 14,
-                            color: Colors.purple[400],
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        InkWell(
-                          onTap: () => setState(() => _selectedTemplate = null),
-                          child: Icon(
-                            Icons.close,
-                            size: 14,
-                            color: Colors.purple[400],
-                          ),
-                        ),
-                      ] else
-                        Icon(
-                          Icons.arrow_drop_down,
-                          size: 16,
-                          color: Colors.grey[600],
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-              const Spacer(),
-            ],
-          ),
+                const Spacer(),
+              ],
+            ),
 
-          const SizedBox(height: 8),
+          // 仅当有工具栏时添加间距
+          if (showContextButton || showTemplateSelector)
+            const SizedBox(height: 8),
 
           // 输入框和发送按钮
           Row(
@@ -2197,7 +2330,16 @@ class _AIChatScreenState extends State<AIChatScreen> {
                   color: _selectedTemplate == null ? Colors.blue : Colors.grey,
                 ),
                 title: const Text('不使用模板'),
+                subtitle: _defaultTemplateId == null
+                    ? const Text('默认', style: TextStyle(fontSize: 12, color: Colors.blue))
+                    : null,
                 selected: _selectedTemplate == null,
+                trailing: _defaultTemplateId != null
+                    ? TextButton(
+                        onPressed: () => _setDefaultTemplate(null),
+                        child: const Text('设为默认', style: TextStyle(fontSize: 12)),
+                      )
+                    : null,
                 onTap: () {
                   setState(() => _selectedTemplate = null);
                   Navigator.pop(context);
@@ -2210,13 +2352,32 @@ class _AIChatScreenState extends State<AIChatScreen> {
                 final template = _templates[index];
                 final isSelected =
                     _selectedTemplate?.templateId == template.templateId;
+                final isDefault = _defaultTemplateId == template.templateId;
 
                 return ListTile(
                   leading: Icon(
                     template.isBuiltIn ? Icons.lock : Icons.description,
                     color: isSelected ? Colors.purple : Colors.grey,
                   ),
-                  title: Text(template.name),
+                  title: Row(
+                    children: [
+                      Text(template.name),
+                      if (isDefault) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withAlpha(26),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text(
+                            '默认',
+                            style: TextStyle(fontSize: 10, color: Colors.blue),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                   subtitle: template.description != null
                       ? Text(
                           template.description!,
@@ -2225,15 +2386,27 @@ class _AIChatScreenState extends State<AIChatScreen> {
                         )
                       : null,
                   selected: isSelected,
-                  trailing: !template.isBuiltIn
-                      ? IconButton(
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 设为默认按钮
+                      if (!isDefault)
+                        IconButton(
+                          icon: const Icon(Icons.push_pin_outlined, size: 18),
+                          tooltip: '设为默认',
+                          onPressed: () => _setDefaultTemplate(template.templateId),
+                        ),
+                      // 编辑按钮（仅非内置模板）
+                      if (!template.isBuiltIn)
+                        IconButton(
                           icon: const Icon(Icons.edit, size: 18),
                           onPressed: () {
                             Navigator.pop(context);
                             _showTemplateEditor(template);
                           },
-                        )
-                      : null,
+                        ),
+                    ],
+                  ),
                   onTap: () {
                     setState(() => _selectedTemplate = template);
                     Navigator.pop(context);
@@ -2245,6 +2418,23 @@ class _AIChatScreenState extends State<AIChatScreen> {
         ),
       ],
     );
+  }
+
+  /// 设置默认模板
+  Future<void> _setDefaultTemplate(String? templateId) async {
+    await _templateService.setDefaultTemplate(templateId);
+    setState(() {
+      _defaultTemplateId = templateId;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(templateId == null ? '已取消默认模板' : '已设为默认模板'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
   }
 
   void _showTemplateEditor(TaskTemplateEntity? template) {

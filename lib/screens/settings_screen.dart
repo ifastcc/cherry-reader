@@ -1,17 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
+import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:file_picker/file_picker.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/webdav_service.dart';
+import '../services/local_folder_sync_service.dart';
 import '../services/streaming_tts_service.dart';
 import '../services/tts_cache_manager.dart';
 import '../services/ai_provider_service.dart';
+import '../services/cherry_export_service.dart';
+import '../services/isar_database.dart';
+import '../services/version_service.dart';
+import '../models/domain/data_version.dart';
+import '../models/isar/assistant_entity.dart';
+import '../models/isar/topic_entity.dart';
+import '../models/isar/message_entity.dart';
+import '../models/isar/message_block_entity.dart';
 import '../models/tts_settings.dart';
 import '../providers/tts_provider.dart';
+import '../utils/platform_utils.dart';
 import 'package:just_audio/just_audio.dart';
 import 'ai_provider_screen.dart';
 import 'onboarding_screen.dart';
@@ -47,6 +60,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   DataLoadMode _loadMode = DataLoadMode.manual;
   bool _isTestingConnection = false;
 
+  // 本地文件夹配置
+  late TextEditingController _localFolderPathController;
+  bool _isValidatingFolder = false;
+
   // TTS 配置
   // late TextEditingController _azureKeyController; // Deprecated: single key
   late TextEditingController _azureRegionController;
@@ -77,6 +94,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavUsernameController = TextEditingController();
     _webdavPasswordController = TextEditingController();
     _webdavPathController = TextEditingController();
+    _localFolderPathController = TextEditingController();
     // _azureKeyController = TextEditingController();
     _azureRegionController = TextEditingController();
     _loadSettings();
@@ -91,6 +109,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavUsernameController.dispose();
     _webdavPasswordController.dispose();
     _webdavPathController.dispose();
+    _localFolderPathController.dispose();
     // _azureKeyController.dispose();
     for (var controller in _azureKeyControllers) {
       controller.dispose();
@@ -120,6 +139,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final loadMode = await WebDavService.getLoadMode();
     final webdavConfig = await WebDavService.loadConfig();
 
+    // 加载本地文件夹配置
+    final localFolderConfig = await LocalFolderSyncService.loadConfig();
+
     // 加载列数设置
     final columnsPerView = prefs.getInt(_keyColumnsPerView) ?? 2;
 
@@ -140,6 +162,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _webdavUsernameController.text = webdavConfig.username;
       _webdavPasswordController.text = webdavConfig.password;
       _webdavPathController.text = webdavConfig.path;
+      _localFolderPathController.text = localFolderConfig.folderPath;
       _columnsPerView = columnsPerView;
       
       // Load Azure Keys
@@ -409,6 +432,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const SizedBox(height: 16),
 
+                    // 【新增】版本管理部分
+                    _buildVersionManagementSection(),
+
+                    const SizedBox(height: 16),
+
                     // 显示设置部分
                     _buildDisplaySettingsSection(),
 
@@ -436,6 +464,263 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
     );
+  }
+
+  /// 【新增】构建版本管理部分
+  Widget _buildVersionManagementSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.history, color: Colors.purple[300], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '版本管理',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '管理导入的数据版本，支持切换历史版本',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 16),
+
+            // 使用 FutureBuilder 获取版本列表
+            FutureBuilder<List<DataVersion>>(
+              future: VersionService.instance.listVersions(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: CircularProgressIndicator(),
+                    ),
+                  );
+                }
+
+                final versions = snapshot.data ?? [];
+
+                if (versions.isEmpty) {
+                  return Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.grey[500]),
+                        const SizedBox(width: 8),
+                        const Text('暂无版本数据'),
+                      ],
+                    ),
+                  );
+                }
+
+                // 找到当前活跃版本
+                final activeVersion = versions.firstWhere(
+                  (v) => v.status == VersionStatus.active,
+                  orElse: () => versions.first,
+                );
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 当前版本信息
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.check_circle, color: Colors.green[600], size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '当前版本: ${activeVersion.displayName}',
+                                  style: const TextStyle(fontWeight: FontWeight.w500),
+                                ),
+                                Text(
+                                  '${activeVersion.topicCount} 话题 • ${activeVersion.formattedSize}',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (activeVersion.isLocked)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.orange[100],
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.lock, size: 14, color: Colors.orange[700]),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '已锁定',
+                                    style: TextStyle(fontSize: 11, color: Colors.orange[700]),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // 锁定开关
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('锁定当前版本'),
+                      subtitle: Text(
+                        '锁定后不会自动切换到新版本',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                      value: activeVersion.isLocked,
+                      onChanged: (value) async {
+                        await VersionService.instance.setVersionLocked(value);
+                        setState(() {}); // 刷新 UI
+                      },
+                    ),
+
+                    const Divider(),
+
+                    // 历史版本列表
+                    if (versions.length > 1) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        '历史版本',
+                        style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+                      ),
+                      const SizedBox(height: 8),
+                      ...versions
+                          .where((v) => v.status != VersionStatus.active)
+                          .map((version) => _buildVersionListItem(version)),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建版本列表项
+  Widget _buildVersionListItem(DataVersion version) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.archive, color: Colors.grey[400], size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(version.displayName),
+                Text(
+                  '${version.topicCount} 话题 • ${version.formattedSize}',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              final success = await VersionService.instance.activateVersion(
+                version.versionId,
+                force: true,
+              );
+              if (success && mounted) {
+                setState(() {});
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('已切换到版本: ${version.displayName}'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+            },
+            child: const Text('切换'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 20),
+            color: Colors.red[300],
+            onPressed: () => _confirmDeleteVersion(version),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 确认删除版本
+  Future<void> _confirmDeleteVersion(DataVersion version) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除版本'),
+        content: Text('确定要删除版本 "${version.displayName}" 吗？\n\n此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await VersionService.instance.deleteVersion(version.versionId);
+        if (mounted) {
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('版本已删除'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('删除失败: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 
   /// 构建显示设置部分
@@ -520,20 +805,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              '支持手动加载或从 WebDAV 自动同步 Cherry Studio 备份文件',
+              PlatformUtils.supportsLocalFolderSync
+                  ? '支持手动加载、本地文件夹监听或 WebDAV 自动同步'
+                  : '支持手动加载或从 WebDAV 自动同步 Cherry Studio 备份文件',
               style: TextStyle(color: Colors.grey[400], fontSize: 13),
             ),
             const SizedBox(height: 16),
 
             // 模式切换
             SegmentedButton<DataLoadMode>(
-              segments: const [
-                ButtonSegment(
+              segments: [
+                const ButtonSegment(
                   value: DataLoadMode.manual,
                   label: Text('手动加载'),
                   icon: Icon(Icons.folder_open),
                 ),
-                ButtonSegment(
+                // 仅桌面端显示本地文件夹选项
+                if (PlatformUtils.supportsLocalFolderSync)
+                  const ButtonSegment(
+                    value: DataLoadMode.localFolder,
+                    label: Text('本地文件夹'),
+                    icon: Icon(Icons.folder_copy),
+                  ),
+                const ButtonSegment(
                   value: DataLoadMode.webdav,
                   label: Text('WebDAV'),
                   icon: Icon(Icons.cloud),
@@ -546,6 +840,96 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 await WebDavService.setLoadMode(mode);
               },
             ),
+
+            // 本地文件夹配置表单
+            if (_loadMode == DataLoadMode.localFolder) ...[
+              const SizedBox(height: 24),
+
+              // 说明
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[100]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.blue[700], size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          '如何找到备份目录',
+                          style: TextStyle(
+                            color: Colors.blue[800],
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Cherry Studio：设置 → 数据设置 → 本地备份 → 备份目录',
+                      style: TextStyle(color: Colors.blue[800], fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // 文件夹路径
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _localFolderPathController,
+                      readOnly: true,
+                      decoration: const InputDecoration(
+                        labelText: '备份文件夹路径',
+                        hintText: '点击右侧按钮选择文件夹',
+                        prefixIcon: Icon(Icons.folder),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.folder_open),
+                    onPressed: _selectLocalFolder,
+                    tooltip: '选择文件夹',
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+
+              // 验证和保存按钮
+              Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _isValidatingFolder ? null : _validateLocalFolder,
+                    icon: _isValidatingFolder
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check_circle_outline),
+                    label: Text(_isValidatingFolder ? '验证中...' : '验证文件夹'),
+                  ),
+                  const SizedBox(width: 16),
+                  ElevatedButton.icon(
+                    onPressed: _saveLocalFolderConfig,
+                    icon: const Icon(Icons.save),
+                    label: const Text('保存配置'),
+                  ),
+                ],
+              ),
+            ],
 
             // WebDAV 配置表单
             if (_loadMode == DataLoadMode.webdav) ...[
@@ -645,6 +1029,68 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  /// 选择本地文件夹
+  Future<void> _selectLocalFolder() async {
+    final result = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: '选择 Cherry Studio 备份目录',
+    );
+
+    if (result != null) {
+      setState(() {
+        _localFolderPathController.text = result;
+      });
+    }
+  }
+
+  /// 验证本地文件夹
+  Future<void> _validateLocalFolder() async {
+    final path = _localFolderPathController.text.trim();
+    if (path.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('请先选择文件夹'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isValidatingFolder = true);
+
+    final (success, message) = await LocalFolderSyncService.validateFolder(path);
+
+    setState(() => _isValidatingFolder = false);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '✅ $message' : '❌ $message'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// 保存本地文件夹配置
+  Future<void> _saveLocalFolderConfig() async {
+    final config = LocalFolderConfig(
+      folderPath: _localFolderPathController.text.trim(),
+    );
+
+    await LocalFolderSyncService.saveConfig(config);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ 本地文件夹配置已保存'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 
   /// 测试 WebDAV 连接
@@ -750,6 +1196,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             const Divider(),
 
+            // 数据统计
+            _buildDataStatisticsTile(),
+
+            const Divider(),
+
+            // 导出数据
+            ListTile(
+              leading: const Icon(Icons.upload_file, color: Colors.green),
+              title: const Text('导出数据'),
+              subtitle: const Text('导出为 Cherry Studio 兼容的备份格式'),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+              onTap: _showExportDialog,
+            ),
+
+            const Divider(),
+
             // 清除缓存按钮
             ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.orange),
@@ -794,6 +1256,275 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  /// 构建数据统计磁贴
+  Widget _buildDataStatisticsTile() {
+    return FutureBuilder<Map<String, int>>(
+      future: _getDataStatistics(),
+      builder: (context, snapshot) {
+        final stats = snapshot.data;
+        final isLoading = !snapshot.hasData;
+
+        return ListTile(
+          leading: const Icon(Icons.analytics_outlined, color: Colors.purple),
+          title: const Text('数据统计'),
+          subtitle: isLoading
+              ? const Text('加载中...')
+              : Text(
+                  '${stats!['assistants']} 个助手 · ${stats['topics']} 个话题 · ${stats['messages']} 条消息',
+                  style: const TextStyle(fontSize: 12),
+                ),
+          trailing: IconButton(
+            icon: const Icon(Icons.refresh, size: 20),
+            onPressed: () => setState(() {}),
+            tooltip: '刷新统计',
+          ),
+        );
+      },
+    );
+  }
+
+  /// 获取数据统计
+  Future<Map<String, int>> _getDataStatistics() async {
+    try {
+      final db = IsarDatabase();
+      final isar = await db.instance;
+
+      final assistantsCount = await isar.assistantEntitys.count();
+      final topicsCount = await isar.topicEntitys.count();
+      final messagesCount = await isar.messageEntitys.count();
+      final blocksCount = await isar.messageBlockEntitys.count();
+
+      return {
+        'assistants': assistantsCount,
+        'topics': topicsCount,
+        'messages': messagesCount,
+        'blocks': blocksCount,
+      };
+    } catch (e) {
+      return {'assistants': 0, 'topics': 0, 'messages': 0, 'blocks': 0};
+    }
+  }
+
+  /// 显示导出对话框
+  Future<void> _showExportDialog() async {
+    final stats = await _getDataStatistics();
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.upload_file, color: Colors.green[400]),
+            const SizedBox(width: 8),
+            const Text('导出数据'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('将当前数据导出为 Cherry Studio 兼容的备份格式。'),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('📊 数据概览', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700])),
+                  const SizedBox(height: 8),
+                  Text('• ${stats['assistants']} 个助手', style: TextStyle(color: Colors.grey[600])),
+                  Text('• ${stats['topics']} 个话题', style: TextStyle(color: Colors.grey[600])),
+                  Text('• ${stats['messages']} 条消息', style: TextStyle(color: Colors.grey[600])),
+                  Text('• ${stats['blocks']} 个消息块', style: TextStyle(color: Colors.grey[600])),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '💡 导出的 ZIP 文件可以通过 Cherry Studio 的「恢复」功能导入',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _exportAsJson();
+            },
+            icon: const Icon(Icons.code, size: 18),
+            label: const Text('导出 JSON'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.grey[600],
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _exportAsZip();
+            },
+            icon: const Icon(Icons.folder_zip, size: 18),
+            label: const Text('导出 ZIP'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 导出为 ZIP
+  Future<void> _exportAsZip() async {
+    try {
+      // 显示加载指示器
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const AlertDialog(
+          content: Row(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 16),
+              Text('正在导出...'),
+            ],
+          ),
+        ),
+      );
+
+      final db = IsarDatabase();
+      final exportService = CherryExportService(db);
+
+      // 让用户选择保存位置
+      final fileName = 'cherry-studio-export-${DateTime.now().millisecondsSinceEpoch}.zip';
+
+      String? outputPath;
+
+      // 尝试使用文件选择器
+      final result = await FilePicker.platform.saveFile(
+        dialogTitle: '选择保存位置',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: ['zip'],
+      );
+
+      if (result != null) {
+        outputPath = result;
+      } else {
+        // 用户取消
+        if (mounted) Navigator.pop(context);
+        return;
+      }
+
+      await exportService.exportToZip(outputPath);
+
+      // 关闭加载指示器
+      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ 已导出到: $outputPath'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      // 关闭加载指示器
+      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ 导出失败: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 导出为 JSON
+  Future<void> _exportAsJson() async {
+    try {
+      // 显示加载指示器
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const AlertDialog(
+          content: Row(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 16),
+              Text('正在导出...'),
+            ],
+          ),
+        ),
+      );
+
+      final db = IsarDatabase();
+      final exportService = CherryExportService(db);
+
+      // 让用户选择保存位置
+      final fileName = 'cherry-studio-export-${DateTime.now().millisecondsSinceEpoch}.json';
+
+      String? outputPath;
+
+      final result = await FilePicker.platform.saveFile(
+        dialogTitle: '选择保存位置',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+
+      if (result != null) {
+        outputPath = result;
+      } else {
+        // 用户取消
+        if (mounted) Navigator.pop(context);
+        return;
+      }
+
+      await exportService.exportToJson(outputPath);
+
+      // 关闭加载指示器
+      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ 已导出到: $outputPath'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      // 关闭加载指示器
+      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ 导出失败: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   /// 构建关于与帮助部分

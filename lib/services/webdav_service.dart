@@ -11,8 +11,9 @@ export 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 
 /// 数据加载模式
 enum DataLoadMode {
-  manual,  // 手动加载
-  webdav,  // WebDAV 自动加载
+  manual,       // 手动加载
+  webdav,       // WebDAV 自动加载
+  localFolder,  // 本地文件夹监听（仅桌面端）
 }
 
 /// WebDAV 配置
@@ -110,16 +111,31 @@ class WebDavService {
   static Future<DataLoadMode> getLoadMode() async {
     final prefs = await SharedPreferences.getInstance();
     final mode = prefs.getString(_keyLoadMode) ?? 'manual';
-    return mode == 'webdav' ? DataLoadMode.webdav : DataLoadMode.manual;
+    switch (mode) {
+      case 'webdav':
+        return DataLoadMode.webdav;
+      case 'localFolder':
+        return DataLoadMode.localFolder;
+      default:
+        return DataLoadMode.manual;
+    }
   }
 
   /// 设置加载模式
   static Future<void> setLoadMode(DataLoadMode mode) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _keyLoadMode,
-      mode == DataLoadMode.webdav ? 'webdav' : 'manual',
-    );
+    String modeStr;
+    switch (mode) {
+      case DataLoadMode.webdav:
+        modeStr = 'webdav';
+        break;
+      case DataLoadMode.localFolder:
+        modeStr = 'localFolder';
+        break;
+      default:
+        modeStr = 'manual';
+    }
+    await prefs.setString(_keyLoadMode, modeStr);
   }
 
   /// 加载 WebDAV 配置

@@ -446,9 +446,38 @@ class _AIChatDrawerState extends State<AIChatDrawer>
     }
   }
 
-  void _showCleanupDialog() {
+  void _showCleanupDialog() async {
     // 在进入 dialog 前保存 ScaffoldMessenger 引用，避免 dialog 关闭后 context 失效
     final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    // 获取空对话数量
+    final emptyCount = await _conversationService.getEmptyConversationCount();
+
+    if (!mounted) return;
+
+    if (emptyCount == 0) {
+      // 没有空对话，提示用户
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green[400]),
+              const SizedBox(width: 8),
+              const Text('无需清理'),
+            ],
+          ),
+          content: const Text('当前没有空对话需要清理。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
     showDialog(
       context: context,
@@ -457,16 +486,19 @@ class _AIChatDrawerState extends State<AIChatDrawer>
           children: [
             Icon(Icons.cleaning_services, color: Colors.orange[400]),
             const SizedBox(width: 8),
-            const Text('清理对话'),
+            const Text('清理空对话'),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('当前共 ${_conversations.length} 个对话'),
-            const SizedBox(height: 16),
-            const Text('确定要删除全部对话吗？'),
+            Text('发现 $emptyCount 个空对话（没有任何消息）'),
+            const SizedBox(height: 8),
+            Text(
+              '清理后将删除这些空对话，有内容的对话不受影响。',
+              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            ),
           ],
         ),
         actions: [
@@ -477,37 +509,16 @@ class _AIChatDrawerState extends State<AIChatDrawer>
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
-              // 二次确认
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('确认删除全部'),
-                  content: Text('确定要删除全部 ${_conversations.length} 个对话吗？此操作不可恢复！'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('取消'),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      child: const Text('确认删除'),
-                    ),
-                  ],
-                ),
-              );
-              if (confirm == true) {
-                final count = await _conversationService.deleteAllConversations();
-                await _loadData();
-                if (mounted) {
-                  scaffoldMessenger.showSnackBar(
-                    SnackBar(content: Text('已删除全部 $count 个对话')),
-                  );
-                }
+              final count = await _conversationService.deleteEmptyConversations();
+              await _loadData();
+              if (mounted) {
+                scaffoldMessenger.showSnackBar(
+                  SnackBar(content: Text('已清理 $count 个空对话')),
+                );
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('删除全部'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('清理'),
           ),
         ],
       ),

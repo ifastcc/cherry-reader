@@ -6,7 +6,7 @@
 
 **把 AI 对话变成知识资产**
 
-<a href="https://apps.apple.com/id/app/cherry-reader/id6755708214">
+<a href="https://apps.apple.com/cn/app/cherry-reader/id6755708214">
   <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download on the App Store" height="50">
 </a>
 
@@ -147,7 +147,7 @@ AI 给了一个很棒的回答，你想就其中某个点深入追问。但是�
 
 ### iOS / iPadOS
 
-<a href="https://apps.apple.com/id/app/cherry-reader/id6755708214">
+<a href="https://apps.apple.com/cn/app/cherry-reader/id6755708214">
   <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download on the App Store" height="40">
 </a>
 
@@ -194,6 +194,6 @@ flutter run -d macos  # 或 android
 
 **让每一段 AI 对话都值得回味**
 
-[下载 Cherry Reader](https://apps.apple.com/id/app/cherry-reader/id6755708214)
+[下载 Cherry Reader](https://apps.apple.com/cn/app/cherry-reader/id6755708214)
 
 </div>

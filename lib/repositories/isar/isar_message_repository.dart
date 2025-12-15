@@ -119,7 +119,7 @@ class IsarMessageRepository implements IMessageRepository {
   @override
   Future<int> getMessageCount(String topicId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       return isar.messageEntitys
           .filter()
           .topicIdEqualTo(topicId)
@@ -137,7 +137,7 @@ class IsarMessageRepository implements IMessageRepository {
     int limit = 20,
   }) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entities = await isar.messageEntitys
           .filter()
           .topicIdEqualTo(topicId)
@@ -159,7 +159,7 @@ class IsarMessageRepository implements IMessageRepository {
     int roundCount = 5,
   }) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entities = await isar.messageEntitys
           .filter()
           .topicIdEqualTo(topicId)
@@ -176,7 +176,7 @@ class IsarMessageRepository implements IMessageRepository {
   @override
   Future<int> getRoundCount(String topicId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final topic = await isar.topicEntitys
           .filter()
           .topicIdEqualTo(topicId)
@@ -191,7 +191,7 @@ class IsarMessageRepository implements IMessageRepository {
   @override
   Future<MessageModel?> getMessage(String messageId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entity = await isar.messageEntitys
           .filter()
           .messageIdEqualTo(messageId)
@@ -207,7 +207,7 @@ class IsarMessageRepository implements IMessageRepository {
   Future<List<MessageModel>> loadAllMessages(String topicId) async {
     try {
       final sw = Stopwatch()..start();
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       debugPrint('⏱️ [Isar] loadAllMessages - 获取实例: ${sw.elapsedMilliseconds}ms');
 
       sw.reset();
@@ -234,7 +234,7 @@ class IsarMessageRepository implements IMessageRepository {
   @override
   Future<List<BlockModel>> loadBlocks(String messageId) async {
     try {
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       final entities = await isar.messageBlockEntitys
           .filter()
           .messageIdEqualTo(messageId)
@@ -255,7 +255,7 @@ class IsarMessageRepository implements IMessageRepository {
 
     try {
       final sw = Stopwatch()..start();
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       debugPrint('⏱️ [Isar] batchLoadBlocks - 获取实例: ${sw.elapsedMilliseconds}ms');
 
       sw.reset();
@@ -292,7 +292,7 @@ class IsarMessageRepository implements IMessageRepository {
   Future<Map<String, List<BlockModel>>> loadBlocksByTopic(String topicId) async {
     try {
       final sw = Stopwatch()..start();
-      final isar = await _db.instance;
+      final isar = await _db.importInstance;
       debugPrint('⏱️ [Isar] loadBlocksByTopic - 获取实例: ${sw.elapsedMilliseconds}ms');
 
       // 【优化】直接通过 topicId 查询，避免 anyOf 的 O(n²) 问题
@@ -484,7 +484,7 @@ class IsarMessageRepository implements IMessageRepository {
 
   @override
   Stream<List<MessageModel>> watchMessages(String topicId) {
-    return _db.instanceSync.messageEntitys
+    return _db.importInstanceSync.messageEntitys
         .filter()
         .topicIdEqualTo(topicId)
         .sortByOrderIndex()

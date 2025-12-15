@@ -194,9 +194,40 @@ class _HighlightableCardState extends State<HighlightableCard> {
   String? _lastRenderedContent;
   int? _lastRenderedHighlightsHash;
 
+  // 【新增】展开/收缩状态
+  bool _expanded = false;
+
+  // 折叠阈值（超过此字符数时默认折叠）
+  static const int _collapseThreshold = 1000;
+  // 折叠时显示的字符数
+  static const int _collapsedPreviewLength = 500;
+
   Color get _currentHighlightColor =>
       kHighlightStyles[_currentStyleIndex].color;
   String get _currentHighlightType => kHighlightStyles[_currentStyleIndex].type;
+
+  // 【新增】判断内容是否需要折叠
+  bool get _isLongContent => widget.content.length > _collapseThreshold;
+
+  // 【新增】获取当前显示的内容
+  String get _displayContent {
+    if (!_isLongContent || _expanded) {
+      return widget.content;
+    }
+    // 折叠模式：截取前 N 个字符
+    return '${widget.content.substring(0, _collapsedPreviewLength)}...';
+  }
+
+  // 【新增】切换展开/收缩状态
+  void _toggleExpand() {
+    if (_isLongContent) {
+      setState(() {
+        _expanded = !_expanded;
+        // 展开/收缩时清除 Markdown 缓存，因为内容变化了
+        _cachedMarkdownWidget = null;
+      });
+    }
+  }
 
   @override
   void initState() {
@@ -240,19 +271,22 @@ class _HighlightableCardState extends State<HighlightableCard> {
   Widget _getMemoizedMarkdownWidget() {
     // 【优化】使用 highlights 长度作为快速检查
     final highlightsHash = _highlights.length;
+    // 【新增】使用 _displayContent 而不是 widget.content，支持折叠显示
+    final currentContent = _displayContent;
 
     // 检查是否需要重新渲染
     final needsRebuild =
         _cachedMarkdownWidget == null ||
-        _lastRenderedContent != widget.content ||
+        _lastRenderedContent != currentContent ||
         _lastRenderedHighlightsHash != highlightsHash;
 
     if (needsRebuild) {
       _cachedMarkdownWidget = UnifiedMarkdownRenderer(
-        data: widget.content,
+        data: currentContent,
         scrollable: false,
         selectable: true,
         highlights: _highlights
+            .where((h) => h.end <= currentContent.length) // 只渲染在当前内容范围内的高亮
             .map(
               (h) => HighlightRange(
                 id: h.id,
@@ -278,7 +312,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
         ),
       );
 
-      _lastRenderedContent = widget.content;
+      _lastRenderedContent = currentContent;
       _lastRenderedHighlightsHash = highlightsHash;
     }
 
@@ -462,7 +496,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
   /// 流式布局（无边框、自然撑开）
   Widget _buildStreamLayout() {
     return GestureDetector(
-      onDoubleTap: _openFullscreen,
+      onDoubleTap: _toggleExpand,
+      onLongPress: _openFullscreen,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         child: Column(
@@ -474,6 +509,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
             const SizedBox(height: 8),
             // 内容（自然撑开）
             _buildContent(),
+            // 展开/收缩提示
+            if (_isLongContent) _buildExpandHint(),
             // 标注标签
             if (_highlights.isNotEmpty) _buildHighlightTags(),
             // 操作栏
@@ -514,7 +551,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
   /// 传统卡片布局
   Widget _buildCardLayout() {
     return GestureDetector(
-      onDoubleTap: _openFullscreen,
+      onDoubleTap: _toggleExpand,
+      onLongPress: _openFullscreen,
       child: widget.maxHeight != null
           ? ConstrainedBox(
               constraints: BoxConstraints(maxHeight: widget.maxHeight!),
@@ -545,6 +583,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         _buildContent(),
+                        // 展开/收缩提示
+                        if (_isLongContent) _buildExpandHint(),
                         // 标注标签
                         if (_highlights.isNotEmpty) _buildHighlightTags(),
                       ],
@@ -556,6 +596,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _buildContent(),
+                    // 展开/收缩提示
+                    if (_isLongContent) _buildExpandHint(),
                     if (_highlights.isNotEmpty) _buildHighlightTags(),
                   ],
                 ),
@@ -705,6 +747,73 @@ class _HighlightableCardState extends State<HighlightableCard> {
       },
       // 【性能优化】使用 memoized Markdown widget
       child: _getMemoizedMarkdownWidget(),
+    );
+  }
+
+  /// 【新增】构建展开/收缩提示
+  Widget _buildExpandHint() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final hintColor = isDark ? Colors.grey[400] : Colors.grey[600];
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            _expanded ? Icons.unfold_less : Icons.unfold_more,
+            size: 16,
+            color: hintColor,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _expanded ? '双击收起' : '双击展开全文',
+            style: TextStyle(
+              fontSize: 12,
+              color: hintColor,
+            ),
+          ),
+          if (!_expanded) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: (isDark ? Colors.grey[700] : Colors.grey[200]),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '${widget.content.length} 字',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: hintColor,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: _openFullscreen,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.fullscreen,
+                  size: 16,
+                  color: hintColor,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  '长按全屏',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: hintColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 

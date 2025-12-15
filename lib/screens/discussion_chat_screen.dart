@@ -26,6 +26,7 @@ class _DiscussionChatScreenState extends State<DiscussionChatScreen> {
   final DiscussionService _discussionService = DiscussionService();
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _inputFocusNode = FocusNode();
 
   List<DiscussionMessageEntity> _messages = [];
   bool _loading = true;
@@ -50,6 +51,7 @@ class _DiscussionChatScreenState extends State<DiscussionChatScreen> {
   void dispose() {
     _inputController.dispose();
     _scrollController.dispose();
+    _inputFocusNode.dispose();
     super.dispose();
   }
 
@@ -257,26 +259,32 @@ class _DiscussionChatScreenState extends State<DiscussionChatScreen> {
     // 过滤掉系统消息（不在UI中显示）
     final visibleMessages = _messages.where((m) => m.role != 'system').toList();
 
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(16),
-      itemCount: visibleMessages.length + (_isGenerating ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (_isGenerating && index == visibleMessages.length) {
-          // 显示流式生成中的消息
-          return _buildMessageBubble(
-            role: 'assistant',
-            content: _streamingContent,
-            isStreaming: true,
-          );
-        }
-
-        final message = visibleMessages[index];
-        return _buildMessageBubble(
-          role: message.role,
-          content: message.content,
-        );
+    return GestureDetector(
+      onTap: () {
+        // 点击消息列表区域时收起键盘
+        _inputFocusNode.unfocus();
       },
+      child: ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.all(16),
+        itemCount: visibleMessages.length + (_isGenerating ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (_isGenerating && index == visibleMessages.length) {
+            // 显示流式生成中的消息
+            return _buildMessageBubble(
+              role: 'assistant',
+              content: _streamingContent,
+              isStreaming: true,
+            );
+          }
+
+          final message = visibleMessages[index];
+          return _buildMessageBubble(
+            role: message.role,
+            content: message.content,
+          );
+        },
+      ),
     );
   }
 
@@ -380,6 +388,8 @@ class _DiscussionChatScreenState extends State<DiscussionChatScreen> {
           Expanded(
             child: TextField(
               controller: _inputController,
+              focusNode: _inputFocusNode,
+              autofocus: false,
               enabled: !_isGenerating,
               maxLines: null,
               textInputAction: TextInputAction.newline,

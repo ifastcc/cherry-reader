@@ -7,20 +7,25 @@ import '../models/isar/discussion_entity.dart';
 import '../models/isar/discussion_message_entity.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../models/isar/prompt_template_entity.dart';
+import '../models/isar/version_entity.dart';
 // 新架构：消息级存储
 import '../models/isar/assistant_entity.dart';
 import '../models/isar/topic_entity.dart';
 import '../models/isar/message_entity.dart';
 import '../models/isar/message_block_entity.dart';
 import '../models/isar/file_entity.dart';
+import 'version_service.dart';
 
 /// Isar 数据库管理器（单例模式）
 ///
 /// 统一管理所有 Isar 数据库操作：
-/// - 标注数据（HighlightEntity）
-/// - AI 分析缓存（AIAnalysisEntity）
-/// - 讨论对话（DiscussionEntity）
-/// - 消息级存储（AssistantEntity, TopicEntity, MessageEntity, MessageBlockEntity）
+/// - 主数据库：用户数据（标注、分析、讨论）、版本元数据
+/// - 版本数据库：导入的 Cherry Studio 数据（通过 VersionService 管理）
+///
+/// 架构说明：
+/// - 用户数据始终存在主数据库中
+/// - 导入数据（Topics, Messages, Blocks）优先从版本数据库读取
+/// - 如果没有版本数据库，fallback 到主数据库（兼容旧数据）
 class IsarDatabase {
   static final IsarDatabase _instance = IsarDatabase._internal();
   factory IsarDatabase() => _instance;
@@ -29,7 +34,7 @@ class IsarDatabase {
   Isar? _isar;
   bool _initialized = false;
 
-  /// 获取 Isar 实例
+  /// 获取主数据库 Isar 实例（用户数据）
   Future<Isar> get instance async {
     if (!_initialized) {
       await init();
@@ -37,13 +42,40 @@ class IsarDatabase {
     return _isar!;
   }
 
-  /// 同步获取实例（仅在确认已初始化后使用）
+  /// 同步获取主数据库实例（仅在确认已初始化后使用）
   Isar get instanceSync {
     if (!_initialized || _isar == null) {
       throw StateError('IsarDatabase not initialized. Call init() first.');
     }
     return _isar!;
   }
+
+  /// 获取导入数据的 Isar 实例
+  ///
+  /// 优先返回 VersionService 的活跃版本数据库
+  /// 如果没有版本数据库，fallback 到主数据库（兼容旧数据）
+  Future<Isar> get importInstance async {
+    // 优先使用版本数据库
+    final versionIsar = VersionService.instance.activeImportIsar;
+    if (versionIsar != null && versionIsar.isOpen) {
+      return versionIsar;
+    }
+
+    // fallback 到主数据库
+    return instance;
+  }
+
+  /// 同步获取导入数据实例
+  Isar get importInstanceSync {
+    final versionIsar = VersionService.instance.activeImportIsar;
+    if (versionIsar != null && versionIsar.isOpen) {
+      return versionIsar;
+    }
+    return instanceSync;
+  }
+
+  /// 是否有版本化的导入数据
+  bool get hasVersionedImport => VersionService.instance.hasActiveVersion;
 
   /// 初始化数据库
   Future<void> init() async {
@@ -65,6 +97,8 @@ class IsarDatabase {
           UnifiedMessageEntitySchema,
           UserPreferenceEntitySchema,
           TaskTemplateEntitySchema,
+          // 版本管理
+          VersionEntitySchema,
           // 消息级存储
           AssistantEntitySchema,
           TopicEntitySchema,

@@ -7,6 +7,7 @@ import 'screens/settings_screen.dart';
 import 'services/analysis_cache_manager.dart';
 import 'services/repository_provider.dart';
 import 'services/ai_provider_service.dart';
+import 'services/version_service.dart';
 
 import 'package:provider/provider.dart';
 import 'providers/tts_provider.dart';
@@ -20,6 +21,13 @@ void main() async {
   // 初始化 RepositoryProvider（会自动初始化 IsarDatabase）
   // 必须在其他依赖数据库的服务之前初始化
   await RepositoryProvider.init();
+
+  // 初始化版本服务（管理多版本数据库实例）
+  // 必须在 RepositoryProvider 之后初始化
+  await VersionService.instance.init();
+
+  // 崩溃恢复：清理未完成的导入版本
+  await VersionService.instance.recoverFromCrash();
 
   // 初始化缓存管理器（后续会迁移到 Isar）
   await AnalysisCacheManager().init();

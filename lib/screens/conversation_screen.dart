@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
+import 'dart:async';
 import '../services/cherry_extractor.dart';
 import '../services/analysis_cache_manager.dart';
 import '../services/highlight_service.dart';
@@ -81,6 +82,15 @@ class _ConversationScreenState extends State<ConversationScreen> {
   /// 获取或创建指定轮次的页码 ValueNotifier
   ValueNotifier<int> _getCardPageNotifier(int groupIndex) {
     return _cardPageNotifiers.putIfAbsent(groupIndex, () => ValueNotifier(0));
+  }
+
+  /// 【快速定位】滚动到指定轮次的顶部
+  void _scrollToGroupTop(int groupIndex) {
+    _scrollController.scrollToIndex(
+      groupIndex,
+      preferPosition: AutoScrollPosition.begin,
+      duration: const Duration(milliseconds: 300),
+    );
   }
 
   @override
@@ -292,10 +302,23 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final groups = _getConversationGroups();
     if (groupIndex < 0 || groupIndex >= groups.length) return;
 
+    // 第一阶段：快速滚动到目标位置附近
     await _scrollController.scrollToIndex(
       groupIndex,
       preferPosition: AutoScrollPosition.begin,
       duration: const Duration(milliseconds: 300),
+    );
+
+    // 第二阶段：等待一帧后，再次调用 scrollToIndex 确保精确定位
+    // scroll_to_index 在 ListView.separated 中有时会因为分隔符高度而定位不准
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+
+    // 第二次调用可以校准位置（此时目标元素已渲染完成）
+    await _scrollController.scrollToIndex(
+      groupIndex,
+      preferPosition: AutoScrollPosition.begin,
+      duration: const Duration(milliseconds: 100),
     );
   }
 
@@ -625,25 +648,32 @@ $modelResponses''';
           ),
         ],
       ),
-      body: _conversation == null
-          ? const Center(child: CircularProgressIndicator())
-          : Stack(
-              children: [
-                _buildConversation(),
-                // 能量条进度指示器
-                _buildEnergyBarIndicator(),
-                // Sticky 模型 Tab（滚动时显示在顶部）
-                _buildStickyModelTabs(),
-                // 浮动轮次导航器（滚动时显示）
-                _buildFloatingNavigation(),
-                const Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: TtsMiniPlayer(),
-                ),
-              ],
-            ),
+      body: Column(
+        children: [
+          // 主体内容
+          Expanded(
+            child: _conversation == null
+                ? const Center(child: CircularProgressIndicator())
+                : Stack(
+                    children: [
+                      _buildConversation(),
+                      // 能量条进度指示器
+                      _buildEnergyBarIndicator(),
+                      // Sticky 模型 Tab（滚动时显示在顶部）
+                      _buildStickyModelTabs(),
+                      // 浮动轮次导航器（滚动时显示）
+                      _buildFloatingNavigation(),
+                      const Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: TtsMiniPlayer(),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -777,30 +807,37 @@ $modelResponses''';
                               ),
                             ),
                           ),
-                          // 模型 Tab 列表
+                          // 模型 Tab 列表 + 双击回到顶部
                           Expanded(
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: Row(
-                                children: cardInfoList.asMap().entries.map((entry) {
-                                  final cardIndex = entry.key;
-                                  final info = entry.value;
-                                  final isSelected = cardIndex == currentPage;
+                            child: GestureDetector(
+                              onDoubleTap: () {
+                                // 【快速定位】双击 Tab 区域（包括空白）滚动到本轮次顶部
+                                _scrollToGroupTop(currentVisibleGroup);
+                              },
+                              behavior: HitTestBehavior.translucent,
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: cardInfoList.asMap().entries.map((entry) {
+                                    final cardIndex = entry.key;
+                                    final info = entry.value;
+                                    final isSelected = cardIndex == currentPage;
 
-                                  return _AnimatedModelTab(
-                                    modelName: info['name'] as String,
-                                    isSelected: isSelected,
-                                    isAnalysis: info['type'] == 'analysis',
-                                    isDark: isDark,
-                                    modelColor: info['type'] == 'analysis'
-                                        ? const Color(0xFF10B981)
-                                        : _getModelColor(info['name'] as String),
-                                    onTap: () {
-                                      // 【性能优化】直接更新 ValueNotifier，不触发整页 setState
-                                      _getCardPageNotifier(currentVisibleGroup).value = cardIndex;
-                                    },
-                                  );
-                                }).toList(),
+                                    return _AnimatedModelTab(
+                                      modelName: info['name'] as String,
+                                      isSelected: isSelected,
+                                      isAnalysis: info['type'] == 'analysis',
+                                      isDark: isDark,
+                                      modelColor: info['type'] == 'analysis'
+                                          ? const Color(0xFF10B981)
+                                          : _getModelColor(info['name'] as String),
+                                      onTap: () {
+                                        // 【性能优化】直接更新 ValueNotifier，不触发整页 setState
+                                        _getCardPageNotifier(currentVisibleGroup).value = cardIndex;
+                                      },
+                                    );
+                                  }).toList(),
+                                ),
                               ),
                             ),
                           ),
@@ -1076,8 +1113,11 @@ $modelResponses''';
 
   /// 简洁布局：用户内容区域（双击展开收起）
   Widget _buildUserContent(String userText) {
-    final isLong = userText.length > 200;
-    final displayText = isLong ? '${userText.substring(0, 200)}...' : userText;
+    // 【统一】与 HighlightableCard 保持一致的折叠阈值
+    const collapseThreshold = 1000;
+    const collapsedPreviewLength = 500;
+    final isLong = userText.length > collapseThreshold;
+    final displayText = isLong ? '${userText.substring(0, collapsedPreviewLength)}...' : userText;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return _UserContentWidget(
@@ -1260,36 +1300,43 @@ $modelResponses''';
       padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
       child: Row(
         children: [
-          // 模型选择器（横向滚动）
+          // 模型选择器（横向滚动）+ 双击回到顶部
           Expanded(
-            child: SingleChildScrollView(
-              controller: tabScrollController,
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: cardInfoList.asMap().entries.map((entry) {
-                  final cardIndex = entry.key;
-                  final info = entry.value;
-                  final isSelected = cardIndex == currentPage;
-                  final tabKey = 'tab_${groupIndex}_$cardIndex';
+            child: GestureDetector(
+              onDoubleTap: () {
+                // 【快速定位】双击 Tab 区域（包括空白）滚动到本轮次顶部
+                _scrollToGroupTop(groupIndex);
+              },
+              behavior: HitTestBehavior.translucent,
+              child: SingleChildScrollView(
+                controller: tabScrollController,
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: cardInfoList.asMap().entries.map((entry) {
+                    final cardIndex = entry.key;
+                    final info = entry.value;
+                    final isSelected = cardIndex == currentPage;
+                    final tabKey = 'tab_${groupIndex}_$cardIndex';
 
-                  // 确保每个 Tab 有唯一的 GlobalKey
-                  _tabKeys[tabKey] ??= GlobalKey();
+                    // 确保每个 Tab 有唯一的 GlobalKey
+                    _tabKeys[tabKey] ??= GlobalKey();
 
-                  return _AnimatedModelTab(
-                    key: _tabKeys[tabKey],
-                    modelName: info['name'] as String,
-                    isSelected: isSelected,
-                    isAnalysis: info['type'] == 'analysis',
-                    isDark: isDark,
-                    modelColor: info['type'] == 'analysis'
-                        ? const Color(0xFF10B981)
-                        : _getModelColor(info['name'] as String),
-                    onTap: () {
-                      // 【性能优化】直接更新 ValueNotifier，不触发整页 setState
-                      pageNotifier.value = cardIndex;
-                    },
-                  );
-                }).toList(),
+                    return _AnimatedModelTab(
+                      key: _tabKeys[tabKey],
+                      modelName: info['name'] as String,
+                      isSelected: isSelected,
+                      isAnalysis: info['type'] == 'analysis',
+                      isDark: isDark,
+                      modelColor: info['type'] == 'analysis'
+                          ? const Color(0xFF10B981)
+                          : _getModelColor(info['name'] as String),
+                      onTap: () {
+                        // 【性能优化】直接更新 ValueNotifier，不触发整页 setState
+                        pageNotifier.value = cardIndex;
+                      },
+                    );
+                  }).toList(),
+                ),
               ),
             ),
           ),
@@ -1391,6 +1438,10 @@ $modelResponses''';
             WidgetsBinding.instance.addPostFrameCallback((_) {
               _onScrollChanged();
             });
+          },
+          onDoubleTap: () {
+            // 【快速定位】双击内容区域滚动到本轮次顶部
+            _scrollToGroupTop(groupIndex);
           },
           itemBuilder: (index) => _buildExpandedContent(
             key: ValueKey('${groupIndex}_$index'),
@@ -1880,12 +1931,29 @@ class _UserContentWidgetState extends State<_UserContentWidget> {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    _expanded ? '双击收起' : '双击展开',
+                    _expanded ? '双击收起' : '双击展开全文',
                     style: TextStyle(
                       fontSize: 11,
                       color: Colors.grey[500],
                     ),
                   ),
+                  if (!_expanded) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: widget.isDark ? Colors.grey[700] : Colors.grey[200],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${widget.userText.length} 字',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.grey[500],
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1966,12 +2034,14 @@ class _SwipeableSwitcher extends StatefulWidget {
   final int totalCount;
   final ValueChanged<int> onIndexChanged;
   final Widget Function(int index) itemBuilder;
+  final VoidCallback? onDoubleTap;
 
   const _SwipeableSwitcher({
     required this.currentIndex,
     required this.totalCount,
     required this.onIndexChanged,
     required this.itemBuilder,
+    this.onDoubleTap,
   });
 
   @override
@@ -2040,6 +2110,7 @@ class _SwipeableSwitcherState extends State<_SwipeableSwitcher> {
       onHorizontalDragStart: _onDragStart,
       onHorizontalDragUpdate: _onDragUpdate,
       onHorizontalDragEnd: _onDragEnd,
+      onDoubleTap: widget.onDoubleTap,
       behavior: HitTestBehavior.opaque,
       child: Stack(
         children: [

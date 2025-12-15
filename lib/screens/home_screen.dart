@@ -10,10 +10,17 @@ import '../services/cherry_extractor.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/repository_provider.dart';
 import '../services/webdav_service.dart';
+import '../services/local_folder_sync_service.dart';
 import '../services/ai_provider_service.dart';
 import '../services/unified_import_manager.dart';
+import '../services/version_service.dart';
+import '../services/background_import_service.dart';
+import '../models/domain/data_version.dart';
+import '../models/domain/status_bar_state.dart';
+import '../utils/platform_utils.dart';
 import 'conversation_screen.dart';
 import 'settings_screen.dart';
+import 'search_screen.dart';
 import 'package:intl/intl.dart';
 
 /// 同步阶段
@@ -50,21 +57,67 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   CancelToken? _downloadCancelToken;
   DateTime? _lastSyncTime;  // 缓存版本时间
   bool _hasValidWebDavConfig = false;  // 【新增】WebDAV 配置是否有效
-  
+
+  // 【新增】本地文件夹同步
+  LocalFolderSyncService? _localFolderSyncService;
+  bool _hasValidLocalFolderConfig = false;
+  LocalBackupInfo? _pendingLocalBackup;  // 待加载的最新备份
+  String? _currentVersionDisplay;  // 当前版本显示名称（从文件名解析）
+
   // 【新增】检查状态
   DateTime? _lastCheckTime;  // 上次检查更新的时间
   bool? _hasUpdate;  // 是否有更新（null=未检查，true=有更新，false=已是最新）
+
+  // 【新增】版本管理
+  StreamSubscription<ImportStatus>? _importStatusSubscription;
+  DataVersion? _activeVersion;  // 当前活跃版本
+  bool _showDataUpdatedBanner = false;  // 显示数据更新提示
+
+  // 【新增】统一状态栏错误状态
+  String? _lastErrorDetail;  // 最近一次错误的详情（用于点击查看）
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _initVersionListener();
     _initAndLoad();
+  }
+
+  /// 初始化版本管理监听
+  void _initVersionListener() {
+    // 加载当前活跃版本
+    _loadActiveVersion();
+
+    // 监听后台导入状态
+    _importStatusSubscription = BackgroundImportService.instance.statusStream.listen((status) {
+      if (status.isCompleted) {
+        // 导入完成，刷新版本信息和显示提示
+        _loadActiveVersion();
+        if (mounted) {
+          setState(() {
+            _showDataUpdatedBanner = true;
+          });
+        }
+      }
+    });
+  }
+
+  /// 加载当前活跃版本
+  Future<void> _loadActiveVersion() async {
+    final version = await VersionService.instance.getActiveVersion();
+    if (mounted) {
+      setState(() {
+        _activeVersion = version;
+      });
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _localFolderSyncService?.dispose();
+    _importStatusSubscription?.cancel();
     super.dispose();
   }
 
@@ -78,7 +131,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   /// 初始化并加载数据
-  /// 
+  ///
   /// 【重构】缓存优先：先加载本地缓存，再后台同步
   Future<void> _initAndLoad({bool forceReload = false}) async {
     // 防止重复加载
@@ -86,23 +139,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('⚠️ _initAndLoad: 已在加载中，跳过');
       return;
     }
-    
+
     final newLoadMode = await WebDavService.getLoadMode();
     final modeChanged = newLoadMode != _loadMode;
     _loadMode = newLoadMode;
-    
+
     // 【新增】检查 WebDAV 配置是否有效
     if (_loadMode == DataLoadMode.webdav) {
       final config = await WebDavService.loadConfig();
       _hasValidWebDavConfig = config.isValid;
+      _hasValidLocalFolderConfig = false;
+      // 停止本地文件夹监听
+      _localFolderSyncService?.dispose();
+      _localFolderSyncService = null;
+    } else if (_loadMode == DataLoadMode.localFolder) {
+      // 【新增】检查本地文件夹配置是否有效
+      final config = await LocalFolderSyncService.loadConfig();
+      _hasValidLocalFolderConfig = config.isValid;
+      _hasValidWebDavConfig = false;
+      // 初始化本地文件夹监听服务
+      if (config.isValid) {
+        _localFolderSyncService?.dispose();
+        _localFolderSyncService = LocalFolderSyncService();
+        _localFolderSyncService!.onFileChanged = _onLocalFileChanged;
+        await _localFolderSyncService!.startWatching(config);
+      }
     } else {
       _hasValidWebDavConfig = false;
+      _hasValidLocalFolderConfig = false;
+      // 停止本地文件夹监听
+      _localFolderSyncService?.dispose();
+      _localFolderSyncService = null;
     }
-    
+
     // 加载缓存版本时间
-    _lastSyncTime = await WebDavService.getLastSyncTime();
-    setState(() {});
-    
+    if (_loadMode == DataLoadMode.webdav) {
+      _lastSyncTime = await WebDavService.getLastSyncTime();
+    } else if (_loadMode == DataLoadMode.localFolder) {
+      _lastSyncTime = await LocalFolderSyncService.getLastSyncTime();
+    } else {
+      _lastSyncTime = null;
+    }
+
+    // 【修复】如果正在后台同步，只更新配置状态，不触发新的加载操作
+    // 避免与后台同步的 setState 冲突
+    if (_isBackgroundSyncing) {
+      debugPrint('ℹ️ _initAndLoad: 后台同步中，只更新配置状态');
+      if (mounted) {
+        setState(() {});
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+
     // 只有模式变化或强制重新加载时才触发
     if (forceReload || modeChanged || _topicIndex == null) {
       await _autoLoadDataFile();
@@ -115,15 +207,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ///
   /// 【重构】缓存优先，后台同步
   /// - 先尝试加载本地缓存
-  /// - WebDAV 模式下后台启动同步
+  /// - WebDAV/本地文件夹模式下后台启动同步
   Future<void> _autoLoadDataFile() async {
     // 先尝试加载本地缓存
     await _loadFromLocal(showLoadingIfEmpty: true);
-    
+
     // WebDAV 模式下，后台启动同步
     if (_loadMode == DataLoadMode.webdav) {
       // 不 await，让其在后台运行
       _backgroundSyncFromWebDav();
+    }
+    // 本地文件夹模式下，后台检查更新
+    else if (_loadMode == DataLoadMode.localFolder) {
+      _backgroundSyncFromLocalFolder();
     }
   }
 
@@ -223,9 +319,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _syncMessage = null;
             _syncStage = null;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('已取消更新')),
-          );
+          // 用户取消，状态栏自动恢复空闲状态，无需 Toast
         }
         return;
       }
@@ -278,14 +372,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (mounted) {
           setState(() {
             _error = null;
+            _lastCheckTime = DateTime.now();  // 更新检查时间
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ 已从 WebDAV 同步最新数据'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
-          );
+          // 同步成功，状态栏自动显示 "已是最新"，无需 Toast
         }
       } else {
         // 加载失败，_error 已在 _loadFile 中设置
@@ -295,36 +384,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         debugPrint('ℹ️ WebDAV 下载已取消');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('已取消下载'),
-              duration: Duration(seconds: 1),
-            ),
-          );
-        }
+        // 用户取消下载，状态栏自动恢复空闲状态，无需 Toast
       } else {
         debugPrint('❌ WebDAV 同步异常: $e');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('❌ WebDAV 同步失败: ${e.message}'),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 3),
-            ),
-          );
+          // 设置错误状态，状态栏变红，用户可点击查看详情
+          setState(() {
+            _lastErrorDetail = 'WebDAV 同步失败\n\n${e.message ?? e.toString()}';
+          });
         }
       }
     } catch (e) {
       debugPrint('❌ WebDAV 同步异常: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ WebDAV 同步失败: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        // 设置错误状态，状态栏变红，用户可点击查看详情
+        setState(() {
+          _lastErrorDetail = 'WebDAV 同步失败\n\n$e';
+        });
       }
     } finally {
       _downloadCancelToken = null;
@@ -373,6 +449,170 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       },
     ) ?? false;
+  }
+
+  /// 【新增】后台从本地文件夹同步数据
+  ///
+  /// 非阻塞式，检查本地文件夹是否有更新
+  Future<void> _backgroundSyncFromLocalFolder() async {
+    // 防止重复同步
+    if (_isBackgroundSyncing) {
+      debugPrint('⚠️ 已在后台同步中，跳过');
+      return;
+    }
+
+    final config = await LocalFolderSyncService.loadConfig();
+    if (!config.isValid) {
+      // 配置不完整
+      if (mounted) {
+        setState(() {
+          _hasValidLocalFolderConfig = false;
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    // 配置有效
+    if (mounted) {
+      setState(() {
+        _hasValidLocalFolderConfig = true;
+      });
+    }
+
+    setState(() {
+      _isBackgroundSyncing = true;
+      _syncStage = SyncStage.connecting;
+      _syncProgress = null;
+      _syncMessage = '正在检查本地备份...';
+    });
+
+    try {
+      // 检查更新
+      final (needUpdate, latestFile, checkMessage) =
+          await LocalFolderSyncService.checkForUpdate(config);
+
+      if (!mounted) return;
+
+      // 记录检查时间和结果
+      setState(() {
+        _lastCheckTime = DateTime.now();
+        _hasUpdate = needUpdate;
+        // 使用文件名中的时间戳（更准确）
+        if (latestFile != null) {
+          _lastSyncTime = latestFile.modifiedTime;
+          _currentVersionDisplay = latestFile.displayName;
+        }
+      });
+
+      if (!needUpdate) {
+        // 无需更新
+        setState(() {
+          _isBackgroundSyncing = false;
+          _syncMessage = null;
+          _syncStage = null;
+        });
+        debugPrint('ℹ️ 本地文件夹: $checkMessage');
+        return;
+      }
+
+      // 有更新，自动加载
+      await _loadLocalBackup(latestFile!);
+
+    } catch (e) {
+      debugPrint('❌ 本地文件夹同步异常: $e');
+      if (mounted) {
+        // 设置错误状态，状态栏变红，用户可点击查看详情
+        setState(() {
+          _lastErrorDetail = '本地文件夹同步失败\n\n$e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isBackgroundSyncing = false;
+          _syncProgress = null;
+          _syncMessage = null;
+          _syncStage = null;
+        });
+      }
+    }
+  }
+
+  /// 【新增】本地文件变化回调
+  void _onLocalFileChanged(LocalBackupInfo backup) {
+    debugPrint('📁 检测到新备份: ${backup.name}');
+
+    if (_isBackgroundSyncing) return;
+
+    // 更新状态栏显示，不弹窗
+    if (mounted) {
+      setState(() {
+        _pendingLocalBackup = backup;
+        _hasUpdate = true;
+        _lastCheckTime = DateTime.now();
+      });
+    }
+  }
+
+  /// 【新增】加载待更新的本地备份（点击状态栏触发）
+  Future<void> _loadPendingLocalBackup() async {
+    if (_pendingLocalBackup == null) return;
+    await _loadLocalBackup(_pendingLocalBackup!);
+    setState(() {
+      _pendingLocalBackup = null;
+    });
+  }
+
+  /// 【新增】加载本地备份
+  Future<void> _loadLocalBackup(LocalBackupInfo backup) async {
+    setState(() {
+      _isBackgroundSyncing = true;
+      _syncStage = SyncStage.parsing;
+      _syncMessage = '正在加载备份...';
+    });
+
+    try {
+      final localPath = await LocalFolderSyncService.loadBackup(backup);
+      if (localPath == null) throw Exception('加载失败');
+
+      // 清除旧缓存
+      await DataPersistenceManager.clearCache();
+
+      // 加载新文件
+      final loadSuccess = await _loadFile(localPath, saveCache: true);
+
+      if (loadSuccess) {
+        // 更新版本信息
+        _lastSyncTime = await LocalFolderSyncService.getLastSyncTime();
+        _currentVersionDisplay = backup.displayName;
+        _hasUpdate = false;
+
+        if (mounted) {
+          setState(() {
+            _error = null;
+            _pendingLocalBackup = null;  // 清除待加载状态
+            _lastCheckTime = DateTime.now();  // 更新检查时间
+          });
+          // 加载成功，状态栏自动显示 "已是最新"，无需 Toast
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        // 设置错误状态，状态栏变红，用户可点击查看详情
+        setState(() {
+          _lastErrorDetail = '加载备份失败\n\n$e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isBackgroundSyncing = false;
+          _syncMessage = null;
+          _syncStage = null;
+        });
+      }
+    }
   }
 
 
@@ -584,14 +824,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final success = await _loadFile(appFilePath, saveCache: true);
 
       if (success) {
+        // 导入成功，状态栏自动显示 "已是最新"
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ 文件已导入到App目录'),
-              duration: Duration(seconds: 2),
-              backgroundColor: Colors.green,
-            ),
-          );
+          setState(() {
+            _lastCheckTime = DateTime.now();
+            _hasUpdate = false;
+            _lastErrorDetail = null;  // 清除之前的错误
+          });
         }
       } else {
         // 加载失败，检查是否是文件损坏
@@ -605,15 +844,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             setState(() {
               _error = '选择的 ZIP 文件损坏或格式无效\n请确认文件完整性后重新选择';
               _isLoading = false;
+              _lastErrorDetail = 'ZIP 文件损坏\n\n选择的文件可能已损坏或格式不正确，请重新选择一个有效的 Cherry Studio 导出文件。';
             });
-
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('❌ ZIP 文件损坏，请重新选择文件'),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 3),
-              ),
-            );
           }
         }
         // 其他错误 _error 已在 _loadFile 中设置
@@ -749,17 +981,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _error = e.toString();
         _isLoading = false;
+        _lastErrorDetail = '文件加载失败\n\n$e';
       });
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('加载失败: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
       return false; // 加载失败
     }
   }
@@ -926,14 +1150,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (mounted) {
           setState(() {
             _error = null;
+            _lastCheckTime = DateTime.now();
+            _hasUpdate = false;
+            _lastErrorDetail = null;  // 清除错误状态
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('✅ 已加载备份: ${backup.displayName}'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 2),
-            ),
-          );
+          // 加载成功，状态栏自动显示 "已是最新"
         }
       } else {
         debugPrint('⚠️ 备份文件加载失败');
@@ -941,12 +1162,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('❌ 下载备份失败: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('下载失败: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        setState(() {
+          _lastErrorDetail = '下载备份失败\n\n$e';
+        });
       }
     } finally {
       if (mounted) {
@@ -966,6 +1184,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       appBar: AppBar(
         title: const Text('Cherry Reader'),
         actions: [
+          // 搜索按钮
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: (_isLoading || _extractor == null) ? null : () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => SearchScreen(extractor: _extractor!),
+                ),
+              );
+            },
+            tooltip: '搜索',
+          ),
           // 后台同步时显示取消按钮
           if (_isBackgroundSyncing)
             IconButton(
@@ -1049,50 +1280,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             tooltip: '设置',
           ),
         ],
-        // 【新增】AppBar 下方同步进度条
-        // 【优化】只有在有缓存数据时才显示顶部进度条（静默同步）
-        // 无缓存首次下载时，使用中间的大进度展示，避免重复
-        bottom: (_isBackgroundSyncing && _topicIndex != null)
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(24),
-                child: Column(
-                  children: [
-                    LinearProgressIndicator(
-                      value: _syncProgress,
-                      backgroundColor: Colors.grey[300],
-                      minHeight: 3,
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-                      child: Row(
-                        children: [
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _syncMessage ?? '同步中...',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                          if (_syncProgress != null)
-                            Text(
-                              '${(_syncProgress! * 100).toStringAsFixed(0)}%',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            : null,
+        // 进度显示已移至底部状态栏
       ),
       body: Column(
         children: [
+          // 数据更新提示已改为状态栏小蓝点，不再使用 Banner
           Expanded(child: _buildBody()),
           // 【新增】底部状态栏
           if (_topicIndex != null) _buildStatusBar(),
@@ -1108,81 +1300,537 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// 底部状态栏
+  /// 计算当前状态栏状态
+  StatusBarState _computeStatusBarState() {
+    final loadMode = switch (_loadMode) {
+      DataLoadMode.webdav => DataLoadMode.webdav,
+      DataLoadMode.localFolder => DataLoadMode.localFolder,
+      DataLoadMode.manual => DataLoadMode.manual,
+    };
+
+    final topicCount = _topicIndex?.values.fold<int>(0, (sum, list) => sum + list.length);
+    final versionDisplay = _activeVersion?.displayName ?? _currentVersionDisplay;
+
+    // 1. 检查是否有错误
+    if (_lastErrorDetail != null) {
+      return StatusBarState.error(
+        loadMode: loadMode,
+        errorDetail: _lastErrorDetail!,
+        versionDisplay: versionDisplay,
+        topicCount: topicCount,
+      );
+    }
+
+    // 2. 检查是否正在同步
+    if (_isBackgroundSyncing) {
+      switch (_syncStage) {
+        case SyncStage.connecting:
+          return StatusBarState.checking(
+            loadMode: loadMode,
+            versionDisplay: versionDisplay,
+            topicCount: topicCount,
+          );
+        case SyncStage.downloading:
+          return StatusBarState.downloading(
+            loadMode: loadMode,
+            progress: _syncProgress,
+            versionDisplay: versionDisplay,
+            topicCount: topicCount,
+          );
+        case SyncStage.parsing:
+          return StatusBarState.parsing(
+            loadMode: loadMode,
+            versionDisplay: versionDisplay,
+            topicCount: topicCount,
+          );
+        case SyncStage.completed:
+        case null:
+          return StatusBarState.upToDate(
+            loadMode: loadMode,
+            versionDisplay: versionDisplay,
+            topicCount: topicCount,
+          );
+      }
+    }
+
+    // 3. 检查是否有更新可用
+    if (_hasUpdate == true) {
+      return StatusBarState.hasUpdate(
+        loadMode: loadMode,
+        lastCheckTime: _lastCheckTime,
+        versionDisplay: versionDisplay,
+        topicCount: topicCount,
+      );
+    }
+
+    // 4. 空闲状态
+    return StatusBarState.idle(
+      loadMode: loadMode,
+      lastCheckTime: _lastCheckTime,
+      versionDisplay: versionDisplay,
+      topicCount: topicCount,
+      hasNewVersion: _showDataUpdatedBanner,
+    );
+  }
+
+  /// 底部状态栏（统一状态显示）
   Widget _buildStatusBar() {
+    final state = _computeStatusBarState();
+
     return GestureDetector(
-      onTap: () {
-        // 【新增】点击状态栏时刷新时间显示
-        if (_lastCheckTime != null) {
-          setState(() {});
-        }
-      },
+      onTap: () => _onStatusBarTap(state),
       child: SafeArea(
-      child: Container(
-        height: 36,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Colors.grey[200]!)),
-        ),
-        child: Row(
-          children: [
-            // WebDAV 模式：显示数据同步状态 + 检查时效性
-            if (_loadMode == DataLoadMode.webdav) ...[
-              // 根据状态显示不同图标
-              if (_hasUpdate == null) ...[
-                // 未检查
-                Icon(Icons.help_outline, size: 14, color: Colors.grey[400]),
-              ] else if (_hasUpdate == true) ...[
-                // 有更新
-                Icon(Icons.warning_amber_rounded, size: 14, color: Colors.orange[600]),
-              ] else ...[
-                // 已是最新
-                Icon(Icons.check_circle_outline, size: 14, color: Colors.green[600]),
-              ],
-              const SizedBox(width: 6),
-              
-              // 状态文字
-              Expanded(
-                child: Text(
-                  _hasUpdate == null
-                      ? '未检查 • 点击刷新检查更新'
-                      : _hasUpdate == true
-                          ? '有新版本可用 • ${_formatCheckTime(_lastCheckTime)}'
-                          : '数据已是最新 • ${_formatCheckTime(_lastCheckTime)}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: _hasUpdate == null
-                        ? Colors.grey[500]
-                        : _hasUpdate == true
-                            ? Colors.orange[700]
-                            : Colors.green[700],
-                    fontWeight: FontWeight.w500,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+        child: Container(
+          // 有进度条时稍微高一点
+          height: state.showProgress ? 42 : 36,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Colors.grey[200]!)),
+          ),
+          child: Column(
+            children: [
+              // 进度条（仅下载时显示）
+              if (state.showProgress)
+                LinearProgressIndicator(
+                  value: state.progress,
+                  backgroundColor: Colors.grey[200],
+                  minHeight: 3,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[400]!),
                 ),
-              ),
-            ] else ...[
-              // 本地模式
-              const Icon(Icons.folder_open, size: 14, color: Colors.grey),
-              const SizedBox(width: 6),
+              // 主内容
               Expanded(
-                child: Text(
-                  '本地模式 • 数据来自本地文件',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w500,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      // 状态图标
+                      _buildStatusIcon(state),
+                      const SizedBox(width: 8),
+                      // 状态文字
+                      Expanded(
+                        child: Text(
+                          _getStatusText(state),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: _getStatusColor(state),
+                            fontWeight: FontWeight.w500,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      // 进度百分比（下载时）
+                      if (state.phase == StatusBarPhase.downloading && state.progress != null) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          '${(state.progress! * 100).toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.blue[600],
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      // 分隔线 + 版本信息 + 话题数
+                      if (state.versionDisplay != null || state.topicCount != null) ...[
+                        Container(
+                          height: 20,
+                          width: 1,
+                          color: Colors.grey[300],
+                          margin: const EdgeInsets.symmetric(horizontal: 8),
+                        ),
+                        _buildVersionSection(state),
+                      ],
+                    ],
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
-          ],
+          ),
         ),
       ),
-      ), // GestureDetector
     );
+  }
+
+  /// 状态图标
+  Widget _buildStatusIcon(StatusBarState state) {
+    final (icon, color) = switch (state.phase) {
+      StatusBarPhase.idle => (Icons.cloud_done_outlined, Colors.grey[500]!),
+      StatusBarPhase.upToDate => (Icons.check_circle_outline, Colors.green[600]!),
+      StatusBarPhase.hasUpdate => (Icons.system_update_alt, Colors.orange[600]!),
+      StatusBarPhase.noDataSource => (Icons.cloud_off_outlined, Colors.grey[400]!),
+      StatusBarPhase.checking => (Icons.sync, Colors.grey[500]!),
+      StatusBarPhase.downloading => (Icons.downloading, Colors.blue[600]!),
+      StatusBarPhase.parsing => (Icons.data_object, Colors.blue[600]!),
+      StatusBarPhase.importing => (Icons.input, Colors.blue[600]!),
+      StatusBarPhase.switching => (Icons.swap_horiz, Colors.blue[600]!),
+      StatusBarPhase.error => (Icons.error_outline, Colors.red[600]!),
+    };
+
+    // 进行中状态使用动画图标
+    if (state.isInProgress) {
+      return SizedBox(
+        width: 14,
+        height: 14,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          valueColor: AlwaysStoppedAnimation<Color>(color),
+        ),
+      );
+    }
+
+    return Icon(icon, size: 14, color: color);
+  }
+
+  /// 获取状态文字
+  String _getStatusText(StatusBarState state) {
+    // 本地文件夹模式下有更新时，显示特殊文字
+    if (state.phase == StatusBarPhase.hasUpdate &&
+        state.loadMode == DataLoadMode.localFolder &&
+        _pendingLocalBackup != null) {
+      return '新版本 ${_pendingLocalBackup!.displayName}，点击更新';
+    }
+    return state.statusText;
+  }
+
+  /// 获取状态颜色
+  Color _getStatusColor(StatusBarState state) {
+    return switch (state.phase) {
+      StatusBarPhase.idle => Colors.grey[600]!,
+      StatusBarPhase.upToDate => Colors.green[700]!,
+      StatusBarPhase.hasUpdate => Colors.orange[700]!,
+      StatusBarPhase.noDataSource => Colors.grey[500]!,
+      StatusBarPhase.checking => Colors.grey[600]!,
+      StatusBarPhase.downloading => Colors.blue[700]!,
+      StatusBarPhase.parsing => Colors.blue[700]!,
+      StatusBarPhase.importing => Colors.blue[700]!,
+      StatusBarPhase.switching => Colors.blue[700]!,
+      StatusBarPhase.error => Colors.red[700]!,
+    };
+  }
+
+  /// 版本信息区域
+  Widget _buildVersionSection(StatusBarState state) {
+    return GestureDetector(
+      onTap: () {
+        if (_showDataUpdatedBanner) {
+          setState(() => _showDataUpdatedBanner = false);
+        }
+        _showVersionManager();
+      },
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 版本图标 + 小蓝点
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Icon(
+                Icons.history,
+                size: 14,
+                color: _showDataUpdatedBanner ? Colors.blue[600] : Colors.grey[600],
+              ),
+              if (_showDataUpdatedBanner)
+                Positioned(
+                  right: -3,
+                  top: -3,
+                  child: Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: Colors.blue,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 4),
+          // 版本名 + 话题数
+          Text(
+            state.topicCount != null
+                ? '${state.versionDisplay ?? ''} · ${state.topicCount}'
+                : state.versionDisplay ?? '',
+            style: TextStyle(
+              fontSize: 11,
+              color: _showDataUpdatedBanner ? Colors.blue[600] : Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 状态栏点击处理
+  void _onStatusBarTap(StatusBarState state) {
+    // 错误状态：显示错误详情弹窗
+    if (state.isError) {
+      _showErrorDialog(state.errorDetail ?? '未知错误');
+      return;
+    }
+
+    // 本地文件夹模式 + 有更新：加载新版本
+    if (state.loadMode == DataLoadMode.localFolder && _pendingLocalBackup != null) {
+      _loadPendingLocalBackup();
+      return;
+    }
+
+    // 有更新状态：触发同步
+    if (state.phase == StatusBarPhase.hasUpdate) {
+      if (state.loadMode == DataLoadMode.webdav) {
+        _backgroundSyncFromWebDav();
+      }
+      return;
+    }
+
+    // 空闲状态：刷新时间显示
+    if (state.isIdle && _lastCheckTime != null) {
+      setState(() {});
+    }
+  }
+
+  /// 显示错误详情弹窗
+  void _showErrorDialog(String errorDetail) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red[600], size: 24),
+            const SizedBox(width: 8),
+            const Text('同步失败'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                errorDetail,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[800],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              // 清除错误状态
+              setState(() {
+                _lastErrorDetail = null;
+              });
+            },
+            child: const Text('关闭'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              // 清除错误状态并重试
+              setState(() {
+                _lastErrorDetail = null;
+              });
+              // 根据模式重试
+              if (_loadMode == DataLoadMode.webdav) {
+                _backgroundSyncFromWebDav();
+              } else if (_loadMode == DataLoadMode.localFolder) {
+                _loadPendingLocalBackup();
+              }
+            },
+            child: const Text('重试'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 【新增】显示版本管理对话框
+  Future<void> _showVersionManager() async {
+    final versions = await VersionService.instance.listVersions();
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        minChildSize: 0.3,
+        maxChildSize: 0.8,
+        expand: false,
+        builder: (context, scrollController) {
+          return Column(
+            children: [
+              // 标题栏
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.history, size: 20),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        '版本历史',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    // 锁定开关
+                    if (_activeVersion != null)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _activeVersion!.isLocked ? Icons.lock : Icons.lock_open,
+                            size: 16,
+                            color: _activeVersion!.isLocked ? Colors.orange : Colors.grey,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _activeVersion!.isLocked ? '已锁定' : '自动更新',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: _activeVersion!.isLocked ? Colors.orange : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+
+              // 版本列表
+              Expanded(
+                child: versions.isEmpty
+                    ? const Center(child: Text('暂无版本数据'))
+                    : ListView.builder(
+                        controller: scrollController,
+                        itemCount: versions.length,
+                        itemBuilder: (context, index) {
+                          final version = versions[index];
+                          final isActive = version.status == VersionStatus.active;
+
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: isActive
+                                  ? Colors.green[100]
+                                  : Colors.grey[100],
+                              child: Icon(
+                                isActive ? Icons.check : Icons.archive,
+                                color: isActive ? Colors.green : Colors.grey,
+                                size: 20,
+                              ),
+                            ),
+                            title: Row(
+                              children: [
+                                Text(version.displayName),
+                                if (isActive)
+                                  Container(
+                                    margin: const EdgeInsets.only(left: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.green[50],
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      '当前',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: Colors.green[700],
+                                      ),
+                                    ),
+                                  ),
+                                if (version.isLocked)
+                                  Container(
+                                    margin: const EdgeInsets.only(left: 4),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.orange[50],
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      '锁定',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: Colors.orange[700],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            subtitle: Text(
+                              '${version.topicCount} 话题 • ${version.formattedSize}',
+                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                            ),
+                            trailing: isActive
+                                ? null
+                                : TextButton(
+                                    onPressed: () async {
+                                      Navigator.pop(context);
+                                      await _activateVersion(version);
+                                    },
+                                    child: const Text('切换'),
+                                  ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 【新增】激活指定版本
+  Future<void> _activateVersion(DataVersion version) async {
+    try {
+      final success = await VersionService.instance.activateVersion(
+        version.versionId,
+        force: true,
+      );
+
+      if (success) {
+        await _loadActiveVersion();
+        if (mounted) {
+          setState(() {
+            _showDataUpdatedBanner = true;
+            _lastCheckTime = DateTime.now();
+            _lastErrorDetail = null;  // 清除错误状态
+          });
+          // 切换成功，状态栏小蓝点提示用户版本已更新
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _lastErrorDetail = '切换版本失败\n\n$e';
+        });
+      }
+    }
   }
 
   Widget _buildBody() {
@@ -1321,10 +1969,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 【新增】格式化检查时间为友好的相对时间
   String _formatCheckTime(DateTime? checkTime) {
     if (checkTime == null) return '未检查';
-    
+
     final now = DateTime.now();
     final diff = now.difference(checkTime);
-    
+
     if (diff.inSeconds < 10) return '刚刚检查';
     if (diff.inMinutes < 1) return '${diff.inSeconds}秒前检查';
     if (diff.inHours < 1) return '${diff.inMinutes}分钟前检查';
@@ -1332,6 +1980,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return DateFormat('MM-dd HH:mm').format(checkTime) + ' 检查';
   }
 
+  /// 格式化版本时间（备份文件的修改时间）
+  String _formatVersionTime(DateTime? time) {
+    if (time == null) return '未知';
+    return DateFormat('MM-dd HH:mm').format(time);
+  }
 
   Widget _buildTopicList() {
     if (_topicIndex == null || _topicIndex!.isEmpty) {
@@ -1403,7 +2056,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           return;
                         }
 
-                        Navigator.push(
+                        await Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (context) => ConversationScreen(
