@@ -43,6 +43,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
   // 【性能优化】缓存对话分组结果
   List<Map<String, dynamic>>? _cachedGroups;
 
+  // 【新增】消息讨论数量缓存（key: messageId 或 contextId）
+  Map<String, int> _discussionCounts = {};
+
   final _epubExportService = EpubExportService();
 
   // 【轮次导航】使用 scroll_to_index 实现精确跳转
@@ -359,6 +362,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
         await highlightService.batchPreload(messageIds);
         debugPrint('⏱️ [ConversationScreen] 标注预加载 (${messageIds.length}条): ${sw.elapsedMilliseconds}ms');
       }
+
+      // 【新增】批量预加载讨论数量
+      sw.reset();
+      await _preloadDiscussionCounts(conv);
+      debugPrint('⏱️ [ConversationScreen] 讨论数量预加载: ${sw.elapsedMilliseconds}ms');
     }
 
     debugPrint('⏱️ [ConversationScreen] _loadData 总耗时: ${totalSw.elapsedMilliseconds}ms');
@@ -377,6 +385,55 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
     // ========== 调试信息：打印 Topic 详情 ==========
     _printTopicDebugInfo();
+  }
+
+  /// 【新增】批量预加载讨论数量
+  Future<void> _preloadDiscussionCounts(Map<String, dynamic> conv) async {
+    final conversationService = UnifiedConversationService.instance;
+    final messages = conv['messages'] as List<dynamic>? ?? [];
+    final counts = <String, int>{};
+
+    // 收集所有需要查询的 contextId
+    final contextIds = <String>[];
+
+    // 1. 收集所有消息的 messageId（单条消息讨论）
+    for (final msg in messages) {
+      if (msg is Map<String, dynamic>) {
+        final messageId = msg['id'] as String?;
+        if (messageId != null && messageId.isNotEmpty) {
+          contextIds.add(messageId);
+        }
+      }
+    }
+
+    // 2. 收集轮次级别的 contextId（消息组讨论）
+    // 先解析分组以获取轮次数量
+    final groups = <Map<String, dynamic>>[];
+    Map<String, dynamic>? currentGroup;
+    for (final msg in messages) {
+      if (msg is! Map<String, dynamic>) continue;
+      final role = msg['role'] as String?;
+      if (role == 'user') {
+        if (currentGroup != null) groups.add(currentGroup);
+        currentGroup = {'user_message': msg, 'assistant_replies': <Map<String, dynamic>>[]};
+      } else if (role == 'assistant' && currentGroup != null) {
+        (currentGroup['assistant_replies'] as List).add(msg);
+      }
+    }
+    if (currentGroup != null) groups.add(currentGroup);
+
+    // 添加轮次级别的 contextId
+    for (var i = 0; i < groups.length; i++) {
+      contextIds.add('${widget.topicId}:$i');
+    }
+
+    // 3. 批量查询讨论数量
+    for (final contextId in contextIds) {
+      final conversations = await conversationService.getConversationsByContext(contextId);
+      counts[contextId] = conversations.length;
+    }
+
+    _discussionCounts = counts;
   }
 
   /// 打印 Topic 调试信息
@@ -1131,14 +1188,20 @@ $modelResponses''';
   /// 简洁布局：操作按钮（更紧凑）
   Widget _buildCleanActionButtons(int groupIndex) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 获取轮次级别的讨论数量
+    final contextId = '${widget.topicId}:$groupIndex';
+    final discussionCount = _discussionCounts[contextId] ?? 0;
+    final hasDiscussion = discussionCount > 0;
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // AI 讨论
-        _buildIconOnlyButton(
-          icon: Icons.chat_bubble_outline,
+        // AI 讨论（带数量角标）
+        _buildIconWithBadge(
+          icon: hasDiscussion ? Icons.chat_bubble : Icons.chat_bubble_outline,
           tooltip: 'AI 讨论',
-          color: const Color(0xFF8B5CF6),
+          color: hasDiscussion ? const Color(0xFF8B5CF6) : Colors.grey[400]!,
+          badgeCount: discussionCount,
           onPressed: () => _openAnalysisChat(groupIndex),
         ),
         // TTS 朗读 - 【性能优化】使用 Selector 只监听 hasValidConfig
@@ -1183,19 +1246,87 @@ $modelResponses''';
     );
   }
 
+  /// 简洁布局：带角标的图标按钮
+  Widget _buildIconWithBadge({
+    required IconData icon,
+    required String tooltip,
+    required Color color,
+    required int badgeCount,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Center(child: Icon(icon, size: 18, color: color)),
+              if (badgeCount > 0)
+                Positioned(
+                  right: 0,
+                  top: 2,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF8B5CF6),
+                      shape: BoxShape.circle,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 14,
+                      minHeight: 14,
+                    ),
+                    child: Text(
+                      badgeCount > 99 ? '99+' : '$badgeCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 简洁布局：回复内容区域（流式布局）
   /// 【性能优化】使用 ValueListenableBuilder 避免整页重建
   Widget _buildCleanReplyContent(int groupIndex, List<dynamic> assistantReplies, bool isSingleCard) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // 单回复模式 - 直接展示，不需要 Tab
+    // 单回复模式 - 直接展示，但仍保留轮次级别操作按钮
     if (isSingleCard) {
       final reply = assistantReplies.first as Map<String, dynamic>;
-      return _buildStreamReplyItem(
-        reply: reply,
-        groupIndex: groupIndex,
-        isDark: isDark,
-        showDivider: false,
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 操作按钮区域（与多回复模式保持一致）
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+            child: Row(
+              children: [
+                const Spacer(),
+                _buildCleanActionButtons(groupIndex),
+              ],
+            ),
+          ),
+          // 回复内容
+          _buildStreamReplyItem(
+            reply: reply,
+            groupIndex: groupIndex,
+            isDark: isDark,
+            showDivider: false,
+          ),
+        ],
       );
     }
 
@@ -1558,6 +1689,9 @@ $modelResponses''';
       }
     }
 
+    // 获取单条消息的讨论数量
+    final discussionCount = _discussionCounts[messageId] ?? 0;
+
     return Container(
       color: modelColor.withValues(alpha: isDark ? 0.04 : 0.02),
       child: Column(
@@ -1581,6 +1715,7 @@ $modelResponses''';
                   showRegenerate: false, // 查看模式暂不支持重新生成
                   showSpeak: hasValidConfig,
                   onSpeak: () => _speakContent(content, modelName),
+                  discussionCount: discussionCount,
                 ),
               );
             },
@@ -1782,9 +1917,23 @@ $modelResponses''';
       });
     }
 
+    // 获取助手信息
+    String? assistantId;
+    String? assistantName;
+    if (_conversation != null) {
+      assistantId = _conversation!['assistantId'] as String?;
+      // 尝试从 assistant 字段获取名称
+      final assistant = _conversation!['assistant'] as Map<String, dynamic>?;
+      assistantName = assistant?['name'] as String?;
+    }
+
     return {
       'rounds': rounds,
       'currentRoundIndex': currentGroupIndex, // 当前轮次索引
+      'topicId': widget.topicId,
+      'topicName': widget.topicName,
+      'assistantId': assistantId,
+      'assistantName': assistantName,
     };
   }
 

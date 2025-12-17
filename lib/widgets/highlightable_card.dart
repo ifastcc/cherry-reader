@@ -72,6 +72,9 @@ class HighlightableCard extends StatefulWidget {
   /// 朗读回调
   final VoidCallback? onSpeak;
 
+  /// 【可选】是否启用长文本折叠功能（默认关闭，保持原有双击全屏行为）
+  final bool enableCollapse;
+
   const HighlightableCard({
     super.key,
     required this.messageId,
@@ -88,6 +91,7 @@ class HighlightableCard extends StatefulWidget {
     this.onDiscuss,
     this.onRegenerate,
     this.onSpeak,
+    this.enableCollapse = false,
   });
 
   /// 创建助手回复卡片
@@ -100,6 +104,7 @@ class HighlightableCard extends StatefulWidget {
     VoidCallback? onDiscuss,
     VoidCallback? onRegenerate,
     VoidCallback? onSpeak,
+    bool enableCollapse = false,
   }) {
     final blocks = data['blocks'] as List<dynamic>? ?? [];
     final model = data['model'] as Map<String, dynamic>?;
@@ -130,11 +135,16 @@ class HighlightableCard extends StatefulWidget {
       onDiscuss: onDiscuss,
       onRegenerate: onRegenerate,
       onSpeak: onSpeak,
+      enableCollapse: enableCollapse,
     );
   }
 
   /// 创建 AI 分析卡片
-  factory HighlightableCard.aiAnalysis({Key? key, required String content}) {
+  factory HighlightableCard.aiAnalysis({
+    Key? key,
+    required String content,
+    bool enableCollapse = false,
+  }) {
     final messageId = 'ai_analysis_${content.hashCode}';
 
     return HighlightableCard(
@@ -145,6 +155,7 @@ class HighlightableCard extends StatefulWidget {
       modelColor: const Color(0xFF8B5CF6),
       cardType: CardType.aiAnalysis,
       showTimestamp: false,
+      enableCollapse: enableCollapse,
     );
   }
 
@@ -206,8 +217,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
       kHighlightStyles[_currentStyleIndex].color;
   String get _currentHighlightType => kHighlightStyles[_currentStyleIndex].type;
 
-  // 【新增】判断内容是否需要折叠
-  bool get _isLongContent => widget.content.length > _collapseThreshold;
+  // 【新增】判断内容是否需要折叠（仅在启用折叠功能时生效）
+  bool get _isLongContent => widget.enableCollapse && widget.content.length > _collapseThreshold;
 
   // 【新增】获取当前显示的内容
   String get _displayContent {
@@ -496,8 +507,9 @@ class _HighlightableCardState extends State<HighlightableCard> {
   /// 流式布局（无边框、自然撑开）
   Widget _buildStreamLayout() {
     return GestureDetector(
-      onDoubleTap: _toggleExpand,
-      onLongPress: _openFullscreen,
+      // 启用折叠时：双击展开/收缩，长按全屏；否则：双击全屏
+      onDoubleTap: widget.enableCollapse ? _toggleExpand : _openFullscreen,
+      onLongPress: widget.enableCollapse ? _openFullscreen : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         child: Column(
@@ -551,8 +563,9 @@ class _HighlightableCardState extends State<HighlightableCard> {
   /// 传统卡片布局
   Widget _buildCardLayout() {
     return GestureDetector(
-      onDoubleTap: _toggleExpand,
-      onLongPress: _openFullscreen,
+      // 启用折叠时：双击展开/收缩，长按全屏；否则：双击全屏
+      onDoubleTap: widget.enableCollapse ? _toggleExpand : _openFullscreen,
+      onLongPress: widget.enableCollapse ? _openFullscreen : null,
       child: widget.maxHeight != null
           ? ConstrainedBox(
               constraints: BoxConstraints(maxHeight: widget.maxHeight!),

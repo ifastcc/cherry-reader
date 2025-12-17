@@ -9,9 +9,11 @@ import '../services/ai_provider_service.dart';
 import '../services/prompt_template_service.dart';
 import '../services/multi_model_service.dart' as multi_model;
 import '../services/streaming_session_manager.dart';
+import '../services/topic_service.dart';
 import '../utils/mention_parser.dart';
 import '../widgets/unified_markdown_renderer.dart';
-import '../widgets/context_selector.dart';
+import '../widgets/context_selector.dart' show TopicSummary;
+import '../widgets/context_selector_with_styles.dart' show ContextSelectorWithStyles;
 import '../widgets/context_structure_view.dart';
 import '../widgets/provider_chip.dart';
 import '../widgets/ai_chat_drawer.dart';
@@ -415,9 +417,16 @@ class _AIChatScreenState extends State<AIChatScreen> {
     final contextType = widget.contextTypeFilter ?? ConversationContextType.topic;
     final charCount = _currentContextContent?.length ?? 0;
 
-    // 对于多轮对话，优先使用 ContextSelector 生成的选择数据
-    if (contextType == ConversationContextType.messageGroup && _selectedContextDataJson != null) {
-      return _selectedContextDataJson;
+    // 【修复】如果用户已清空选择（_currentContextContent 为空），返回 null
+    // 避免回退到原始数据导致显示全部内容
+    if (_currentContextContent == null || _currentContextContent!.isEmpty) {
+      return null;
+    }
+
+    // 对于多轮对话，必须使用 ContextSelector 生成的选择数据
+    // 如果 _selectedContextDataJson 为 null，说明用户没有选择任何内容，返回 null
+    if (contextType == ConversationContextType.messageGroup) {
+      return _selectedContextDataJson;  // 可能为 null，这是预期行为
     }
 
     if (contextType == ConversationContextType.singleMessage) {
@@ -439,62 +448,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
         }
       }
       return '{"type":"single","modelName":"${_escapeJson(modelName ?? "AI")}","charCount":${replyCharCount > 0 ? replyCharCount : charCount}}';
-    } else if (contextType == ConversationContextType.messageGroup) {
-      // 多轮模式
-      final rounds = contextData['rounds'] as List?;
-      if (rounds == null || rounds.isEmpty) {
-        return '{"type":"multi","rounds":[],"charCount":$charCount}';
-      }
-
-      final roundJsonParts = <String>[];
-
-      for (final round in rounds) {
-        final index = round['index'] as int? ?? 0;
-        final questionData = round['question'] as Map<String, dynamic>?;
-        final repliesData = round['replies'] as List? ?? [];
-
-        // 提取问题预览
-        String? questionPreview;
-        if (questionData != null) {
-          final blocks = questionData['blocks'] as List? ?? [];
-          final buffer = StringBuffer();
-          for (final block in blocks) {
-            if (block is Map && block['type'] == 'main_text') {
-              buffer.write(block['content'] as String? ?? '');
-            }
-          }
-          final fullQuestion = buffer.toString().trim();
-          if (fullQuestion.isNotEmpty) {
-            questionPreview = fullQuestion.length > 50
-                ? '${fullQuestion.substring(0, 50)}...'
-                : fullQuestion;
-          }
-        }
-
-        // 提取每个回复的详细信息
-        final replyJsonParts = <String>[];
-        for (final reply in repliesData) {
-          final modelName = reply['model']?['name'] as String? ?? 'Unknown';
-          final blocks = reply['blocks'] as List? ?? [];
-          int replyCharCount = 0;
-          for (final block in blocks) {
-            if (block is Map && block['type'] == 'main_text') {
-              replyCharCount += (block['content'] as String?)?.length ?? 0;
-            }
-          }
-          replyJsonParts.add('{"model":"${_escapeJson(modelName)}","charCount":$replyCharCount}');
-        }
-
-        // 构建这一轮的 JSON
-        final questionPart = questionPreview != null
-            ? ',"questionPreview":"${_escapeJson(questionPreview)}"'
-            : '';
-        final repliesJson = replyJsonParts.join(',');
-        roundJsonParts.add('{"index":$index$questionPart,"replies":[$repliesJson]}');
-      }
-
-      final roundsJson = roundJsonParts.join(',');
-      return '{"type":"multi","rounds":[$roundsJson],"charCount":$charCount}';
     }
 
     return null;
@@ -1065,10 +1018,13 @@ class _AIChatScreenState extends State<AIChatScreen> {
     // 过滤掉系统消息
     final displayMessages = _messages.where((m) => m.role != 'system').toList();
 
-    // 计算显示项数：历史消息 + 正在发送的消息（单模型或多模型）
+    // 【修复】将消息分组：用户消息独立，同一 askId 的 assistant 消息合并显示
+    final groupedItems = _groupMessagesForDisplay(displayMessages);
+
+    // 计算显示项数：分组后的消息 + 正在发送的消息（单模型或多模型）
     final hasStreamingContent = _isSending && !_isMultiModelMode;
     final hasMultiModelContent = _isSending && _isMultiModelMode && _multiModelResponses != null;
-    final itemCount = displayMessages.length +
+    final itemCount = groupedItems.length +
         (hasStreamingContent ? 1 : 0) +
         (hasMultiModelContent ? 1 : 0);
 
@@ -1082,36 +1038,123 @@ class _AIChatScreenState extends State<AIChatScreen> {
       itemCount: itemCount,
       itemBuilder: (context, index) {
         // 多模型流式消息
-        if (index == displayMessages.length && hasMultiModelContent) {
+        if (index == groupedItems.length && hasMultiModelContent) {
           return _buildMultiModelResponseArea();
         }
 
         // 单模型流式消息
-        if (index == displayMessages.length && hasStreamingContent) {
+        if (index == groupedItems.length && hasStreamingContent) {
           return _buildAssistantMessage(
             content: _streamingContent.isEmpty ? '思考中...' : _streamingContent,
             isStreaming: true,
           );
         }
 
-        // 正常消息
-        if (index < displayMessages.length) {
-          final message = displayMessages[index];
+        // 正常消息（分组后的）
+        if (index < groupedItems.length) {
+          final item = groupedItems[index];
 
-          if (message.role == 'user') {
-            return _buildStructuredUserMessage(message);
+          if (item is _UserMessageItem) {
+            return _buildStructuredUserMessage(item.message);
           }
 
-          return _buildAssistantMessage(
-            content: message.content,
-            modelName: message.modelName,
-            messageId: message.messageId,
-            isStreaming: false,
-          );
+          if (item is _SingleAssistantItem) {
+            return _buildAssistantMessage(
+              content: item.message.content,
+              modelName: item.message.modelName,
+              messageId: item.message.messageId,
+              isStreaming: false,
+            );
+          }
+
+          if (item is _MultiAssistantItem) {
+            return _buildSavedMultiModelResponses(item.messages);
+          }
         }
 
         return const SizedBox.shrink();
       },
+    );
+  }
+
+  /// 将消息分组：用户消息独立，同一 askId 的多个 assistant 消息合并
+  List<_DisplayItem> _groupMessagesForDisplay(List<UnifiedMessageEntity> messages) {
+    final items = <_DisplayItem>[];
+    final assistantByAskId = <String, List<UnifiedMessageEntity>>{};
+    final processedAskIds = <String>{};
+
+    for (final msg in messages) {
+      if (msg.role == 'user') {
+        items.add(_UserMessageItem(msg));
+      } else if (msg.role == 'assistant') {
+        final askId = msg.askId;
+        if (askId != null && askId.isNotEmpty) {
+          // 有 askId，加入分组
+          assistantByAskId.putIfAbsent(askId, () => []).add(msg);
+        } else {
+          // 没有 askId，独立显示
+          items.add(_SingleAssistantItem(msg));
+        }
+      }
+    }
+
+    // 按原始顺序插入分组的 assistant 消息
+    final result = <_DisplayItem>[];
+    for (final msg in messages) {
+      if (msg.role == 'user') {
+        result.add(_UserMessageItem(msg));
+      } else if (msg.role == 'assistant') {
+        final askId = msg.askId;
+        if (askId != null && askId.isNotEmpty) {
+          // 只在第一次遇到该 askId 时处理
+          if (!processedAskIds.contains(askId)) {
+            processedAskIds.add(askId);
+            final group = assistantByAskId[askId]!;
+            if (group.length > 1) {
+              // 多个回复，横向显示
+              result.add(_MultiAssistantItem(group));
+            } else {
+              // 只有一个回复，普通显示
+              result.add(_SingleAssistantItem(group.first));
+            }
+          }
+          // 后续遇到同一 askId 的消息跳过（已经处理过了）
+        } else {
+          result.add(_SingleAssistantItem(msg));
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /// 已保存的多模型回复横向展示（从数据库加载的）
+  Widget _buildSavedMultiModelResponses(List<UnifiedMessageEntity> messages) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.55,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: messages.map((msg) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: _SavedModelResponseCard(
+                    message: msg,
+                    onRetry: () => _regenerateMessage(msg.messageId),
+                    onCopy: () => _copyToClipboard(msg.content),
+                    onQuote: () => _quoteToInput(msg.content),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2566,6 +2609,7 @@ class _ContextEditorPage extends StatefulWidget {
 
 class _ContextEditorPageState extends State<_ContextEditorPage> {
   late String _currentSnapshot;
+  final _topicService = TopicService();
 
   @override
   void initState() {
@@ -2583,6 +2627,108 @@ class _ContextEditorPageState extends State<_ContextEditorPage> {
     widget.onContextChanged(newSnapshot, structured, contextDataJson);
   }
 
+  /// 加载所有话题列表
+  Future<List<TopicSummary>> _loadTopics(String? assistantId) async {
+    try {
+      final topicsGrouped = await _topicService.getTopicsGrouped();
+      // 获取助手列表来匹配名字
+      final assistants = await _topicService.getAssistants();
+      final assistantMap = <String, String>{};
+      for (final assistant in assistants) {
+        assistantMap[assistant.assistantId] = assistant.name;
+      }
+
+      final result = <TopicSummary>[];
+
+      for (final entry in topicsGrouped.entries) {
+        final assistantIdKey = entry.key;
+        final topics = entry.value;
+        final assistantName = assistantMap[assistantIdKey] ?? '未知助手';
+
+        for (final topic in topics) {
+          result.add(TopicSummary(
+            id: topic['id'] as String,
+            name: topic['name'] as String? ?? '未命名话题',
+            assistantId: topic['assistantId'] as String?,
+            assistantName: assistantName,
+            roundCount: topic['roundCount'] as int? ?? 0,
+            updatedAt: topic['updatedAt'] != null
+                ? DateTime.tryParse(topic['updatedAt'].toString())
+                : null,
+          ));
+        }
+      }
+
+      // 按更新时间排序（最新的在前）
+      result.sort((a, b) {
+        if (a.updatedAt == null && b.updatedAt == null) return 0;
+        if (a.updatedAt == null) return 1;
+        if (b.updatedAt == null) return -1;
+        return b.updatedAt!.compareTo(a.updatedAt!);
+      });
+
+      return result;
+    } catch (e) {
+      debugPrint('加载话题列表失败: $e');
+      return [];
+    }
+  }
+
+  /// 加载话题详情
+  Future<Map<String, dynamic>?> _loadTopicDetail(String topicId) async {
+    try {
+      final topicData = await _topicService.getTopicFullData(topicId);
+      if (topicData == null) return null;
+
+      // 将消息转换为 rounds 格式
+      final messages = topicData['messages'] as List<dynamic>? ?? [];
+      final rounds = _convertMessagesToRounds(messages);
+
+      return {'rounds': rounds};
+    } catch (e) {
+      debugPrint('加载话题详情失败: $e');
+      return null;
+    }
+  }
+
+  /// 将消息列表转换为 rounds 格式（与 CherryExtractor 类似的逻辑）
+  List<Map<String, dynamic>> _convertMessagesToRounds(List<dynamic> messages) {
+    final rounds = <Map<String, dynamic>>[];
+    Map<String, dynamic>? currentUserMsg;
+    List<Map<String, dynamic>> currentReplies = [];
+
+    for (final msg in messages) {
+      if (msg is! Map<String, dynamic>) continue;
+
+      final role = msg['role'] as String?;
+      if (role == 'user') {
+        // 保存上一轮
+        if (currentUserMsg != null || currentReplies.isNotEmpty) {
+          rounds.add({
+            'index': rounds.length,
+            'question': currentUserMsg ?? {},
+            'replies': List<Map<String, dynamic>>.from(currentReplies),
+          });
+          currentReplies = [];
+        }
+        currentUserMsg = msg;
+      } else if (role == 'assistant') {
+        currentReplies.add(msg);
+      }
+    }
+
+    // 保存最后一轮
+    if (currentUserMsg != null || currentReplies.isNotEmpty) {
+      rounds.add({
+        'index': rounds.length,
+        'question': currentUserMsg ?? {},
+        'replies': List<Map<String, dynamic>>.from(currentReplies),
+      });
+    }
+
+    return rounds;
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -2590,6 +2736,12 @@ class _ContextEditorPageState extends State<_ContextEditorPage> {
 
     // 侧滑页面宽度：宽屏占 95%，窄屏全屏（最大化编辑空间）
     final pageWidth = isWideScreen ? screenWidth * 0.95 : screenWidth;
+
+    // 从 contextData 提取话题信息
+    final currentTopicId = widget.contextData?['topicId'] as String?;
+    final currentTopicName = widget.contextData?['topicName'] as String?;
+    final currentAssistantId = widget.contextData?['assistantId'] as String?;
+    final currentAssistantName = widget.contextData?['assistantName'] as String?;
 
     return Align(
       alignment: Alignment.centerRight,
@@ -2604,17 +2756,23 @@ class _ContextEditorPageState extends State<_ContextEditorPage> {
                 // 顶部栏
                 _buildAppBar(context),
 
-                // Context 选择器
+                // Context 选择器 (带三种视觉风格切换)
                 Expanded(
-                  child: ContextSelector(
+                  child: ContextSelectorWithStyles(
                     contextData: widget.contextData,
                     contextSnapshot: _currentSnapshot,
                     currentRoundIndex: widget.currentRoundIndex,
+                    currentTopicId: currentTopicId,
+                    currentTopicName: currentTopicName,
+                    currentAssistantId: currentAssistantId,
+                    currentAssistantName: currentAssistantName,
                     onContextChanged: _handleContextChanged,
                     onClear: () {
                       widget.onClear();
                       Navigator.pop(context);
                     },
+                    onLoadTopics: _loadTopics,
+                    onLoadTopicDetail: _loadTopicDetail,
                   ),
                 ),
               ],
@@ -2675,5 +2833,275 @@ class _ContextEditorPageState extends State<_ContextEditorPage> {
         ],
       ),
     );
+  }
+}
+
+// ============ 消息分组辅助类 ============
+
+/// 消息显示项基类
+sealed class _DisplayItem {}
+
+/// 用户消息项
+class _UserMessageItem extends _DisplayItem {
+  final UnifiedMessageEntity message;
+  _UserMessageItem(this.message);
+}
+
+/// 单个 assistant 消息项
+class _SingleAssistantItem extends _DisplayItem {
+  final UnifiedMessageEntity message;
+  _SingleAssistantItem(this.message);
+}
+
+/// 多个 assistant 消息项（同一 askId 的多个回复）
+class _MultiAssistantItem extends _DisplayItem {
+  final List<UnifiedMessageEntity> messages;
+  _MultiAssistantItem(this.messages);
+}
+
+// ============ 保存后的多模型回复卡片 ============
+
+/// 已保存的模型回复卡片（从数据库加载的多模型回复）
+class _SavedModelResponseCard extends StatelessWidget {
+  final UnifiedMessageEntity message;
+  final VoidCallback? onRetry;
+  final VoidCallback? onCopy;
+  final VoidCallback? onQuote;
+
+  const _SavedModelResponseCard({
+    required this.message,
+    this.onRetry,
+    this.onCopy,
+    this.onQuote,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final modelColor = _getModelColor(message.modelName ?? 'AI');
+    final cardWidth = MediaQuery.of(context).size.width * 0.75;
+    final minWidth = 320.0;
+    final maxWidth = 500.0;
+    final width = cardWidth.clamp(minWidth, maxWidth);
+
+    return Container(
+      width: width,
+      decoration: BoxDecoration(
+        color: isDark ? Colors.grey[850] : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: message.isMainline == true
+              ? Colors.amber.withValues(alpha: 0.6)
+              : (isDark ? Colors.grey[700]! : Colors.grey[200]!),
+          width: message.isMainline == true ? 2 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 顶部：模型名称
+          _buildHeader(context, modelColor, isDark),
+
+          // 内容区域
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(12),
+              child: UnifiedMarkdownRenderer(
+                data: message.content,
+                scrollable: false,
+                selectable: true,
+                textStyle: TextStyle(
+                  fontSize: 14,
+                  height: 1.7,
+                  color: isDark ? Colors.grey[200] : const Color(0xFF2C3E50),
+                ),
+              ),
+            ),
+          ),
+
+          // 底部操作栏
+          _buildActionBar(context, isDark),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context, Color modelColor, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: modelColor.withValues(alpha: 0.08),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(11)),
+        border: Border(
+          bottom: BorderSide(
+            color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          // 模型图标
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: modelColor.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(
+              _getModelIcon(message.modelName ?? 'AI'),
+              size: 16,
+              color: modelColor,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // 模型名称
+          Expanded(
+            child: Text(
+              message.modelName ?? 'AI',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : Colors.grey[800],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // 主线标记
+          if (message.isMainline == true)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.amber[100],
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '主线',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Colors.amber[800],
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            )
+          else
+            Icon(Icons.check_circle, size: 16, color: Colors.green[400]),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionBar(BuildContext context, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.grey[900] : Colors.grey[50],
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(11)),
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          // 复制
+          _buildActionButton(
+            icon: Icons.copy_outlined,
+            tooltip: '复制',
+            onTap: onCopy,
+          ),
+          // 重试
+          if (onRetry != null)
+            _buildActionButton(
+              icon: Icons.refresh_outlined,
+              tooltip: '重试',
+              onTap: onRetry,
+            ),
+          // 引用
+          if (onQuote != null)
+            _buildActionButton(
+              icon: Icons.format_quote_outlined,
+              tooltip: '引用',
+              onTap: onQuote,
+            ),
+
+          const Spacer(),
+
+          // 字数统计
+          Text(
+            '${message.content.length}字',
+            style: TextStyle(
+              fontSize: 10,
+              color: Colors.grey[500],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String tooltip,
+    VoidCallback? onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            icon,
+            size: 18,
+            color: Colors.grey[600],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Color _getModelColor(String modelName) {
+    final name = modelName.toLowerCase();
+    if (name.contains('claude')) {
+      return const Color(0xFFD4A574);
+    } else if (name.contains('gpt') || name.contains('openai')) {
+      return const Color(0xFF10A37F);
+    } else if (name.contains('gemini') || name.contains('google')) {
+      return const Color(0xFF4285F4);
+    } else if (name.contains('qwen') || name.contains('通义')) {
+      return const Color(0xFF6366F1);
+    } else if (name.contains('deepseek')) {
+      return const Color(0xFF06B6D4);
+    } else {
+      return const Color(0xFF8B5CF6);
+    }
+  }
+
+  IconData _getModelIcon(String modelName) {
+    final name = modelName.toLowerCase();
+    if (name.contains('claude')) {
+      return Icons.auto_awesome;
+    } else if (name.contains('gpt') || name.contains('openai')) {
+      return Icons.smart_toy_outlined;
+    } else if (name.contains('gemini') || name.contains('google')) {
+      return Icons.diamond_outlined;
+    } else if (name.contains('qwen') || name.contains('通义')) {
+      return Icons.cloud_outlined;
+    } else if (name.contains('deepseek')) {
+      return Icons.explore_outlined;
+    } else {
+      return Icons.memory;
+    }
   }
 }

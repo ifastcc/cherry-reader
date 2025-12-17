@@ -6,31 +6,81 @@ import 'package:flutter/material.dart';
 /// - 单列布局，问题和回复用缩进+连接线表示层级
 /// - 直接勾选，无需展开详情面板
 /// - 点击内容区可展开查看全文
+/// - 支持跨话题选择（折叠入口，按需加载）
 class ContextSelector extends StatefulWidget {
   final Map<String, dynamic>? contextData;
   final String contextSnapshot;
   final int? currentRoundIndex;
+
+  /// 当前话题信息（用于区分）
+  final String? currentTopicId;
+  final String? currentTopicName;
+  final String? currentAssistantId;
+  final String? currentAssistantName;
+
   /// 回调：返回新的 snapshot 和基于选择生成的 contextDataJson
   final Function(String newSnapshot, String? contextDataJson)? onContextChanged;
   final VoidCallback? onClear;
+
+  /// 按需加载其他话题的回调
+  /// 返回 Future<List<TopicSummary>>
+  final Future<List<TopicSummary>> Function(String? assistantId)? onLoadTopics;
+
+  /// 加载话题详情的回调
+  /// 返回话题的完整 rounds 数据
+  final Future<Map<String, dynamic>?> Function(String topicId)? onLoadTopicDetail;
 
   const ContextSelector({
     super.key,
     this.contextData,
     required this.contextSnapshot,
     this.currentRoundIndex,
+    this.currentTopicId,
+    this.currentTopicName,
+    this.currentAssistantId,
+    this.currentAssistantName,
     this.onContextChanged,
     this.onClear,
+    this.onLoadTopics,
+    this.onLoadTopicDetail,
   });
 
   @override
   State<ContextSelector> createState() => _ContextSelectorState();
 }
 
+/// 话题摘要（用于列表展示）
+class TopicSummary {
+  final String id;
+  final String name;
+  final String? assistantId;
+  final String? assistantName;
+  final int roundCount;
+  final DateTime? updatedAt;
+
+  TopicSummary({
+    required this.id,
+    required this.name,
+    this.assistantId,
+    this.assistantName,
+    required this.roundCount,
+    this.updatedAt,
+  });
+}
+
 class _ContextSelectorState extends State<ContextSelector> {
+  // 当前话题的轮次
   List<_QuestionGroup> _groups = [];
   final Map<String, bool> _selections = {};
   final Set<String> _expandedItems = {}; // 展开查看内容的项
+
+  // ===== 跨话题选择 =====
+  bool _showMoreContext = false; // 是否展开"添加更多上下文"
+  bool _isLoadingTopics = false;
+  List<TopicSummary>? _availableTopics; // 可用的其他话题
+  final Map<String, List<_QuestionGroup>> _additionalTopics = {}; // 已加载的额外话题
+  final Set<String> _loadingTopicIds = {}; // 正在加载的话题ID
+  final Set<String> _expandedTopicIds = {}; // 展开的话题ID
 
   @override
   void initState() {
@@ -46,9 +96,10 @@ class _ContextSelectorState extends State<ContextSelector> {
   @override
   void didUpdateWidget(ContextSelector oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 检查 contextData 或 contextSnapshot 变化
+    // 只在外部数据源变化时重新初始化
+    // 注意：不检查 contextSnapshot，因为它是由本组件生成并返回给父组件的
+    // 如果检查 contextSnapshot 变化，会导致用户取消选择后状态被立即重置
     if (oldWidget.contextData != widget.contextData ||
-        oldWidget.contextSnapshot != widget.contextSnapshot ||
         oldWidget.currentRoundIndex != widget.currentRoundIndex) {
       _parseContextData();
       _initDefaultSelection();
@@ -281,6 +332,8 @@ class _ContextSelectorState extends State<ContextSelector> {
 
   String _buildContextSnapshot() {
     final buffer = StringBuffer();
+
+    // 当前话题内容
     for (var group in _groups) {
       if (_selections[group.questionId] == true) {
         buffer.writeln('## 用户问题\n');
@@ -298,6 +351,57 @@ class _ContextSelectorState extends State<ContextSelector> {
         }
       }
     }
+
+    // 额外话题内容
+    for (final entry in _additionalTopics.entries) {
+      final topicId = entry.key;
+      final groups = entry.value;
+      final topicInfo = _availableTopics?.firstWhere(
+        (t) => t.id == topicId,
+        orElse: () => TopicSummary(id: topicId, name: '话题', roundCount: groups.length),
+      );
+
+      bool hasContent = false;
+      for (var group in groups) {
+        if (_selections['$topicId:${group.questionId}'] == true) {
+          hasContent = true;
+          break;
+        }
+        for (var reply in group.replies) {
+          if (_selections['$topicId:${reply.id}'] == true) {
+            hasContent = true;
+            break;
+          }
+        }
+        if (hasContent) break;
+      }
+
+      if (hasContent) {
+        buffer.writeln('---\n');
+        buffer.writeln('**[${topicInfo?.assistantName ?? "助手"} / ${topicInfo?.name ?? "话题"}]**\n');
+
+        for (var group in groups) {
+          if (_selections['$topicId:${group.questionId}'] == true) {
+            buffer.writeln('## 用户问题\n');
+            buffer.writeln(group.question);
+            buffer.writeln();
+          }
+
+          final selectedReplies = group.replies.where(
+            (r) => _selections['$topicId:${r.id}'] == true,
+          ).toList();
+          if (selectedReplies.isNotEmpty) {
+            buffer.writeln('## 模型回复\n');
+            for (var reply in selectedReplies) {
+              buffer.writeln('### ${reply.modelName}\n');
+              buffer.writeln(reply.content);
+              buffer.writeln();
+            }
+          }
+        }
+      }
+    }
+
     return buffer.toString().trim();
   }
 
@@ -379,21 +483,50 @@ class _ContextSelectorState extends State<ContextSelector> {
     int questions = 0;
     int replies = 0;
     int chars = 0;
+    int topics = 0;
 
+    // 当前话题
+    bool currentTopicHasSelection = false;
     for (var group in _groups) {
       if (_selections[group.questionId] == true) {
         questions++;
         chars += group.question.length;
+        currentTopicHasSelection = true;
       }
       for (var reply in group.replies) {
         if (_selections[reply.id] == true) {
           replies++;
           chars += reply.charCount;
+          currentTopicHasSelection = true;
         }
       }
     }
+    if (currentTopicHasSelection) topics++;
 
-    return {'questions': questions, 'replies': replies, 'chars': chars};
+    // 额外话题
+    for (final entry in _additionalTopics.entries) {
+      final topicId = entry.key;
+      final groups = entry.value;
+      bool topicHasSelection = false;
+
+      for (var group in groups) {
+        if (_selections['$topicId:${group.questionId}'] == true) {
+          questions++;
+          chars += group.question.length;
+          topicHasSelection = true;
+        }
+        for (var reply in group.replies) {
+          if (_selections['$topicId:${reply.id}'] == true) {
+            replies++;
+            chars += reply.charCount;
+            topicHasSelection = true;
+          }
+        }
+      }
+      if (topicHasSelection) topics++;
+    }
+
+    return {'questions': questions, 'replies': replies, 'chars': chars, 'topics': topics};
   }
 
   String _formatChars(int count) {
@@ -496,67 +629,491 @@ class _ContextSelectorState extends State<ContextSelector> {
   }
 
   Widget _buildTreeList(Color primary) {
-    return ListView.builder(
+    final hasMoreContextSupport = widget.onLoadTopics != null;
+
+    return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: _groups.length,
-      itemBuilder: (context, index) {
-        final group = _groups[index];
-        final isCurrent = widget.currentRoundIndex == group.index;
-        final isQuestionSelected = _selections[group.questionId] == true;
-        final selectedReplyCount = group.replies.where((r) => _selections[r.id] == true).length;
-        final hasQuestion = group.question.isNotEmpty;
+      children: [
+        // ===== 当前话题内容 =====
+        ..._groups.asMap().entries.map((entry) {
+          final index = entry.key;
+          final group = entry.value;
+          final isCurrent = widget.currentRoundIndex == group.index;
+          final isQuestionSelected = _selections[group.questionId] == true;
+          final selectedReplyCount = group.replies.where((r) => _selections[r.id] == true).length;
+          final hasQuestion = group.question.isNotEmpty;
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 问题行（只有当有问题内容时才显示）
-            if (hasQuestion)
-              _TreeNode(
-                isRoot: true,
-                isLast: group.replies.isEmpty,
-                isSelected: isQuestionSelected,
-                isCurrent: isCurrent,
-                isExpanded: _expandedItems.contains(group.questionId),
-                title: 'Q${group.index + 1}',
-                subtitle: group.question,
-                badge: selectedReplyCount > 0 ? '$selectedReplyCount/${group.replies.length}' : null,
-                charCount: _formatChars(group.question.length),
-                onToggleSelect: () => _toggleQuestion(group.questionId, group),
-                onToggleExpand: () => _toggleExpand(group.questionId),
-                primary: primary,
-              ),
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 问题行
+              if (hasQuestion)
+                _TreeNode(
+                  isRoot: true,
+                  isLast: group.replies.isEmpty,
+                  isSelected: isQuestionSelected,
+                  isCurrent: isCurrent,
+                  isExpanded: _expandedItems.contains(group.questionId),
+                  title: 'Q${group.index + 1}',
+                  subtitle: group.question,
+                  badge: selectedReplyCount > 0 ? '$selectedReplyCount/${group.replies.length}' : null,
+                  charCount: _formatChars(group.question.length),
+                  onToggleSelect: () => _toggleQuestion(group.questionId, group),
+                  onToggleExpand: () => _toggleExpand(group.questionId),
+                  primary: primary,
+                ),
 
-            // 回复列表
-            ...group.replies.asMap().entries.map((entry) {
-              final replyIndex = entry.key;
-              final reply = entry.value;
-              final isLastReply = replyIndex == group.replies.length - 1;
-              final isReplySelected = _selections[reply.id] == true;
+              // 回复列表
+              ...group.replies.asMap().entries.map((replyEntry) {
+                final replyIndex = replyEntry.key;
+                final reply = replyEntry.value;
+                final isLastReply = replyIndex == group.replies.length - 1;
+                final isReplySelected = _selections[reply.id] == true;
 
-              return _TreeNode(
-                isRoot: !hasQuestion, // 没有问题时，回复作为根节点
-                isLast: isLastReply,
-                isSelected: isReplySelected,
-                isMainline: reply.isMainline,
-                isExpanded: _expandedItems.contains(reply.id),
-                title: reply.modelName,
-                subtitle: reply.content,
-                charCount: _formatChars(reply.charCount),
-                onToggleSelect: () => _toggleReply(reply.id, group),
-                onToggleExpand: () => _toggleExpand(reply.id),
-                primary: primary,
-              );
-            }),
+                return _TreeNode(
+                  isRoot: !hasQuestion,
+                  isLast: isLastReply,
+                  isSelected: isReplySelected,
+                  isMainline: reply.isMainline,
+                  isExpanded: _expandedItems.contains(reply.id),
+                  title: reply.modelName,
+                  subtitle: reply.content,
+                  charCount: _formatChars(reply.charCount),
+                  onToggleSelect: () => _toggleReply(reply.id, group),
+                  onToggleExpand: () => _toggleExpand(reply.id),
+                  primary: primary,
+                );
+              }),
 
-            if (index < _groups.length - 1) const SizedBox(height: 8),
-          ],
-        );
-      },
+              if (index < _groups.length - 1) const SizedBox(height: 8),
+            ],
+          );
+        }),
+
+        // ===== 已加载的额外话题 =====
+        ..._additionalTopics.entries.map((entry) {
+          final topicId = entry.key;
+          final groups = entry.value;
+          final topicInfo = _availableTopics?.firstWhere(
+            (t) => t.id == topicId,
+            orElse: () => TopicSummary(id: topicId, name: '话题', roundCount: groups.length),
+          );
+
+          return _buildAdditionalTopicSection(topicId, topicInfo!, groups, primary);
+        }),
+
+        // ===== 添加更多上下文入口 =====
+        if (hasMoreContextSupport) ...[
+          const SizedBox(height: 12),
+          _buildMoreContextSection(primary),
+        ],
+      ],
     );
+  }
+
+  /// 构建已加载的额外话题区块
+  Widget _buildAdditionalTopicSection(
+    String topicId,
+    TopicSummary topicInfo,
+    List<_QuestionGroup> groups,
+    Color primary,
+  ) {
+    final isExpanded = _expandedTopicIds.contains(topicId);
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        color: Colors.blue[50]?.withAlpha(80),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.blue[200]!, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 话题头
+          InkWell(
+            onTap: () => setState(() {
+              if (isExpanded) {
+                _expandedTopicIds.remove(topicId);
+              } else {
+                _expandedTopicIds.add(topicId);
+              }
+            }),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(9)),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Row(
+                children: [
+                  Icon(Icons.topic_outlined, size: 16, color: Colors.blue[600]),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          topicInfo.name,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.blue[800],
+                          ),
+                        ),
+                        if (topicInfo.assistantName != null)
+                          Text(
+                            topicInfo.assistantName!,
+                            style: TextStyle(fontSize: 11, color: Colors.blue[600]),
+                          ),
+                      ],
+                    ),
+                  ),
+                  // 移除按钮
+                  GestureDetector(
+                    onTap: () => _removeAdditionalTopic(topicId),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(Icons.close, size: 16, color: Colors.grey[500]),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    isExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: Colors.grey[500],
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 展开的轮次列表
+          if (isExpanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: Column(
+                children: groups.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final group = entry.value;
+                  final isQuestionSelected = _selections['${topicId}:${group.questionId}'] == true;
+                  final selectedReplyCount = group.replies.where(
+                    (r) => _selections['${topicId}:${r.id}'] == true,
+                  ).length;
+                  final hasQuestion = group.question.isNotEmpty;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (hasQuestion)
+                        _TreeNode(
+                          isRoot: true,
+                          isLast: group.replies.isEmpty,
+                          isSelected: isQuestionSelected,
+                          isExpanded: _expandedItems.contains('${topicId}:${group.questionId}'),
+                          title: 'Q${group.index + 1}',
+                          subtitle: group.question,
+                          badge: selectedReplyCount > 0 ? '$selectedReplyCount/${group.replies.length}' : null,
+                          charCount: _formatChars(group.question.length),
+                          onToggleSelect: () => _toggleQuestionForTopic(topicId, group),
+                          onToggleExpand: () => _toggleExpand('${topicId}:${group.questionId}'),
+                          primary: primary,
+                        ),
+
+                      ...group.replies.asMap().entries.map((replyEntry) {
+                        final replyIndex = replyEntry.key;
+                        final reply = replyEntry.value;
+                        final isLastReply = replyIndex == group.replies.length - 1;
+                        final isReplySelected = _selections['${topicId}:${reply.id}'] == true;
+
+                        return _TreeNode(
+                          isRoot: !hasQuestion,
+                          isLast: isLastReply,
+                          isSelected: isReplySelected,
+                          isMainline: reply.isMainline,
+                          isExpanded: _expandedItems.contains('${topicId}:${reply.id}'),
+                          title: reply.modelName,
+                          subtitle: reply.content,
+                          charCount: _formatChars(reply.charCount),
+                          onToggleSelect: () => _toggleReplyForTopic(topicId, reply.id, group),
+                          onToggleExpand: () => _toggleExpand('${topicId}:${reply.id}'),
+                          primary: primary,
+                        );
+                      }),
+
+                      if (index < groups.length - 1) const SizedBox(height: 6),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建"添加更多上下文"折叠区
+  Widget _buildMoreContextSection(Color primary) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey[300]!, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 折叠头
+          InkWell(
+            onTap: _toggleMoreContext,
+            borderRadius: BorderRadius.circular(9),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Row(
+                children: [
+                  Icon(
+                    _showMoreContext ? Icons.remove : Icons.add,
+                    size: 18,
+                    color: Colors.grey[600],
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '添加更多上下文',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey[700],
+                    ),
+                  ),
+                  const Spacer(),
+                  if (_showMoreContext)
+                    Text(
+                      '收起',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    ),
+                ],
+              ),
+            ),
+          ),
+
+          // 展开的话题列表
+          if (_showMoreContext) _buildTopicsList(primary),
+        ],
+      ),
+    );
+  }
+
+  /// 构建话题列表
+  Widget _buildTopicsList(Color primary) {
+    if (_isLoadingTopics) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: primary),
+          ),
+        ),
+      );
+    }
+
+    if (_availableTopics == null || _availableTopics!.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          '没有其他话题',
+          style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    // 过滤掉当前话题和已添加的话题
+    final filteredTopics = _availableTopics!.where((t) {
+      if (t.id == widget.currentTopicId) return false;
+      if (_additionalTopics.containsKey(t.id)) return false;
+      return true;
+    }).toList();
+
+    if (filteredTopics.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          '所有话题已添加',
+          style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200),
+      child: ListView.builder(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        itemCount: filteredTopics.length,
+        itemBuilder: (context, index) {
+          final topic = filteredTopics[index];
+          final isLoading = _loadingTopicIds.contains(topic.id);
+
+          return InkWell(
+            onTap: isLoading ? null : () => _loadAndAddTopic(topic),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(Icons.topic_outlined, size: 16, color: Colors.grey[500]),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          topic.name,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[800],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Row(
+                          children: [
+                            if (topic.assistantName != null) ...[
+                              Text(
+                                topic.assistantName!,
+                                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                              ),
+                              Text(' · ', style: TextStyle(color: Colors.grey[400])),
+                            ],
+                            Text(
+                              '${topic.roundCount} 轮',
+                              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (isLoading)
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: primary),
+                    )
+                  else
+                    Icon(Icons.add_circle_outline, size: 18, color: primary),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ===== 跨话题操作方法 =====
+
+  void _toggleMoreContext() async {
+    if (!_showMoreContext && _availableTopics == null) {
+      // 首次展开，加载话题列表
+      setState(() {
+        _showMoreContext = true;
+        _isLoadingTopics = true;
+      });
+
+      try {
+        final topics = await widget.onLoadTopics?.call(null);
+        setState(() {
+          _availableTopics = topics ?? [];
+          _isLoadingTopics = false;
+        });
+      } catch (e) {
+        setState(() {
+          _availableTopics = [];
+          _isLoadingTopics = false;
+        });
+      }
+    } else {
+      setState(() => _showMoreContext = !_showMoreContext);
+    }
+  }
+
+  Future<void> _loadAndAddTopic(TopicSummary topic) async {
+    if (widget.onLoadTopicDetail == null) return;
+
+    setState(() => _loadingTopicIds.add(topic.id));
+
+    try {
+      final detail = await widget.onLoadTopicDetail!(topic.id);
+      if (detail != null && mounted) {
+        final groups = _extractFromData(detail);
+        setState(() {
+          _additionalTopics[topic.id] = groups;
+          _expandedTopicIds.add(topic.id); // 自动展开
+          _loadingTopicIds.remove(topic.id);
+        });
+        _notifyChange();
+      }
+    } catch (e) {
+      setState(() => _loadingTopicIds.remove(topic.id));
+    }
+  }
+
+  void _removeAdditionalTopic(String topicId) {
+    setState(() {
+      _additionalTopics.remove(topicId);
+      _expandedTopicIds.remove(topicId);
+      // 移除相关选择
+      _selections.removeWhere((key, _) => key.startsWith('$topicId:'));
+    });
+    _notifyChange();
+  }
+
+  void _toggleQuestionForTopic(String topicId, _QuestionGroup group) {
+    setState(() {
+      final key = '$topicId:${group.questionId}';
+      final isSelected = _selections[key] == true;
+      if (isSelected) {
+        _selections.remove(key);
+        for (var reply in group.replies) {
+          _selections.remove('$topicId:${reply.id}');
+        }
+      } else {
+        _selections[key] = true;
+        for (var reply in group.replies) {
+          _selections['$topicId:${reply.id}'] = true;
+        }
+      }
+    });
+    _notifyChange();
+  }
+
+  void _toggleReplyForTopic(String topicId, String replyId, _QuestionGroup group) {
+    setState(() {
+      final key = '$topicId:$replyId';
+      final isSelected = _selections[key] == true;
+      if (isSelected) {
+        _selections.remove(key);
+      } else {
+        _selections[key] = true;
+        _selections['$topicId:${group.questionId}'] = true;
+      }
+    });
+    _notifyChange();
   }
 
   Widget _buildFooter(Map<String, int> stats, Color primary) {
     final hasSelection = stats['questions']! > 0 || stats['replies']! > 0;
+    final topicCount = stats['topics'] ?? 0;
+
+    String statusText;
+    if (!hasSelection) {
+      statusText = '未选择';
+    } else if (topicCount > 1) {
+      statusText = '$topicCount话题 · ${stats['questions']}问 · ${stats['replies']}回复';
+    } else {
+      statusText = '${stats['questions']}问 + ${stats['replies']}回复';
+    }
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
@@ -576,7 +1133,7 @@ class _ContextSelectorState extends State<ContextSelector> {
           ),
           const SizedBox(width: 8),
           Text(
-            hasSelection ? '${stats['questions']}问 + ${stats['replies']}回复' : '未选择',
+            statusText,
             style: TextStyle(
               fontSize: 13,
               color: hasSelection ? Colors.grey[700] : Colors.grey[500],
@@ -707,20 +1264,21 @@ class _TreeNode extends StatelessWidget {
                   width: isSelected || isMainline ? 1.5 : 1,
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // 标题行
-                  InkWell(
-                    onTap: onToggleExpand,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(9)),
-                    child: Padding(
+              child: InkWell(
+                onTap: onToggleExpand,
+                borderRadius: BorderRadius.circular(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // 标题行
+                    Padding(
                       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                       child: Row(
                         children: [
-                          // 勾选框
+                          // 勾选框 - 单独处理点击，阻止事件冒泡
                           GestureDetector(
                             onTap: onToggleSelect,
+                            behavior: HitTestBehavior.opaque,
                             child: Container(
                               width: 20,
                               height: 20,
@@ -830,38 +1388,38 @@ class _TreeNode extends StatelessWidget {
                         ],
                       ),
                     ),
-                  ),
 
-                  // 预览/全文
-                  AnimatedCrossFade(
-                    firstChild: Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                      child: Text(
-                        _getPreviewText(subtitle),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _isEmptyContent(subtitle) ? Colors.grey[400] : Colors.grey[600],
-                          height: 1.4,
-                          fontStyle: _isEmptyContent(subtitle) ? FontStyle.italic : FontStyle.normal,
+                    // 预览/全文
+                    AnimatedCrossFade(
+                      firstChild: Padding(
+                        padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                        child: Text(
+                          _getPreviewText(subtitle),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _isEmptyContent(subtitle) ? Colors.grey[400] : Colors.grey[600],
+                            height: 1.4,
+                            fontStyle: _isEmptyContent(subtitle) ? FontStyle.italic : FontStyle.normal,
+                          ),
                         ),
                       ),
-                    ),
-                    secondChild: Container(
-                      constraints: const BoxConstraints(maxHeight: 300),
-                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                      child: SingleChildScrollView(
-                        child: SelectableText(
-                          subtitle,
-                          style: TextStyle(fontSize: 12, color: Colors.grey[700], height: 1.5),
+                      secondChild: Container(
+                        constraints: const BoxConstraints(maxHeight: 300),
+                        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                        child: SingleChildScrollView(
+                          child: SelectableText(
+                            subtitle,
+                            style: TextStyle(fontSize: 12, color: Colors.grey[700], height: 1.5),
+                          ),
                         ),
                       ),
+                      crossFadeState: isExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                      duration: const Duration(milliseconds: 200),
                     ),
-                    crossFadeState: isExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-                    duration: const Duration(milliseconds: 200),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

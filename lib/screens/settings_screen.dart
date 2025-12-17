@@ -63,6 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // 本地文件夹配置
   late TextEditingController _localFolderPathController;
   bool _isValidatingFolder = false;
+  bool _localFolderAutoLoad = true;  // 自动加载新版本（默认开启）
 
   // TTS 配置
   // late TextEditingController _azureKeyController; // Deprecated: single key
@@ -141,6 +142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // 加载本地文件夹配置
     final localFolderConfig = await LocalFolderSyncService.loadConfig();
+    final localFolderAutoLoad = await LocalFolderSyncService.getAutoLoad();
 
     // 加载列数设置
     final columnsPerView = prefs.getInt(_keyColumnsPerView) ?? 2;
@@ -163,6 +165,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _webdavPasswordController.text = webdavConfig.password;
       _webdavPathController.text = webdavConfig.path;
       _localFolderPathController.text = localFolderConfig.folderPath;
+      _localFolderAutoLoad = localFolderAutoLoad;
       _columnsPerView = columnsPerView;
       
       // Load Azure Keys
@@ -903,6 +906,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     tooltip: '选择文件夹',
                   ),
                 ],
+              ),
+
+              const SizedBox(height: 24),
+
+              // 自动加载开关
+              SwitchListTile(
+                title: const Text('检测到新版本时自动加载'),
+                subtitle: const Text('关闭后需手动点击状态栏加载'),
+                value: _localFolderAutoLoad,
+                onChanged: (value) async {
+                  setState(() => _localFolderAutoLoad = value);
+                  await LocalFolderSyncService.setAutoLoad(value);
+                },
+                contentPadding: EdgeInsets.zero,
               ),
 
               const SizedBox(height: 24),

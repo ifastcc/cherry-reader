@@ -72,6 +72,7 @@ class LocalBackupInfo {
 class LocalFolderSyncService {
   static const String _keyFolderPath = 'local_folder_path';
   static const String _keyLastModified = 'local_folder_last_modified';
+  static const String _keyAutoLoad = 'local_folder_auto_load';
 
   // 文件夹监听器
   DirectoryWatcher? _watcher;
@@ -99,6 +100,18 @@ class LocalFolderSyncService {
   static Future<void> saveConfig(LocalFolderConfig config) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyFolderPath, config.folderPath);
+  }
+
+  /// 获取自动加载配置（默认开启）
+  static Future<bool> getAutoLoad() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyAutoLoad) ?? true;
+  }
+
+  /// 保存自动加载配置
+  static Future<void> setAutoLoad(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyAutoLoad, value);
   }
 
   /// 验证文件夹路径是否有效

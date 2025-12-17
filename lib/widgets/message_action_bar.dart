@@ -42,6 +42,9 @@ class MessageActionBar extends StatelessWidget {
   /// 是否显示朗读按钮
   final bool showSpeak;
 
+  /// 讨论数量（用于角标显示）
+  final int discussionCount;
+
   const MessageActionBar({
     super.key,
     required this.content,
@@ -55,6 +58,7 @@ class MessageActionBar extends StatelessWidget {
     this.onSpeak,
     this.showRegenerate = true,
     this.showSpeak = true,
+    this.discussionCount = 0,
   });
 
   @override
@@ -77,11 +81,15 @@ class MessageActionBar extends StatelessWidget {
           ),
           const SizedBox(width: 4),
 
-          // 讨论
-          _ActionButton(
-            icon: Icons.chat_bubble_outline_rounded,
+          // 讨论（带数量角标）
+          _ActionButtonWithBadge(
+            icon: discussionCount > 0
+                ? Icons.chat_bubble
+                : Icons.chat_bubble_outline_rounded,
             label: '讨论',
-            color: onDiscuss != null ? activeColor : iconColor,
+            color: discussionCount > 0 ? activeColor : iconColor,
+            badgeCount: discussionCount,
+            badgeColor: activeColor,
             onTap: onDiscuss,
           ),
           const SizedBox(width: 4),
@@ -291,6 +299,84 @@ class _ActionButton extends StatelessWidget {
             Icon(icon, size: 16, color: color),
             if (label.isNotEmpty) ...[
               const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: color,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 带角标的操作按钮（用于显示讨论数量）
+class _ActionButtonWithBadge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final int badgeCount;
+  final Color badgeColor;
+  final VoidCallback? onTap;
+
+  const _ActionButtonWithBadge({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.badgeCount,
+    required this.badgeColor,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 图标带角标
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(icon, size: 16, color: color),
+                if (badgeCount > 0)
+                  Positioned(
+                    right: -8,
+                    top: -6,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: badgeColor,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 14,
+                        minHeight: 14,
+                      ),
+                      child: Text(
+                        badgeCount > 99 ? '99+' : '$badgeCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            if (label.isNotEmpty) ...[
+              SizedBox(width: badgeCount > 0 ? 10 : 4),
               Text(
                 label,
                 style: TextStyle(
