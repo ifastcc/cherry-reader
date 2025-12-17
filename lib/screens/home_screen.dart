@@ -1481,6 +1481,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final topicCount = _topicIndex?.values.fold<int>(0, (sum, list) => sum + list.length);
     final versionDisplay = _activeVersion?.displayName ?? _currentVersionDisplay;
 
+    // 计算今日话题数
+    int todayTopicCount = 0;
+    if (_topicIndex != null) {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      for (final topics in _topicIndex!.values) {
+        for (final topic in topics) {
+          final dt = _parseUpdatedAt(topic['updatedAt']);
+          if (dt != null) {
+            final topicDate = DateTime(dt.year, dt.month, dt.day);
+            if (topicDate == today) {
+              todayTopicCount++;
+            }
+          }
+        }
+      }
+    }
+
     // 1. 错误状态
     if (_statusError != null) {
       return StatusBarState.error(
@@ -1516,6 +1534,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       loadMode: _loadMode,
       versionDisplay: versionDisplay,
       topicCount: topicCount,
+      todayTopicCount: todayTopicCount,
       hasNewVersion: _hasNewVersion,
     );
   }
@@ -2321,11 +2340,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 const SizedBox(width: 12),
-                // 轮数 + 时间
                 Text(
-                  roundCount > 0 && timeDisplay.isNotEmpty
-                      ? '$roundCount轮 · $timeDisplay'
-                      : (roundCount > 0 ? '$roundCount轮' : timeDisplay),
+                  timeDisplay,
                   style: TextStyle(
                     fontSize: 13,
                     color: Colors.grey[400],
@@ -2389,21 +2405,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ],
             ],
-            // 助手名称标签
+            // 底部：助手名称（左） + 轮数（右）
             const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                assistantName,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey[600],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    assistantName,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[600],
+                    ),
+                  ),
                 ),
-              ),
+                if (roundCount > 0)
+                  Text(
+                    '$roundCount轮对话',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[400],
+                    ),
+                  ),
+              ],
             ),
           ],
         ),

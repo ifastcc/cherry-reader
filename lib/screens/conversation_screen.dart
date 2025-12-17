@@ -1720,6 +1720,9 @@ $modelResponses''';
                   onSpeak: () => _speakContent(content, modelName),
                   discussionCount: discussionCount,
                 ),
+                // 传递上下文参数，使全屏阅读时能进行讨论
+                topicId: widget.topicId,
+                roundIndex: groupIndex,
               );
             },
           ),

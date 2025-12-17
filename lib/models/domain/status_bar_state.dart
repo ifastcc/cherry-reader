@@ -38,6 +38,9 @@ class StatusBarState {
   /// 话题数量
   final int? topicCount;
 
+  /// 今日话题数量
+  final int? todayTopicCount;
+
   /// 是否有新版本待查看（用于小蓝点）
   final bool hasNewVersion;
 
@@ -49,6 +52,7 @@ class StatusBarState {
     this.errorDetail,
     this.versionDisplay,
     this.topicCount,
+    this.todayTopicCount,
     this.hasNewVersion = false,
   });
 
@@ -57,6 +61,7 @@ class StatusBarState {
     required DataLoadMode loadMode,
     String? versionDisplay,
     int? topicCount,
+    int? todayTopicCount,
     bool hasNewVersion = false,
   }) {
     return StatusBarState(
@@ -64,6 +69,7 @@ class StatusBarState {
       loadMode: loadMode,
       versionDisplay: versionDisplay,
       topicCount: topicCount,
+      todayTopicCount: todayTopicCount,
       hasNewVersion: hasNewVersion,
     );
   }
@@ -132,10 +138,12 @@ class StatusBarState {
   String get statusText {
     switch (phase) {
       case StatusBarPhase.idle:
-        // 空闲状态：显示话题数 + 版本时间
+        // 空闲状态：显示今日话题数 + 版本时间
         final parts = <String>[];
-        if (topicCount != null && topicCount! > 0) {
-          parts.add('$topicCount 话题');
+        if (todayTopicCount != null && todayTopicCount! > 0) {
+          parts.add('今日 $todayTopicCount 话题');
+        } else {
+          parts.add('今日无话题');
         }
         final timeStr = _formatVersionTime();
         if (timeStr != null) {

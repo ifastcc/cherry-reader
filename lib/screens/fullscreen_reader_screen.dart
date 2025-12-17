@@ -10,6 +10,8 @@ import 'package:provider/provider.dart';
 import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
 import '../widgets/tts_mini_player.dart';
+import '../screens/ai_chat_screen.dart';
+import '../models/isar/unified_conversation_entity.dart';
 
 /// 全屏阅读页面 - 支持高亮标注
 class FullscreenReaderScreen extends StatefulWidget {
@@ -18,12 +20,20 @@ class FullscreenReaderScreen extends StatefulWidget {
   final String messageId;
   final Color? backgroundColor; // 可选的背景颜色
 
+  // 可选的上下文参数（用于讨论功能）
+  final String? topicId;
+  final int? roundIndex;
+  final Map<String, dynamic>? contextData;
+
   const FullscreenReaderScreen({
     super.key,
     required this.content,
     required this.modelName,
     required this.messageId,
     this.backgroundColor,
+    this.topicId,
+    this.roundIndex,
+    this.contextData,
   });
 
   @override
@@ -403,6 +413,9 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
             // 悬浮操作工具栏
             _buildFloatingToolbar(),
 
+            // 独立的讨论浮动按钮
+            _buildDiscussionFab(),
+
             // Mini Player
             const Positioned(
               left: 0,
@@ -525,6 +538,81 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
       const SnackBar(
         content: Text('已复制到剪贴板'),
         duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  /// 进入讨论界面
+  void _openDiscussion() {
+    // 构建 contextData - 如果有传入的 contextData 使用它，否则构建单回复的结构
+    final contextData = widget.contextData ?? {
+      'rounds': [
+        {
+          'index': widget.roundIndex ?? 0,
+          'question': null, // 单回复讨论没有问题
+          'replies': [
+            {
+              'id': widget.messageId,
+              'model': {'name': widget.modelName},
+              'useful': true,
+              'blocks': [
+                {'type': 'main_text', 'content': widget.content}
+              ],
+            }
+          ],
+        }
+      ],
+    };
+
+    // 确定 contextId - 如果有 topicId 和 roundIndex，使用轮次级别的 ID
+    final contextId = (widget.topicId != null && widget.roundIndex != null)
+        ? '${widget.topicId}:${widget.roundIndex}'
+        : widget.messageId;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AIChatScreen(
+          initialContextId: contextId,
+          initialContextSnapshot: widget.content,
+          initialTitle: '讨论: ${widget.modelName}',
+          initialContextData: contextData,
+          // 如果有轮次信息，使用 messageGroup 类型（支持 context 编辑）
+          contextTypeFilter: (widget.topicId != null && widget.roundIndex != null)
+              ? ConversationContextType.messageGroup
+              : ConversationContextType.singleMessage,
+        ),
+      ),
+    );
+  }
+
+  /// 构建独立的讨论浮动按钮
+  Widget _buildDiscussionFab() {
+    return Positioned(
+      left: 16,
+      bottom: 80, // 与右边的工具栏对称
+      child: GestureDetector(
+        onTap: _openDiscussion,
+        child: Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            color: const Color(0xFF8B5CF6), // 紫色
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF8B5CF6).withAlpha(100),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.chat_bubble_outline,
+            color: Colors.white,
+            size: 26,
+          ),
+        ),
       ),
     );
   }

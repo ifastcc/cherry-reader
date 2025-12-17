@@ -1,24 +1,7 @@
 import 'package:flutter/material.dart';
 import 'context_selector.dart' show TopicSummary;
 
-/// 四种视觉风格
-enum ContextSelectorStyle {
-  /// 风格一：树形连接线（像 IDE 文件树）
-  treeLine,
-
-  /// 风格二：渐进缩进 + 左边框颜色
-  leftBorder,
-
-  /// 风格三：卡片嵌套 + 阴影层级
-  nestedCard,
-
-  /// 风格四：混合风格（卡片质感 + 极简连接线）
-  hybrid,
-}
-
-/// Context 选择器 - 支持三种视觉风格切换
-///
-/// 核心功能与 V2 相同，但提供三种不同的视觉呈现方式，便于对比选择
+/// Context 选择器 - 混合风格（卡片质感 + 极简连接线 + 层级颜色）
 class ContextSelectorWithStyles extends StatefulWidget {
   final Map<String, dynamic>? contextData;
   final String contextSnapshot;
@@ -31,9 +14,6 @@ class ContextSelectorWithStyles extends StatefulWidget {
   final VoidCallback? onClear;
   final Future<List<TopicSummary>> Function(String? assistantId)? onLoadTopics;
   final Future<Map<String, dynamic>?> Function(String topicId)? onLoadTopicDetail;
-
-  /// 初始风格
-  final ContextSelectorStyle initialStyle;
 
   const ContextSelectorWithStyles({
     super.key,
@@ -48,15 +28,27 @@ class ContextSelectorWithStyles extends StatefulWidget {
     this.onClear,
     this.onLoadTopics,
     this.onLoadTopicDetail,
-    this.initialStyle = ContextSelectorStyle.treeLine,
   });
 
   @override
   State<ContextSelectorWithStyles> createState() => _ContextSelectorWithStylesState();
 }
 
+/// 层级颜色定义（基于认知科学的渐进色系）
+/// - 使用同一色系（蓝紫）的不同色调，视觉和谐
+/// - 从深到浅表示从抽象到具体的层级关系
+/// - 低饱和度设计，长时间阅读不疲劳
+const _levelColors = [
+  Color(0xFF5C6BC0), // L0 助手层：靛蓝 - 最高层级，沉稳专业
+  Color(0xFF7E57C2), // L1 话题层：紫色 - 中高层级，富有创意
+  Color(0xFF42A5F5), // L2 轮次层：天蓝 - 中层级，清晰明确
+  Color(0xFF26A69A), // L3 回复层：青绿 - 最底层，自然舒适
+];
+
+/// 主线回复特殊颜色（琥珀色，表示重要/推荐）
+const _mainlineColor = Color(0xFFFFB300);
+
 class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
-  late ContextSelectorStyle _currentStyle;
 
   // ===== 4 层数据结构 =====
   final List<_AssistantNode> _assistants = [];
@@ -82,7 +74,6 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   @override
   void initState() {
     super.initState();
-    _currentStyle = widget.initialStyle;
     _parseContextData();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (widget.onLoadTopics != null) {
@@ -643,7 +634,6 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildHeader(stats, primary),
-          _buildStyleSwitcher(primary),
           Expanded(
             child: _buildTreeList(primary),
           ),
@@ -694,84 +684,6 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     );
   }
 
-  /// 风格切换器
-  Widget _buildStyleSwitcher(Color primary) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      color: Colors.white,
-      child: Row(
-        children: [
-          Text('视觉风格:', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-          const SizedBox(width: 8),
-          _buildStyleButton(
-            ContextSelectorStyle.treeLine,
-            '树形线',
-            Icons.account_tree,
-            primary,
-          ),
-          const SizedBox(width: 6),
-          _buildStyleButton(
-            ContextSelectorStyle.leftBorder,
-            '左边框',
-            Icons.format_indent_increase,
-            primary,
-          ),
-          const SizedBox(width: 6),
-          _buildStyleButton(
-            ContextSelectorStyle.nestedCard,
-            '嵌套卡片',
-            Icons.layers,
-            primary,
-          ),
-          const SizedBox(width: 6),
-          _buildStyleButton(
-            ContextSelectorStyle.hybrid,
-            '混合',
-            Icons.auto_awesome,
-            primary,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStyleButton(ContextSelectorStyle style, String label, IconData icon, Color primary) {
-    final isSelected = _currentStyle == style;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => setState(() => _currentStyle = style),
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: isSelected ? primary.withAlpha(20) : Colors.grey[100],
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: isSelected ? primary : Colors.grey[300]!,
-              width: isSelected ? 1.5 : 1,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 14, color: isSelected ? primary : Colors.grey[600]),
-              const SizedBox(width: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: isSelected ? primary : Colors.grey[700],
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildTreeList(Color primary) {
     if (_isLoadingTopics && _assistants.length <= 1) {
       return Center(
@@ -814,1611 +726,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   }
 
   Widget _buildAssistantNode(_AssistantNode assistant, Color primary) {
-    switch (_currentStyle) {
-      case ContextSelectorStyle.treeLine:
-        return _buildTreeLineAssistant(assistant, primary);
-      case ContextSelectorStyle.leftBorder:
-        return _buildLeftBorderAssistant(assistant, primary);
-      case ContextSelectorStyle.nestedCard:
-        return _buildNestedCardAssistant(assistant, primary);
-      case ContextSelectorStyle.hybrid:
-        return _buildHybridAssistant(assistant, primary);
-    }
-  }
-
-  // ========================================
-  // 风格一：树形连接线
-  // ========================================
-
-  Widget _buildTreeLineAssistant(_AssistantNode assistant, Color primary) {
-    final isExpanded = _expandedAssistants.contains(assistant.id);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 助手标题行
-          InkWell(
-            onTap: () => setState(() {
-              if (isExpanded) {
-                _expandedAssistants.remove(assistant.id);
-              } else {
-                _expandedAssistants.add(assistant.id);
-              }
-            }),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: assistant.isCurrent ? primary.withAlpha(15) : Colors.grey[200],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                    size: 18,
-                    color: Colors.grey[600],
-                  ),
-                  const SizedBox(width: 6),
-                  Icon(Icons.smart_toy, size: 18, color: assistant.isCurrent ? primary : Colors.grey[600]),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      assistant.name,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey[800],
-                      ),
-                    ),
-                  ),
-                  if (assistant.isCurrent)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: primary,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Text('当前', style: TextStyle(fontSize: 9, color: Colors.white)),
-                    ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${assistant.topics.length} 话题',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // 话题列表（带连接线）
-          if (isExpanded)
-            ...assistant.topics.asMap().entries.map((entry) {
-              final index = entry.key;
-              final topic = entry.value;
-              final isLast = index == assistant.topics.length - 1;
-              return _buildTreeLineTopic(assistant, topic, isLast, primary);
-            }),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTreeLineTopic(_AssistantNode assistant, _TopicNode topic, bool isLast, Color primary) {
-    final topicKey = _getTopicKey(assistant.id, topic.id);
-    final isExpanded = _expandedTopics.contains(topicKey);
-    final isLoading = _loadingTopicIds.contains(topic.id);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // 话题标题行（带连接线）
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 树形连接线
-            SizedBox(
-              width: 28,
-              child: CustomPaint(
-                size: const Size(28, 44),
-                painter: _TreeConnectorPainter(
-                  isLast: isLast && !isExpanded,
-                  hasChildren: isExpanded && topic.rounds.isNotEmpty,
-                  color: Colors.grey[300]!,
-                ),
-              ),
-            ),
-
-            // 话题内容
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.only(top: 4, bottom: 4),
-                decoration: BoxDecoration(
-                  color: topic.isCurrent ? Colors.white : Colors.grey[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: topic.isCurrent ? primary.withAlpha(60) : Colors.grey[300]!,
-                  ),
-                ),
-                child: InkWell(
-                  onTap: () async {
-                    if (!topic.isLoaded && !isLoading) {
-                      await _loadTopicDetail(assistant.id, topic);
-                    }
-                    setState(() {
-                      if (isExpanded) {
-                        _expandedTopics.remove(topicKey);
-                      } else {
-                        _expandedTopics.add(topicKey);
-                      }
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(7),
-                  child: Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Row(
-                      children: [
-                        Icon(
-                          isExpanded ? Icons.folder_open : Icons.folder,
-                          size: 16,
-                          color: topic.isCurrent ? primary : Colors.amber[700],
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            topic.name,
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey[800]),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (topic.isCurrent)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                            margin: const EdgeInsets.only(right: 6),
-                            decoration: BoxDecoration(
-                              color: primary.withAlpha(20),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text('当前', style: TextStyle(fontSize: 9, color: primary)),
-                          ),
-                        if (isLoading)
-                          SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: primary),
-                          )
-                        else
-                          Text(
-                            '${topic.isLoaded ? topic.rounds.length : topic.roundCount} 轮',
-                            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-
-        // 轮次和回复列表（简化的树形结构）
-        if (isExpanded && topic.isLoaded)
-          ...topic.rounds.asMap().entries.expand((entry) {
-            final roundIndex = entry.key;
-            final round = entry.value;
-            final isLastRound = roundIndex == topic.rounds.length - 1;
-            final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-            final isRoundExpanded = _expandedRounds.contains(roundKey);
-
-            return [
-              // 问题节点
-              _buildTreeLineQuestion(
-                assistant,
-                topic,
-                round,
-                isLastRound && !isRoundExpanded,
-                isLast,
-                primary,
-              ),
-              // 回复节点（如果展开）
-              if (isRoundExpanded)
-                ...round.replies.asMap().entries.map((replyEntry) {
-                  final replyIndex = replyEntry.key;
-                  final reply = replyEntry.value;
-                  final isLastReply = replyIndex == round.replies.length - 1;
-                  return _buildTreeLineReply(
-                    assistant,
-                    topic,
-                    round,
-                    reply,
-                    isLastReply,
-                    isLastRound,
-                    isLast,
-                    primary,
-                  );
-                }),
-            ];
-          }),
-      ],
-    );
-  }
-
-  /// 问题节点（简化的连接线）
-  Widget _buildTreeLineQuestion(
-    _AssistantNode assistant,
-    _TopicNode topic,
-    _RoundNode round,
-    bool isLastInBranch,
-    bool isLastTopic,
-    Color primary,
-  ) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final isExpanded = _expandedRounds.contains(roundKey);
-    final isQuestionSelected = _selections['$roundKey:q'] == true;
-    final selectedReplyCount = round.replies.where((r) => _selections['$roundKey:${r.id}'] == true).length;
-    final isCurrent = topic.isCurrent && round.index == widget.currentRoundIndex;
-
-    // 使用 IntrinsicHeight 让子组件可以使用 double.infinity
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 连接线区域 - 简化为两列
-          SizedBox(
-            width: 48,
-            child: Row(
-              children: [
-                // 第一列：话题级垂直线（贯穿）
-                SizedBox(
-                  width: 24,
-                  child: Center(
-                    child: Container(
-                      width: 1.5,
-                      color: isLastTopic ? Colors.transparent : Colors.grey[300],
-                    ),
-                  ),
-                ),
-                // 第二列：└─ 或 ├─ 连接符
-                SizedBox(
-                  width: 24,
-                  child: CustomPaint(
-                    painter: _SimpleTreeNodePainter(
-                      isLast: isLastInBranch && !isExpanded,
-                      nodeColor: isQuestionSelected ? primary : Colors.blue,
-                      lineColor: Colors.grey[300]!,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // 问题内容
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.only(top: 4, bottom: 4, right: 8),
-              decoration: BoxDecoration(
-                color: isCurrent ? primary.withAlpha(8) : Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isCurrent
-                      ? primary.withAlpha(80)
-                      : isQuestionSelected
-                          ? primary.withAlpha(60)
-                          : Colors.grey[200]!,
-                  width: isCurrent || isQuestionSelected ? 1.5 : 1,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  InkWell(
-                    onTap: () => setState(() {
-                      if (isExpanded) {
-                        _expandedRounds.remove(roundKey);
-                      } else {
-                        _expandedRounds.add(roundKey);
-                      }
-                    }),
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Row(
-                        children: [
-                          // 勾选框
-                          GestureDetector(
-                            onTap: () => _toggleRound(assistant.id, topic.id, round),
-                            child: Container(
-                              width: 18,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: isQuestionSelected ? primary : Colors.transparent,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: isQuestionSelected ? primary : Colors.grey[350]!,
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: isQuestionSelected
-                                  ? const Icon(Icons.check, size: 12, color: Colors.white)
-                                  : null,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-
-                          // 问题图标和标签
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.blue[50],
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.help_outline, size: 12, color: Colors.blue[700]),
-                                const SizedBox(width: 3),
-                                Text(
-                                  'Q${round.index + 1}',
-                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.blue[700]),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          if (isCurrent) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(color: primary, borderRadius: BorderRadius.circular(4)),
-                              child: const Text('当前', style: TextStyle(fontSize: 9, color: Colors.white)),
-                            ),
-                          ],
-
-                          const Spacer(),
-
-                          // 选中计数
-                          if (selectedReplyCount > 0)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              margin: const EdgeInsets.only(right: 6),
-                              decoration: BoxDecoration(
-                                color: primary.withAlpha(20),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                '$selectedReplyCount/${round.replies.length}',
-                                style: TextStyle(fontSize: 10, color: primary, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-
-                          // 展开图标
-                          Icon(
-                            isExpanded ? Icons.expand_less : Icons.expand_more,
-                            size: 18,
-                            color: Colors.grey[400],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // 问题内容预览
-                  if (round.question.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                      child: Text(
-                        round.question,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.4),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 回复节点（简化的连接线）
-  Widget _buildTreeLineReply(
-    _AssistantNode assistant,
-    _TopicNode topic,
-    _RoundNode round,
-    _ReplyNode reply,
-    bool isLastReply,
-    bool isLastRound,
-    bool isLastTopic,
-    Color primary,
-  ) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final replyKey = '$roundKey:${reply.id}';
-    final isSelected = _selections[replyKey] == true;
-    final isContentExpanded = _expandedReplies.contains(replyKey);
-
-    // 判断是否需要显示各级垂直线
-    final showTopicLine = !isLastTopic; // 话题级：非最后话题时显示
-    final showRoundLine = !isLastRound || !isLastReply; // 轮次级：非最后轮次，或还有更多回复时显示
-
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 连接线区域 - 三列
-          SizedBox(
-            width: 72,
-            child: Row(
-              children: [
-                // 第一列：话题级垂直线
-                SizedBox(
-                  width: 24,
-                  child: Center(
-                    child: Container(
-                      width: 1.5,
-                      color: showTopicLine ? Colors.grey[300] : Colors.transparent,
-                    ),
-                  ),
-                ),
-                // 第二列：轮次级垂直线
-                SizedBox(
-                  width: 24,
-                  child: Center(
-                    child: Container(
-                      width: 1.5,
-                      color: showRoundLine ? Colors.grey[300] : Colors.transparent,
-                    ),
-                  ),
-                ),
-                // 第三列：回复节点连接符
-                SizedBox(
-                  width: 24,
-                  child: CustomPaint(
-                    painter: _SimpleTreeNodePainter(
-                      isLast: isLastReply,
-                      nodeColor: isSelected ? primary : (reply.isMainline ? Colors.amber : Colors.grey[400]!),
-                      lineColor: Colors.grey[300]!,
-                      nodeSize: 6,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // 回复内容
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.only(top: 4, bottom: 4, right: 8),
-              decoration: BoxDecoration(
-                color: isSelected ? primary.withAlpha(8) : Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: isSelected
-                      ? primary.withAlpha(80)
-                      : reply.isMainline
-                          ? Colors.amber.withAlpha(180)
-                          : Colors.grey[200]!,
-                  width: isSelected || reply.isMainline ? 1.5 : 1,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  InkWell(
-                    onTap: () => setState(() {
-                      if (isContentExpanded) {
-                        _expandedReplies.remove(replyKey);
-                      } else {
-                        _expandedReplies.add(replyKey);
-                      }
-                    }),
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Row(
-                        children: [
-                          // 勾选框
-                          GestureDetector(
-                            onTap: () => _toggleReply(assistant.id, topic.id, round, reply),
-                            child: Container(
-                              width: 16,
-                              height: 16,
-                              decoration: BoxDecoration(
-                                color: isSelected ? primary : Colors.transparent,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: isSelected ? primary : Colors.grey[350]!,
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: isSelected
-                                  ? const Icon(Icons.check, size: 10, color: Colors.white)
-                                  : null,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-
-                          // 模型图标
-                          Icon(
-                            Icons.smart_toy_outlined,
-                            size: 14,
-                            color: reply.isMainline ? Colors.amber[700] : Colors.grey[600],
-                          ),
-                          const SizedBox(width: 6),
-
-                          // 模型名称
-                          Expanded(
-                            child: Text(
-                              reply.modelName,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.grey[800],
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-
-                          // 推荐标签
-                          if (reply.isMainline)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                              margin: const EdgeInsets.only(right: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.amber[100],
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                '推荐',
-                                style: TextStyle(fontSize: 9, color: Colors.amber[800], fontWeight: FontWeight.w600),
-                              ),
-                            ),
-
-                          // 字数
-                          Text(
-                            _formatChars(reply.charCount),
-                            style: TextStyle(fontSize: 11, color: Colors.grey[400]),
-                          ),
-                          const SizedBox(width: 4),
-
-                          // 展开图标
-                          Icon(
-                            isContentExpanded ? Icons.expand_less : Icons.expand_more,
-                            size: 16,
-                            color: Colors.grey[400],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // 内容预览/全文
-                  AnimatedCrossFade(
-                    firstChild: Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                      child: Text(
-                        _getPreviewText(reply.content),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11, color: Colors.grey[500], height: 1.4),
-                      ),
-                    ),
-                    secondChild: Container(
-                      constraints: const BoxConstraints(maxHeight: 200),
-                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                      child: SingleChildScrollView(
-                        child: SelectableText(
-                          reply.content,
-                          style: TextStyle(fontSize: 11, color: Colors.grey[600], height: 1.5),
-                        ),
-                      ),
-                    ),
-                    crossFadeState: isContentExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-                    duration: const Duration(milliseconds: 200),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ========================================
-  // 风格二：左边框颜色 - 渐进式层级颜色
-  // ========================================
-
-  // 层级颜色定义（从深到浅）
-  static const _leftBorderColors = [
-    Color(0xFF5C6BC0), // 助手层：靛蓝
-    Color(0xFF7986CB), // 话题层：浅靛蓝
-    Color(0xFF64B5F6), // 轮次层：蓝色
-    Color(0xFF81C784), // 回复层：绿色
-  ];
-
-  Widget _buildLeftBorderAssistant(_AssistantNode assistant, Color primary) {
-    final isExpanded = _expandedAssistants.contains(assistant.id);
-    final levelColor = assistant.isCurrent ? primary : _leftBorderColors[0];
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border(
-          left: BorderSide(color: levelColor, width: 5),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: levelColor.withAlpha(20),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 助手标题
-          InkWell(
-            onTap: () => setState(() {
-              if (isExpanded) {
-                _expandedAssistants.remove(assistant.id);
-              } else {
-                _expandedAssistants.add(assistant.id);
-              }
-            }),
-            borderRadius: const BorderRadius.only(
-              topRight: Radius.circular(10),
-              bottomRight: Radius.circular(10),
-            ),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [levelColor.withAlpha(8), Colors.transparent],
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: levelColor.withAlpha(20),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(Icons.smart_toy, size: 18, color: levelColor),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          assistant.name,
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.grey[800]),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${assistant.topics.length} 个话题',
-                          style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (assistant.isCurrent)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        color: primary,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text('当前', style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w500)),
-                    ),
-                  Icon(
-                    isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                    size: 22,
-                    color: Colors.grey[400],
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // 话题列表
-          if (isExpanded)
-            Container(
-              margin: const EdgeInsets.fromLTRB(12, 0, 8, 10),
-              child: Column(
-                children: assistant.topics.map((topic) {
-                  return _buildLeftBorderTopic(assistant, topic, primary);
-                }).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLeftBorderTopic(_AssistantNode assistant, _TopicNode topic, Color primary) {
-    final topicKey = _getTopicKey(assistant.id, topic.id);
-    final isExpanded = _expandedTopics.contains(topicKey);
-    final isLoading = _loadingTopicIds.contains(topic.id);
-    final levelColor = topic.isCurrent ? primary : _leftBorderColors[1];
-
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      decoration: BoxDecoration(
-        color: topic.isCurrent ? primary.withAlpha(5) : Colors.grey[50],
-        borderRadius: BorderRadius.circular(8),
-        border: Border(
-          left: BorderSide(color: levelColor, width: 4),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () async {
-              if (!topic.isLoaded && !isLoading) {
-                await _loadTopicDetail(assistant.id, topic);
-              }
-              setState(() {
-                if (isExpanded) {
-                  _expandedTopics.remove(topicKey);
-                } else {
-                  _expandedTopics.add(topicKey);
-                }
-              });
-            },
-            borderRadius: const BorderRadius.only(
-              topRight: Radius.circular(8),
-              bottomRight: Radius.circular(8),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  Icon(
-                    isExpanded ? Icons.folder_open : Icons.folder,
-                    size: 16,
-                    color: levelColor,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      topic.name,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey[800]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (topic.isCurrent)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        color: primary.withAlpha(25),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text('当前', style: TextStyle(fontSize: 9, color: primary, fontWeight: FontWeight.w500)),
-                    ),
-                  if (isLoading)
-                    SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: primary))
-                  else ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[200],
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '${topic.isLoaded ? topic.rounds.length : topic.roundCount}',
-                        style: TextStyle(fontSize: 10, color: Colors.grey[600], fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      isExpanded ? Icons.expand_less : Icons.expand_more,
-                      size: 18,
-                      color: Colors.grey[400],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-
-          // 轮次列表
-          if (isExpanded && topic.isLoaded)
-            Container(
-              margin: const EdgeInsets.fromLTRB(10, 0, 6, 8),
-              child: Column(
-                children: topic.rounds.map((round) {
-                  return _buildLeftBorderRound(assistant, topic, round, primary);
-                }).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLeftBorderRound(
-    _AssistantNode assistant,
-    _TopicNode topic,
-    _RoundNode round,
-    Color primary,
-  ) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final isExpanded = _expandedRounds.contains(roundKey);
-    final isQuestionSelected = _selections['$roundKey:q'] == true;
-    final selectedReplyCount = round.replies.where((r) => _selections['$roundKey:${r.id}'] == true).length;
-    final isCurrent = topic.isCurrent && round.index == widget.currentRoundIndex;
-    final levelColor = isCurrent ? primary : _leftBorderColors[2];
-
-    return Container(
-      margin: const EdgeInsets.only(top: 5),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        border: Border(
-          left: BorderSide(color: levelColor, width: 3),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(4),
-            blurRadius: 2,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => setState(() {
-              if (isExpanded) {
-                _expandedRounds.remove(roundKey);
-              } else {
-                _expandedRounds.add(roundKey);
-              }
-            }),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => _toggleRound(assistant.id, topic.id, round),
-                    child: Container(
-                      width: 16,
-                      height: 16,
-                      decoration: BoxDecoration(
-                        color: isQuestionSelected ? primary : Colors.transparent,
-                        borderRadius: BorderRadius.circular(3),
-                        border: Border.all(
-                          color: isQuestionSelected ? primary : Colors.grey[350]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: isQuestionSelected
-                          ? const Icon(Icons.check, size: 10, color: Colors.white)
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(Icons.help_outline, size: 14, color: Colors.blue[600]),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Q${round.index + 1}',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700]),
-                  ),
-                  if (isCurrent) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(color: primary, borderRadius: BorderRadius.circular(4)),
-                      child: const Text('当前', style: TextStyle(fontSize: 9, color: Colors.white)),
-                    ),
-                  ],
-                  const Spacer(),
-                  if (selectedReplyCount > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: primary.withAlpha(20),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '$selectedReplyCount/${round.replies.length}',
-                        style: TextStyle(fontSize: 10, color: primary, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    isExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: 16,
-                    color: Colors.grey[400],
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          if (round.question.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
-              child: Text(
-                round.question,
-                maxLines: isExpanded ? 3 : 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-              ),
-            ),
-
-          if (isExpanded)
-            Container(
-              margin: const EdgeInsets.fromLTRB(8, 2, 6, 8),
-              child: Column(
-                children: round.replies.map((reply) {
-                  return _buildLeftBorderReply(assistant, topic, round, reply, primary);
-                }).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLeftBorderReply(
-    _AssistantNode assistant,
-    _TopicNode topic,
-    _RoundNode round,
-    _ReplyNode reply,
-    Color primary,
-  ) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final replyKey = '$roundKey:${reply.id}';
-    final isSelected = _selections[replyKey] == true;
-    final isContentExpanded = _expandedReplies.contains(replyKey);
-
-    // 主线回复用推荐色（绿色），普通回复用层级色
-    final levelColor = reply.isMainline ? Colors.amber[600]! : _leftBorderColors[3];
-    final bgColor = isSelected ? primary.withAlpha(10) : (reply.isMainline ? Colors.amber.withAlpha(8) : Colors.grey[50]!);
-
-    return Container(
-      margin: const EdgeInsets.only(top: 4),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(5),
-        border: Border(
-          left: BorderSide(color: levelColor, width: 2.5),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => setState(() {
-              if (isContentExpanded) {
-                _expandedReplies.remove(replyKey);
-              } else {
-                _expandedReplies.add(replyKey);
-              }
-            }),
-            child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => _toggleReply(assistant.id, topic.id, round, reply),
-                    child: Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: isSelected ? primary : Colors.transparent,
-                        borderRadius: BorderRadius.circular(2),
-                        border: Border.all(
-                          color: isSelected ? primary : Colors.grey[350]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: isSelected ? const Icon(Icons.check, size: 9, color: Colors.white) : null,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Icon(Icons.smart_toy_outlined, size: 12, color: reply.isMainline ? Colors.amber[700] : Colors.grey[500]),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      reply.modelName,
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.grey[700]),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (reply.isMainline)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      margin: const EdgeInsets.only(right: 4),
-                      decoration: BoxDecoration(color: Colors.amber[100], borderRadius: BorderRadius.circular(3)),
-                      child: Text('推荐', style: TextStyle(fontSize: 8, color: Colors.amber[800])),
-                    ),
-                  Text(_formatChars(reply.charCount), style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-                ],
-              ),
-            ),
-          ),
-
-          AnimatedCrossFade(
-            firstChild: Padding(
-              padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-              child: Text(
-                _getPreviewText(reply.content),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 10, color: Colors.grey[500]),
-              ),
-            ),
-            secondChild: Container(
-              constraints: const BoxConstraints(maxHeight: 150),
-              padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
-              child: SingleChildScrollView(
-                child: SelectableText(
-                  reply.content,
-                  style: TextStyle(fontSize: 10, color: Colors.grey[600], height: 1.5),
-                ),
-              ),
-            ),
-            crossFadeState: isContentExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-            duration: const Duration(milliseconds: 200),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ========================================
-  // 风格三：嵌套卡片 + 阴影 - 渐进式阴影深度
-  // ========================================
-
-  Widget _buildNestedCardAssistant(_AssistantNode assistant, Color primary) {
-    final isExpanded = _expandedAssistants.contains(assistant.id);
-
-    // 助手层：最外层容器，使用较深的背景色
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: assistant.isCurrent
-              ? [primary.withAlpha(12), primary.withAlpha(6)]
-              : [Colors.grey[200]!, Colors.grey[150]!],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(14),
-        border: assistant.isCurrent
-            ? Border.all(color: primary.withAlpha(30), width: 1)
-            : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 助手标题
-          InkWell(
-            onTap: () => setState(() {
-              if (isExpanded) {
-                _expandedAssistants.remove(assistant.id);
-              } else {
-                _expandedAssistants.add(assistant.id);
-              }
-            }),
-            borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  // 图标容器 - 有立体效果
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: assistant.isCurrent ? primary.withAlpha(25) : Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      boxShadow: [
-                        BoxShadow(
-                          color: (assistant.isCurrent ? primary : Colors.grey).withAlpha(20),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Icon(
-                      Icons.smart_toy,
-                      size: 20,
-                      color: assistant.isCurrent ? primary : Colors.grey[600],
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                assistant.name,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey[800],
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (assistant.isCurrent) ...[
-                              const SizedBox(width: 10),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: primary,
-                                  borderRadius: BorderRadius.circular(6),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: primary.withAlpha(60),
-                                      blurRadius: 4,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: const Text('当前', style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w500)),
-                              ),
-                            ],
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${assistant.topics.length} 个话题',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withAlpha(150),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                      size: 22,
-                      color: Colors.grey[500],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // 话题列表（白色卡片，有阴影层级）
-          if (isExpanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-              child: Column(
-                children: assistant.topics.map((topic) {
-                  return _buildNestedCardTopic(assistant, topic, primary);
-                }).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNestedCardTopic(_AssistantNode assistant, _TopicNode topic, Color primary) {
-    final topicKey = _getTopicKey(assistant.id, topic.id);
-    final isExpanded = _expandedTopics.contains(topicKey);
-    final isLoading = _loadingTopicIds.contains(topic.id);
-
-    // 话题层：白色卡片，有明显阴影
-    return Container(
-      margin: const EdgeInsets.only(top: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(topic.isCurrent ? 20 : 12),
-            blurRadius: topic.isCurrent ? 12 : 8,
-            offset: const Offset(0, 3),
-          ),
-          // 内发光效果（让卡片看起来更立体）
-          BoxShadow(
-            color: Colors.white.withAlpha(200),
-            blurRadius: 1,
-            offset: const Offset(0, -1),
-            spreadRadius: -1,
-          ),
-        ],
-        border: topic.isCurrent
-            ? Border.all(color: primary.withAlpha(70), width: 2)
-            : Border.all(color: Colors.grey.withAlpha(20), width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () async {
-              if (!topic.isLoaded && !isLoading) {
-                await _loadTopicDetail(assistant.id, topic);
-              }
-              setState(() {
-                if (isExpanded) {
-                  _expandedTopics.remove(topicKey);
-                } else {
-                  _expandedTopics.add(topicKey);
-                }
-              });
-            },
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Row(
-                children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: topic.isCurrent
-                            ? [primary.withAlpha(20), primary.withAlpha(10)]
-                            : [Colors.amber.withAlpha(40), Colors.amber.withAlpha(20)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      isExpanded ? Icons.folder_open : Icons.folder,
-                      size: 16,
-                      color: topic.isCurrent ? primary : Colors.amber[700],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      topic.name,
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.grey[800]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (topic.isCurrent)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                      margin: const EdgeInsets.only(right: 8),
-                      decoration: BoxDecoration(
-                        color: primary.withAlpha(25),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text('当前', style: TextStyle(fontSize: 10, color: primary, fontWeight: FontWeight.w500)),
-                    ),
-                  if (isLoading)
-                    SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: primary))
-                  else ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[100],
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '${topic.isLoaded ? topic.rounds.length : topic.roundCount}',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600], fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      isExpanded ? Icons.expand_less : Icons.expand_more,
-                      size: 20,
-                      color: Colors.grey[400],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-
-          // 轮次列表（轻微灰色背景，无边框）
-          if (isExpanded && topic.isLoaded)
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
-              ),
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                children: topic.rounds.map((round) {
-                  return _buildNestedCardRound(assistant, topic, round, primary);
-                }).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNestedCardRound(
-    _AssistantNode assistant,
-    _TopicNode topic,
-    _RoundNode round,
-    Color primary,
-  ) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final isExpanded = _expandedRounds.contains(roundKey);
-    final isQuestionSelected = _selections['$roundKey:q'] == true;
-    final selectedReplyCount = round.replies.where((r) => _selections['$roundKey:${r.id}'] == true).length;
-    final isCurrent = topic.isCurrent && round.index == widget.currentRoundIndex;
-
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(isCurrent ? 12 : 6),
-            blurRadius: isCurrent ? 6 : 3,
-            offset: const Offset(0, 1),
-          ),
-        ],
-        border: isCurrent ? Border.all(color: primary.withAlpha(50)) : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => setState(() {
-              if (isExpanded) {
-                _expandedRounds.remove(roundKey);
-              } else {
-                _expandedRounds.add(roundKey);
-              }
-            }),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => _toggleRound(assistant.id, topic.id, round),
-                    child: Container(
-                      width: 18,
-                      height: 18,
-                      decoration: BoxDecoration(
-                        color: isQuestionSelected ? primary : Colors.transparent,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: isQuestionSelected ? primary : Colors.grey[350]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: isQuestionSelected
-                          ? const Icon(Icons.check, size: 12, color: Colors.white)
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: Colors.blue[50],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Center(
-                      child: Text(
-                        '${round.index + 1}',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.blue[700]),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      round.question.isNotEmpty
-                          ? (round.question.length > 40 ? '${round.question.substring(0, 40)}...' : round.question)
-                          : '(空问题)',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (isCurrent)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      margin: const EdgeInsets.only(right: 6),
-                      decoration: BoxDecoration(color: primary, borderRadius: BorderRadius.circular(4)),
-                      child: const Text('当前', style: TextStyle(fontSize: 9, color: Colors.white)),
-                    ),
-                  if (selectedReplyCount > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      margin: const EdgeInsets.only(right: 6),
-                      decoration: BoxDecoration(color: primary.withAlpha(20), borderRadius: BorderRadius.circular(8)),
-                      child: Text(
-                        '$selectedReplyCount/${round.replies.length}',
-                        style: TextStyle(fontSize: 10, color: primary, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  Icon(
-                    isExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                    color: Colors.grey[400],
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // 回复列表
-          if (isExpanded)
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
-              ),
-              padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
-              child: Column(
-                children: round.replies.map((reply) {
-                  return _buildNestedCardReply(assistant, topic, round, reply, primary);
-                }).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNestedCardReply(
-    _AssistantNode assistant,
-    _TopicNode topic,
-    _RoundNode round,
-    _ReplyNode reply,
-    Color primary,
-  ) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final replyKey = '$roundKey:${reply.id}';
-    final isSelected = _selections[replyKey] == true;
-    final isContentExpanded = _expandedReplies.contains(replyKey);
-
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(isSelected ? 10 : 5),
-            blurRadius: isSelected ? 4 : 2,
-            offset: const Offset(0, 1),
-          ),
-        ],
-        border: isSelected
-            ? Border.all(color: primary.withAlpha(60))
-            : reply.isMainline
-                ? Border.all(color: Colors.amber.withAlpha(150))
-                : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => setState(() {
-              if (isContentExpanded) {
-                _expandedReplies.remove(replyKey);
-              } else {
-                _expandedReplies.add(replyKey);
-              }
-            }),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => _toggleReply(assistant.id, topic.id, round, reply),
-                    child: Container(
-                      width: 16,
-                      height: 16,
-                      decoration: BoxDecoration(
-                        color: isSelected ? primary : Colors.transparent,
-                        borderRadius: BorderRadius.circular(3),
-                        border: Border.all(
-                          color: isSelected ? primary : Colors.grey[350]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: isSelected ? const Icon(Icons.check, size: 10, color: Colors.white) : null,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 22,
-                    height: 22,
-                    decoration: BoxDecoration(
-                      color: reply.isMainline ? Colors.amber[50] : Colors.grey[100],
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: Icon(
-                      Icons.smart_toy,
-                      size: 12,
-                      color: reply.isMainline ? Colors.amber[700] : Colors.grey[600],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      reply.modelName,
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.grey[700]),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (reply.isMainline)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      margin: const EdgeInsets.only(right: 6),
-                      decoration: BoxDecoration(color: Colors.amber[100], borderRadius: BorderRadius.circular(4)),
-                      child: Text('推荐', style: TextStyle(fontSize: 9, color: Colors.amber[800])),
-                    ),
-                  Text(_formatChars(reply.charCount), style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-                  const SizedBox(width: 4),
-                  Icon(
-                    isContentExpanded ? Icons.expand_less : Icons.expand_more,
-                    size: 16,
-                    color: Colors.grey[400],
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          AnimatedCrossFade(
-            firstChild: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-              child: Text(
-                _getPreviewText(reply.content),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-              ),
-            ),
-            secondChild: Container(
-              constraints: const BoxConstraints(maxHeight: 180),
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-              child: SingleChildScrollView(
-                child: SelectableText(
-                  reply.content,
-                  style: TextStyle(fontSize: 11, color: Colors.grey[600], height: 1.5),
-                ),
-              ),
-            ),
-            crossFadeState: isContentExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-            duration: const Duration(milliseconds: 200),
-          ),
-        ],
-      ),
-    );
+    return _buildHybridAssistant(assistant, primary);
   }
 
   // ========================================
@@ -2427,13 +735,14 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
 
   Widget _buildHybridAssistant(_AssistantNode assistant, Color primary) {
     final isExpanded = _expandedAssistants.contains(assistant.id);
+    final levelColor = _levelColors[0]; // 始终使用层级颜色，不被 isCurrent 覆盖
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 助手标题行 - 简洁风格
+          // 助手标题行 - 带层级颜色
           InkWell(
             onTap: () => setState(() {
               if (isExpanded) {
@@ -2446,10 +755,21 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: assistant.isCurrent ? primary.withAlpha(10) : Colors.grey[100],
+                color: levelColor.withAlpha(assistant.isCurrent ? 20 : 12),
                 borderRadius: BorderRadius.circular(10),
-                border: assistant.isCurrent
-                    ? Border.all(color: primary.withAlpha(40), width: 1)
+                border: Border.all(
+                  color: levelColor.withAlpha(assistant.isCurrent ? 120 : 60),
+                  width: assistant.isCurrent ? 2.0 : 1.5,
+                ),
+                // 当前项添加发光效果
+                boxShadow: assistant.isCurrent
+                    ? [
+                        BoxShadow(
+                          color: levelColor.withAlpha(40),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ]
                     : null,
               ),
               child: Row(
@@ -2457,13 +777,13 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                   Icon(
                     isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
                     size: 20,
-                    color: Colors.grey[500],
+                    color: levelColor,
                   ),
                   const SizedBox(width: 8),
                   Icon(
                     Icons.smart_toy,
                     size: 20,
-                    color: assistant.isCurrent ? primary : Colors.grey[600],
+                    color: levelColor,
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -2481,7 +801,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       margin: const EdgeInsets.only(right: 8),
                       decoration: BoxDecoration(
-                        color: primary,
+                        color: levelColor,
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: const Text(
@@ -2491,20 +811,20 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                     ),
                   Text(
                     '${assistant.topics.length} 话题',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    style: TextStyle(fontSize: 12, color: levelColor),
                   ),
                 ],
               ),
             ),
           ),
 
-          // 话题列表（带极简连接线）
+          // 话题列表（带层级颜色连接线）
           if (isExpanded)
             Container(
               margin: const EdgeInsets.only(left: 24, top: 4),
               decoration: BoxDecoration(
                 border: Border(
-                  left: BorderSide(color: Colors.grey[300]!, width: 1.5),
+                  left: BorderSide(color: _levelColors[0].withAlpha(100), width: 2.5),
                 ),
               ),
               child: Column(
@@ -2530,27 +850,37 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     final topicKey = _getTopicKey(assistant.id, topic.id);
     final isExpanded = _expandedTopics.contains(topicKey);
     final isLoading = _loadingTopicIds.contains(topic.id);
+    final levelColor = _levelColors[1]; // 始终使用层级颜色
 
     return Container(
       margin: EdgeInsets.only(left: 16, top: 6, bottom: isLast ? 6 : 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 话题卡片
+          // 话题卡片 - 带层级颜色背景
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: levelColor.withAlpha(topic.isCurrent ? 15 : 8),
               borderRadius: BorderRadius.circular(10),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withAlpha(topic.isCurrent ? 15 : 8),
-                  blurRadius: topic.isCurrent ? 8 : 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-              border: topic.isCurrent
-                  ? Border.all(color: primary.withAlpha(60), width: 1.5)
-                  : Border.all(color: Colors.grey.withAlpha(30), width: 1),
+              boxShadow: topic.isCurrent
+                  ? [
+                      BoxShadow(
+                        color: levelColor.withAlpha(35),
+                        blurRadius: 8,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: levelColor.withAlpha(15),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+              border: Border.all(
+                color: levelColor.withAlpha(topic.isCurrent ? 120 : 80),
+                width: topic.isCurrent ? 2.0 : 1.5,
+              ),
             ),
             child: InkWell(
               onTap: () async {
@@ -2573,7 +903,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                     Icon(
                       isExpanded ? Icons.folder_open : Icons.folder,
                       size: 18,
-                      color: topic.isCurrent ? primary : Colors.amber[700],
+                      color: levelColor,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -2593,37 +923,37 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         margin: const EdgeInsets.only(right: 8),
                         decoration: BoxDecoration(
-                          color: primary.withAlpha(20),
+                          color: levelColor,
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        child: Text(
+                        child: const Text(
                           '当前',
-                          style: TextStyle(fontSize: 9, color: primary, fontWeight: FontWeight.w500),
+                          style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w500),
                         ),
                       ),
                     if (isLoading)
                       SizedBox(
                         width: 14,
                         height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: primary),
+                        child: CircularProgressIndicator(strokeWidth: 2, color: levelColor),
                       )
                     else ...[
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                         decoration: BoxDecoration(
-                          color: Colors.grey[100],
+                          color: levelColor.withAlpha(20),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(
                           '${topic.isLoaded ? topic.rounds.length : topic.roundCount} 轮',
-                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                          style: TextStyle(fontSize: 11, color: levelColor),
                         ),
                       ),
                       const SizedBox(width: 4),
                       Icon(
                         isExpanded ? Icons.expand_less : Icons.expand_more,
                         size: 18,
-                        color: Colors.grey[400],
+                        color: levelColor,
                       ),
                     ],
                   ],
@@ -2632,13 +962,13 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
             ),
           ),
 
-          // 轮次列表（带连接线和卡片）
+          // 轮次列表（带层级颜色连接线）
           if (isExpanded && topic.isLoaded)
             Container(
               margin: const EdgeInsets.only(left: 8, top: 6),
               decoration: BoxDecoration(
                 border: Border(
-                  left: BorderSide(color: Colors.grey[300]!, width: 1.5),
+                  left: BorderSide(color: _levelColors[1].withAlpha(80), width: 2.5),
                 ),
               ),
               child: Column(
@@ -2667,27 +997,37 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     final isQuestionSelected = _selections['$roundKey:q'] == true;
     final selectedReplyCount = round.replies.where((r) => _selections['$roundKey:${r.id}'] == true).length;
     final isCurrent = topic.isCurrent && round.index == widget.currentRoundIndex;
+    final levelColor = _levelColors[2]; // 始终使用层级颜色
 
     return Container(
       margin: EdgeInsets.only(left: 14, top: 6, bottom: isLastRound ? 6 : 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 问题卡片
+          // 问题卡片 - 带层级颜色背景
           Container(
             decoration: BoxDecoration(
-              color: isCurrent ? primary.withAlpha(6) : Colors.white,
+              color: levelColor.withAlpha(isCurrent ? 15 : 8),
               borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withAlpha(isCurrent ? 12 : 6),
-                  blurRadius: isCurrent ? 6 : 3,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-              border: isCurrent
-                  ? Border.all(color: primary.withAlpha(50), width: 1.5)
-                  : Border.all(color: Colors.grey.withAlpha(20), width: 1),
+              boxShadow: isCurrent
+                  ? [
+                      BoxShadow(
+                        color: levelColor.withAlpha(30),
+                        blurRadius: 6,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: levelColor.withAlpha(12),
+                        blurRadius: 3,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+              border: Border.all(
+                color: levelColor.withAlpha(isCurrent ? 120 : 80),
+                width: isCurrent ? 2.0 : 1.5,
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2712,10 +1052,10 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                             width: 18,
                             height: 18,
                             decoration: BoxDecoration(
-                              color: isQuestionSelected ? primary : Colors.transparent,
+                              color: isQuestionSelected ? levelColor : Colors.transparent,
                               borderRadius: BorderRadius.circular(4),
                               border: Border.all(
-                                color: isQuestionSelected ? primary : Colors.grey[350]!,
+                                color: isQuestionSelected ? levelColor : levelColor.withAlpha(100),
                                 width: 1.5,
                               ),
                             ),
@@ -2726,24 +1066,24 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                         ),
                         const SizedBox(width: 10),
 
-                        // Q标签
+                        // Q标签 - 使用层级颜色
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: Colors.blue[50],
+                            color: levelColor.withAlpha(20),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.help_outline, size: 12, color: Colors.blue[700]),
+                              Icon(Icons.help_outline, size: 12, color: levelColor),
                               const SizedBox(width: 4),
                               Text(
                                 'Q${round.index + 1}',
                                 style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.blue[700],
+                                  color: levelColor,
                                 ),
                               ),
                             ],
@@ -2755,7 +1095,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                              color: primary,
+                              color: levelColor,
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: const Text(
@@ -2773,14 +1113,14 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             margin: const EdgeInsets.only(right: 6),
                             decoration: BoxDecoration(
-                              color: primary.withAlpha(20),
+                              color: levelColor.withAlpha(20),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Text(
                               '$selectedReplyCount/${round.replies.length}',
                               style: TextStyle(
                                 fontSize: 10,
-                                color: primary,
+                                color: levelColor,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -2789,7 +1129,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                         Icon(
                           isExpanded ? Icons.expand_less : Icons.expand_more,
                           size: 18,
-                          color: Colors.grey[400],
+                          color: levelColor,
                         ),
                       ],
                     ),
@@ -2817,7 +1157,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
               margin: const EdgeInsets.only(left: 6, top: 6),
               decoration: BoxDecoration(
                 border: Border(
-                  left: BorderSide(color: Colors.grey[200]!, width: 1.5),
+                  left: BorderSide(color: _levelColors[2].withAlpha(80), width: 2),
                 ),
               ),
               child: Column(
@@ -2847,23 +1187,31 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     final isSelected = _selections[replyKey] == true;
     final isContentExpanded = _expandedReplies.contains(replyKey);
 
+    // 回复层颜色：主线用琥珀色，普通用青绿色
+    final levelColor = reply.isMainline ? _mainlineColor : _levelColors[3];
+    // 选中时使用 primary 色
+    final activeColor = isSelected ? primary : levelColor;
+
     return Container(
       margin: EdgeInsets.only(left: 12, top: 5, bottom: isLastReply ? 5 : 0),
       decoration: BoxDecoration(
-        color: isSelected ? primary.withAlpha(8) : Colors.white,
+        color: isSelected
+            ? primary.withAlpha(12)
+            : reply.isMainline
+                ? _mainlineColor.withAlpha(12) // 主线淡黄背景
+                : _levelColors[3].withAlpha(10), // 普通青绿淡背景
         borderRadius: BorderRadius.circular(8),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withAlpha(isSelected ? 10 : 5),
-            blurRadius: isSelected ? 4 : 2,
+            color: activeColor.withAlpha(isSelected ? 30 : 18),
+            blurRadius: isSelected ? 5 : 3,
             offset: const Offset(0, 1),
           ),
         ],
-        border: isSelected
-            ? Border.all(color: primary.withAlpha(60), width: 1.5)
-            : reply.isMainline
-                ? Border.all(color: Colors.amber.withAlpha(150), width: 1.5)
-                : Border.all(color: Colors.grey.withAlpha(20), width: 1),
+        border: Border.all(
+          color: activeColor.withAlpha(isSelected ? 100 : 70),
+          width: isSelected ? 1.8 : 1.5,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2881,17 +1229,17 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
               padding: const EdgeInsets.all(10),
               child: Row(
                 children: [
-                  // 勾选框
+                  // 勾选框 - 使用层级颜色
                   GestureDetector(
                     onTap: () => _toggleReply(assistant.id, topic.id, round, reply),
                     child: Container(
                       width: 16,
                       height: 16,
                       decoration: BoxDecoration(
-                        color: isSelected ? primary : Colors.transparent,
+                        color: isSelected ? activeColor : Colors.transparent,
                         borderRadius: BorderRadius.circular(4),
                         border: Border.all(
-                          color: isSelected ? primary : Colors.grey[350]!,
+                          color: isSelected ? activeColor : levelColor.withAlpha(100),
                           width: 1.5,
                         ),
                       ),
@@ -2902,11 +1250,11 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                   ),
                   const SizedBox(width: 8),
 
-                  // 模型图标
+                  // 模型图标 - 使用层级颜色
                   Icon(
                     Icons.smart_toy_outlined,
                     size: 14,
-                    color: reply.isMainline ? Colors.amber[700] : Colors.grey[500],
+                    color: levelColor,
                   ),
                   const SizedBox(width: 6),
 
@@ -2923,36 +1271,44 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
                     ),
                   ),
 
-                  // 推荐标签
+                  // 推荐标签 - 使用琥珀色
                   if (reply.isMainline)
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       margin: const EdgeInsets.only(right: 6),
                       decoration: BoxDecoration(
-                        color: Colors.amber[100],
+                        color: _mainlineColor.withAlpha(25),
                         borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: _mainlineColor.withAlpha(60)),
                       ),
-                      child: Text(
-                        '推荐',
-                        style: TextStyle(
-                          fontSize: 9,
-                          color: Colors.amber[800],
-                          fontWeight: FontWeight.w600,
-                        ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.star, size: 10, color: _mainlineColor),
+                          SizedBox(width: 3),
+                          Text(
+                            '主线',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: _mainlineColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
 
-                  // 字数
+                  // 字数 - 使用层级颜色
                   Text(
                     _formatChars(reply.charCount),
-                    style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+                    style: TextStyle(fontSize: 11, color: levelColor.withAlpha(180)),
                   ),
                   const SizedBox(width: 4),
 
                   Icon(
                     isContentExpanded ? Icons.expand_less : Icons.expand_more,
                     size: 16,
-                    color: Colors.grey[400],
+                    color: levelColor.withAlpha(150),
                   ),
                 ],
               ),
@@ -3077,112 +1433,6 @@ class _ActionChip extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-/// 树形连接线画笔（用于风格一）
-class _TreeConnectorPainter extends CustomPainter {
-  final bool isLast;
-  final bool hasChildren;
-  final Color color;
-
-  _TreeConnectorPainter({
-    required this.isLast,
-    required this.hasChildren,
-    required this.color,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-
-    // 垂直线
-    canvas.drawLine(
-      Offset(size.width / 2, 0),
-      Offset(size.width / 2, isLast ? 22 : size.height),
-      paint,
-    );
-
-    // 水平线
-    canvas.drawLine(
-      Offset(size.width / 2, 22),
-      Offset(size.width, 22),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-/// 简化的树节点画笔 - 画 ├─ 或 └─ 形状 + 节点圆点
-class _SimpleTreeNodePainter extends CustomPainter {
-  final bool isLast;
-  final Color nodeColor;
-  final Color lineColor;
-  final double nodeSize;
-
-  _SimpleTreeNodePainter({
-    required this.isLast,
-    required this.nodeColor,
-    required this.lineColor,
-    this.nodeSize = 8,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final linePaint = Paint()
-      ..color = lineColor
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-
-    final centerX = size.width / 2;
-    final centerY = size.height / 2;
-
-    // 垂直线上半段（从顶部到中心）
-    canvas.drawLine(
-      Offset(centerX, 0),
-      Offset(centerX, centerY),
-      linePaint,
-    );
-
-    // 如果不是最后一个，继续向下画线
-    if (!isLast) {
-      canvas.drawLine(
-        Offset(centerX, centerY),
-        Offset(centerX, size.height),
-        linePaint,
-      );
-    }
-
-    // 水平线（从中心到右侧）
-    canvas.drawLine(
-      Offset(centerX, centerY),
-      Offset(size.width, centerY),
-      linePaint,
-    );
-
-    // 节点圆点
-    final nodePaint = Paint()
-      ..color = nodeColor
-      ..style = PaintingStyle.fill;
-
-    canvas.drawCircle(
-      Offset(centerX, centerY),
-      nodeSize / 2,
-      nodePaint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _SimpleTreeNodePainter oldDelegate) {
-    return oldDelegate.isLast != isLast ||
-        oldDelegate.nodeColor != nodeColor ||
-        oldDelegate.lineColor != lineColor ||
-        oldDelegate.nodeSize != nodeSize;
   }
 }
 

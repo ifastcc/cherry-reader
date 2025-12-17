@@ -75,6 +75,11 @@ class HighlightableCard extends StatefulWidget {
   /// 【可选】是否启用长文本折叠功能（默认关闭，保持原有双击全屏行为）
   final bool enableCollapse;
 
+  // 可选的上下文参数（用于全屏阅读页讨论功能）
+  final String? topicId;
+  final int? roundIndex;
+  final Map<String, dynamic>? contextData;
+
   const HighlightableCard({
     super.key,
     required this.messageId,
@@ -92,6 +97,9 @@ class HighlightableCard extends StatefulWidget {
     this.onRegenerate,
     this.onSpeak,
     this.enableCollapse = false,
+    this.topicId,
+    this.roundIndex,
+    this.contextData,
   });
 
   /// 创建助手回复卡片
@@ -105,6 +113,10 @@ class HighlightableCard extends StatefulWidget {
     VoidCallback? onRegenerate,
     VoidCallback? onSpeak,
     bool enableCollapse = false,
+    // 可选的上下文参数
+    String? topicId,
+    int? roundIndex,
+    Map<String, dynamic>? contextData,
   }) {
     final blocks = data['blocks'] as List<dynamic>? ?? [];
     final model = data['model'] as Map<String, dynamic>?;
@@ -136,6 +148,9 @@ class HighlightableCard extends StatefulWidget {
       onRegenerate: onRegenerate,
       onSpeak: onSpeak,
       enableCollapse: enableCollapse,
+      topicId: topicId,
+      roundIndex: roundIndex,
+      contextData: contextData,
     );
   }
 
@@ -428,6 +443,9 @@ class _HighlightableCardState extends State<HighlightableCard> {
           modelName: widget.modelName,
           messageId: widget.messageId,
           backgroundColor: widget.modelColor, // 传递模型颜色
+          topicId: widget.topicId,
+          roundIndex: widget.roundIndex,
+          contextData: widget.contextData,
         ),
       ),
     );
