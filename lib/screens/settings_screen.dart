@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -17,6 +18,8 @@ import '../services/ai_provider_service.dart';
 import '../services/cherry_export_service.dart';
 import '../services/isar_database.dart';
 import '../services/version_service.dart';
+import '../services/mcp/mcp_server_service.dart';
+import '../services/mcp/mcp_config.dart';
 import '../models/domain/data_version.dart';
 import '../models/isar/assistant_entity.dart';
 import '../models/isar/topic_entity.dart';
@@ -445,6 +448,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const SizedBox(height: 16),
 
+                    // MCP Server 设置部分（仅桌面端）
+                    if (PlatformUtils.isDesktop) ...[
+                      _buildMCPServerSection(),
+                      const SizedBox(height: 16),
+                    ],
+
                     // TTS 设置部分
                     _buildTtsSettingsSection(),
 
@@ -785,6 +794,261 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 构建 MCP Server 设置部分（仅桌面端）
+  Widget _buildMCPServerSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.api, color: Colors.purple[300], size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  'MCP Server',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const Spacer(),
+                // 状态指示器
+                StreamBuilder<MCPServerStatus>(
+                  stream: MCPServerService.instance.statusStream,
+                  initialData: MCPServerService.instance.currentStatus,
+                  builder: (context, snapshot) {
+                    final isRunning = snapshot.data?.isRunning ?? false;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isRunning ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isRunning ? Icons.circle : Icons.circle_outlined,
+                            size: 8,
+                            color: isRunning ? Colors.green : Colors.grey,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isRunning ? '运行中' : '已停止',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isRunning ? Colors.green[700] : Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '启用后，Claude Code、Cursor 等 AI 编程工具可以访问聊天记录数据',
+              style: TextStyle(color: Colors.grey[400], fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+
+            // 启用开关
+            StreamBuilder<MCPServerStatus>(
+              stream: MCPServerService.instance.statusStream,
+              initialData: MCPServerService.instance.currentStatus,
+              builder: (context, snapshot) {
+                final isRunning = snapshot.data?.isRunning ?? false;
+                return SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('启用 MCP Server'),
+                  subtitle: Text(isRunning
+                      ? '端口: ${snapshot.data?.port ?? MCPServerConfig.defaultPort}'
+                      : '点击启动服务'),
+                  value: isRunning,
+                  onChanged: (value) async {
+                    if (value) {
+                      final success = await MCPServerService.instance.start();
+                      if (mounted && !success) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('❌ MCP Server 启动失败'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                    } else {
+                      await MCPServerService.instance.stop();
+                    }
+                    setState(() {});
+                  },
+                );
+              },
+            ),
+
+            // 自动启动开关
+            FutureBuilder<MCPServerConfig>(
+              future: MCPServerConfig.load(),
+              builder: (context, snapshot) {
+                final config = snapshot.data ?? MCPServerConfig.defaults();
+                return SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('应用启动时自动开启'),
+                  value: config.autoStart,
+                  onChanged: (value) async {
+                    final newConfig = config.copyWith(autoStart: value, enabled: value);
+                    await MCPServerService.instance.updateConfig(newConfig);
+                    setState(() {});
+                  },
+                );
+              },
+            ),
+
+            const Divider(),
+
+            // 连接信息（仅运行时显示）
+            StreamBuilder<MCPServerStatus>(
+              stream: MCPServerService.instance.statusStream,
+              initialData: MCPServerService.instance.currentStatus,
+              builder: (context, snapshot) {
+                final status = snapshot.data;
+                if (status == null || !status.isRunning) {
+                  return const SizedBox.shrink();
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '连接信息',
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // 网络地址列表
+                    ...status.addresses.map((addr) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.link, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: SelectableText(
+                                  'http://$addr:${status.port}/mcp',
+                                  style: const TextStyle(fontFamily: 'monospace'),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.copy, size: 16),
+                                onPressed: () {
+                                  Clipboard.setData(ClipboardData(
+                                    text: 'http://$addr:${status.port}/mcp',
+                                  ));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('地址已复制'),
+                                      duration: Duration(seconds: 1),
+                                    ),
+                                  );
+                                },
+                                tooltip: '复制地址',
+                              ),
+                            ],
+                          ),
+                        )),
+
+                    const SizedBox(height: 16),
+
+                    // 配置生成器
+                    const Text(
+                      'AI 工具配置',
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // 工具选择下拉框
+                    _buildConfigGeneratorSection(status),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建配置生成器部分
+  Widget _buildConfigGeneratorSection(MCPServerStatus status) {
+    AIToolType selectedTool = AIToolType.claudeCode;
+    return StatefulBuilder(
+      builder: (context, setLocalState) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<AIToolType>(
+              value: selectedTool,
+              decoration: const InputDecoration(
+                labelText: '选择 AI 工具',
+                isDense: true,
+              ),
+              items: AIToolType.values.map((tool) {
+                return DropdownMenuItem(
+                  value: tool,
+                  child: Text(tool.displayName),
+                );
+              }).toList(),
+              onChanged: (tool) {
+                if (tool != null) {
+                  setLocalState(() {
+                    selectedTool = tool;
+                  });
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SelectableText(
+                    MCPServerService.instance.generateConfig(selectedTool),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(
+                        text: MCPServerService.instance.generateConfig(selectedTool),
+                      ));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('配置已复制到剪贴板'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('复制配置'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 

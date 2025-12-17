@@ -30,6 +30,10 @@ dependencies:
   dio: ^5.4.0                     # 更强大的 HTTP 客户端(支持流式响应)
   webdav_client: ^1.0.6           # WebDAV 客户端
 
+  # MCP Server (HTTP 服务器)
+  shelf: ^1.4.1                   # Dart 官方 HTTP 服务器框架
+  shelf_router: ^1.1.4            # 路由支持
+
   # 状态管理
   provider: ^6.1.1                # 状态管理(简单易用)
 

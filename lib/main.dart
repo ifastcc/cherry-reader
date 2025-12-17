@@ -8,6 +8,8 @@ import 'services/analysis_cache_manager.dart';
 import 'services/repository_provider.dart';
 import 'services/ai_provider_service.dart';
 import 'services/version_service.dart';
+import 'services/mcp/mcp_server_service.dart';
+import 'utils/platform_utils.dart';
 
 import 'package:provider/provider.dart';
 import 'providers/tts_provider.dart';
@@ -34,6 +36,11 @@ void main() async {
 
   // 初始化 AI Provider 服务
   await AIProviderService.instance.init();
+
+  // 初始化 MCP Server（仅桌面端）
+  if (PlatformUtils.isDesktop) {
+    await MCPServerService.instance.init();
+  }
 
   // 检查是否需要显示引导页
   final showOnboarding = await OnboardingScreen.shouldShowOnboarding();
