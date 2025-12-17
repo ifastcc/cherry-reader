@@ -198,10 +198,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
         double effectiveHeight;
         if (isLastItem && itemHeight > viewportHeight) {
+          // 最后一项比视口高：滚动到底部时还要保留在视口内
           effectiveHeight = itemHeight - viewportHeight;
+          progress = (scrolledDistance / effectiveHeight).clamp(0.0, 1.0);
         } else if (isLastItem && itemHeight <= viewportHeight) {
-          effectiveHeight = 1;
-          progress = scrolledDistance > 0 ? 1.0 : 0.0;
+          // 最后一项比视口矮：按实际高度渐进计算
+          effectiveHeight = itemHeight;
+          progress = (scrolledDistance / effectiveHeight).clamp(0.0, 1.0);
         } else {
           effectiveHeight = itemHeight;
           progress = (scrolledDistance / effectiveHeight).clamp(0.0, 1.0);

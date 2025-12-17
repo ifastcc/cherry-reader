@@ -50,6 +50,46 @@ if [[ "$1" == "web" ]]; then
 elif [[ "$1" == "ios" ]]; then
     echo -e "${GREEN}📱 启动 iOS 模拟器...${NC}"
     flutter run -d ios
+elif [[ "$1" == "profile" ]]; then
+    # ==================== Profile 模式 ====================
+    echo -e "${GREEN}🔬 启动 Profile 性能分析模式...${NC}"
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  性能分析模式已启用${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${BLUE}快捷键（需点击终端窗口后按键）:${NC}"
+    echo -e "    ${GREEN}v${NC} - 打开 DevTools（性能分析主界面）"
+    echo -e "    ${GREEN}P${NC} - 开启/关闭 Performance Overlay（帧率图表）"
+    echo -e "    ${GREEN}r${NC} - Hot Reload"
+    echo -e "    ${GREEN}R${NC} - Hot Restart"
+    echo -e "    ${GREEN}q${NC} - 退出"
+    echo ""
+    echo -e "  ${BLUE}Performance Overlay 说明:${NC}"
+    echo -e "    上方图表 = GPU 渲染线程"
+    echo -e "    下方图表 = UI 线程"
+    echo -e "    ${GREEN}绿色${NC} = 正常 (<16.6ms)"
+    echo -e "    ${YELLOW}红色${NC} = 掉帧 (>16.6ms)"
+    echo ""
+    echo -e "  ${BLUE}⚠️  重要提示:${NC}"
+    echo -e "    按快捷键前，先点击终端窗口确保焦点在终端"
+    echo -e "    如果按键无效，可以手动打开 DevTools:"
+    echo -e "    ${GREEN}flutter pub global run devtools${NC}"
+    echo ""
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+    echo ""
+
+    # 构建运行参数 - 使用 --start-paused 可以更容易连接 DevTools
+    RUN_ARGS="-d macos --profile"
+
+    # 添加性能分析标记
+    DART_DEFINES="--dart-define=PROFILE_MODE=true"
+
+    if [[ -n "$OPENAI_API_KEY" ]]; then
+        DART_DEFINES="$DART_DEFINES --dart-define=OPENAI_API_KEY=$OPENAI_API_KEY"
+    fi
+
+    flutter run $RUN_ARGS $DART_DEFINES
 else
     echo -e "${GREEN}🖥️  启动 macOS 桌面版...${NC}"
 
@@ -69,6 +109,7 @@ else
 
     # 添加 DevTools 支持（运行后按 'd' 打开）
     echo -e "${BLUE}💡 提示: 运行后按 'd' 打开 DevTools 性能分析${NC}"
+    echo -e "${BLUE}💡 提示: 使用 ./run.sh profile 启动性能分析模式${NC}"
     echo ""
 
     if [[ -n "$OPENAI_API_KEY" ]]; then

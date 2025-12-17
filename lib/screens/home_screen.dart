@@ -532,27 +532,57 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  /// 加载本地备份
-  Future<void> _loadLocalBackup(LocalBackupInfo backup) async {
+  /// 加载本地备份（后台静默加载，不阻塞 UI）
+  Future<void> _loadLocalBackup(LocalBackupInfo backup, {int retryCount = 0}) async {
+    if (_isSyncing) return;
+
+    const maxRetries = 3;
+    const retryDelay = Duration(seconds: 2);
+
     setState(() {
       _isSyncing = true;
-      _syncMessage = '加载备份...';
+      _syncMessage = retryCount > 0 ? '等待文件写入完成...' : '复制文件...';
+      _syncProgress = null;
     });
 
     try {
+      // 1. 复制文件到 App 目录（含 ZIP 完整性检查）
       final localPath = await LocalFolderSyncService.loadBackup(backup);
-      if (localPath == null) throw Exception('加载失败');
 
-      await DataPersistenceManager.clearCache();
-      // 如果已有数据，静默加载
-      final loadSuccess = await _loadFile(
-        localPath,
-        saveCache: true,
-        silent: _topicIndex != null,
+      if (localPath == null) {
+        // ZIP 文件可能还在写入中，尝试重试
+        if (retryCount < maxRetries) {
+          debugPrint('⏳ ZIP 文件未就绪，${retryDelay.inSeconds}秒后重试 (${retryCount + 1}/$maxRetries)');
+          setState(() {
+            _isSyncing = false;
+            _syncMessage = null;
+          });
+          await Future.delayed(retryDelay);
+          return _loadLocalBackup(backup, retryCount: retryCount + 1);
+        }
+        throw Exception('文件复制失败：ZIP 文件可能不完整');
+      }
+
+      if (!mounted) return;
+      setState(() => _syncMessage = '解压中...');
+
+      // 2. 【后台】在 Isolate 中解压和解析 JSON（不阻塞 UI）
+      final extractor = await CherryExtractor.loadInBackground(
+        zipPath: localPath.endsWith('.zip') ? localPath : null,
+        dataJsonPath: localPath.endsWith('.zip') ? null : localPath,
       );
 
-      if (loadSuccess && mounted) {
-        _currentVersionDisplay = backup.displayName;
+      if (!mounted) return;
+      setState(() => _syncMessage = '处理数据...');
+
+      // 3. 处理数据（主线程，但相对较快）
+      await _processLoadedExtractor(extractor, backup.displayName);
+
+      // 4. 保存缓存
+      await DataPersistenceManager.clearCache();
+      await _saveToCache(extractor, localPath);
+
+      if (mounted) {
         setState(() {
           _hasUpdate = false;
           _pendingLocalBackup = null;
@@ -569,8 +599,93 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         setState(() {
           _isSyncing = false;
           _syncMessage = null;
+          _syncProgress = null;
         });
       }
+    }
+  }
+
+  /// 处理已加载的 extractor（从后台加载结果更新 UI）
+  Future<void> _processLoadedExtractor(CherryExtractor extractor, String versionDisplay) async {
+    // 提取话题索引
+    final grouped = extractor.getTopicsByAssistant();
+    final topicIndex = <String, List<Map<String, dynamic>>>{};
+
+    for (final entry in grouped.entries) {
+      final assistantId = entry.key;
+      final assistantData = entry.value;
+      final topics = assistantData['topics'] as List<dynamic>;
+
+      topicIndex[assistantId] = topics.map((t) {
+        final topic = t as Map<String, dynamic>;
+        final messages = topic['messages'] as List? ?? [];
+        int roundCount = 0;
+        for (final msg in messages) {
+          if (msg is Map<String, dynamic> && msg['role'] == 'user') {
+            roundCount++;
+          }
+        }
+        return {
+          'id': topic['id'],
+          'name': topic['name'],
+          'assistantId': assistantId,
+          'messageCount': messages.length,
+          'roundCount': roundCount,
+          'createdAt': topic['createdAt'],
+          'updatedAt': topic['updatedAt'],
+        };
+      }).toList();
+    }
+
+    // 提取 Assistant 信息
+    final assistants = extractor.getAssistants();
+    final assistantMap = <String, Map<String, dynamic>>{};
+    for (final a in assistants) {
+      if (a is Map<String, dynamic>) {
+        final id = a['id'] as String?;
+        if (id != null) {
+          assistantMap[id] = a;
+        }
+      }
+    }
+
+    // 【被动导入】自动从加载的数据中导入 AI Providers
+    try {
+      if (extractor.rawData != null) {
+        final count = await AIProviderService.instance
+            .importFromParsedData(extractor.rawData!);
+        if (count > 0) {
+          debugPrint('✅ 自动导入了 $count 个 AI Provider');
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ AI Provider 自动导入失败: $e');
+    }
+
+    // 更新 UI
+    if (mounted) {
+      setState(() {
+        _extractor = extractor;
+        _topicIndex = topicIndex;
+        _assistantMap = assistantMap;
+        _currentVersionDisplay = versionDisplay;
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// 保存到缓存
+  Future<void> _saveToCache(CherryExtractor extractor, String filePath) async {
+    try {
+      final importManager = DataImportManager(RepositoryProvider.instance.database);
+      await importManager.importData(
+        extractor,
+        onProgress: (progress, message) {
+          debugPrint('📦 导入进度: ${(progress * 100).toInt()}% - $message');
+        },
+      );
+    } catch (e) {
+      debugPrint('⚠️ 保存缓存失败: $e');
     }
   }
 
@@ -590,6 +705,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     try {
       final startTime = DateTime.now();
+
+      // 尝试恢复版本显示（从上次同步时间）
+      if (_loadMode == DataLoadMode.localFolder && _currentVersionDisplay == null) {
+        final lastSyncTime = await LocalFolderSyncService.getLastSyncTime();
+        if (lastSyncTime != null) {
+          // 格式化为：2025-12-17 14:30:25
+          final year = lastSyncTime.year.toString();
+          final month = lastSyncTime.month.toString().padLeft(2, '0');
+          final day = lastSyncTime.day.toString().padLeft(2, '0');
+          final hour = lastSyncTime.hour.toString().padLeft(2, '0');
+          final minute = lastSyncTime.minute.toString().padLeft(2, '0');
+          final second = lastSyncTime.second.toString().padLeft(2, '0');
+          _currentVersionDisplay = '$year-$month-$day $hour:$minute:$second';
+        }
+      }
 
       // 智能加载: 优先使用轻量级索引
       final (topicIndex, _) = await DataPersistenceManager.smartLoad();
@@ -998,6 +1128,148 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (selected != null) {
         await _downloadAndLoadBackup(selected);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // 确保关闭加载对话框
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('获取备份列表失败: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// 显示本地文件夹备份选择对话框
+  Future<void> _showLocalBackupSelector() async {
+    if (!_hasValidLocalFolderConfig) return;
+
+    // 显示加载中对话框
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('正在获取备份列表...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final config = await LocalFolderSyncService.loadConfig();
+      final backups = await LocalFolderSyncService.listBackupFiles(config);
+
+      if (!mounted) return;
+      Navigator.pop(context); // 关闭加载对话框
+
+      if (backups.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('未找到备份文件'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      // 显示备份选择对话框
+      final selected = await showDialog<LocalBackupInfo>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.folder_open, color: Colors.blue[600]),
+              const SizedBox(width: 8),
+              const Text('选择备份版本'),
+            ],
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 400,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: backups.length,
+              itemBuilder: (context, index) {
+                final backup = backups[index];
+                final isFirst = index == 0;
+                final isCurrent = backup.displayName == _currentVersionDisplay;
+                return ListTile(
+                  leading: Icon(
+                    isFirst ? Icons.star : Icons.archive,
+                    color: isFirst ? Colors.orange : Colors.grey,
+                  ),
+                  title: Text(
+                    backup.displayName,
+                    style: TextStyle(
+                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                  subtitle: Text(backup.formattedSize),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isCurrent)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.green.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            '当前',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.green,
+                            ),
+                          ),
+                        ),
+                      if (isFirst && !isCurrent)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            '最新',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.orange,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  onTap: () => Navigator.pop(context, backup),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      );
+
+      if (selected != null) {
+        // 清除时间戳，强制加载选中的版本
+        await LocalFolderSyncService.clearLastModified();
+        await _loadLocalBackup(selected);
       }
     } catch (e) {
       if (!mounted) return;
@@ -1935,6 +2207,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final topicId = topic['id'] as String;
     final topicName = topic['name'] as String? ?? '未命名话题';
     final assistantId = topic['assistantId'] as String;
+    final roundCount = topic['roundCount'] as int? ?? 0;
 
     // 获取助手信息
     final assistantInfo = _assistantMap?[assistantId];
@@ -2047,9 +2320,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 12),
+                // 轮数 + 时间
                 Text(
-                  timeDisplay,
+                  roundCount > 0 && timeDisplay.isNotEmpty
+                      ? '$roundCount轮 · $timeDisplay'
+                      : (roundCount > 0 ? '$roundCount轮' : timeDisplay),
                   style: TextStyle(
                     fontSize: 13,
                     color: Colors.grey[400],

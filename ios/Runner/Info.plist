@@ -4,6 +4,9 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- 启用 Impeller 渲染引擎（iOS 默认启用，显式声明确保生效）-->
+	<key>FLTEnableImpeller</key>
+	<true/>
 
 	<!-- 隐私权限说明 (App Store 审核必须) -->
 	<key>NSPhotoLibraryUsageDescription</key>

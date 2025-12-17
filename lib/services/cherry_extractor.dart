@@ -1,7 +1,65 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
 import '../models/export_data.dart';
+
+/// 用于 Isolate 的加载参数
+class IsolateLoadParams {
+  final String? zipPath;
+  final String? dataJsonPath;
+
+  const IsolateLoadParams({this.zipPath, this.dataJsonPath});
+}
+
+/// 用于 Isolate 的加载结果
+class IsolateLoadResult {
+  final Map<String, dynamic>? rawData;
+  final String? error;
+
+  const IsolateLoadResult({this.rawData, this.error});
+
+  bool get success => rawData != null && error == null;
+}
+
+/// 在 Isolate 中执行的加载函数（顶级函数，不能是类方法）
+IsolateLoadResult _loadInIsolate(IsolateLoadParams params) {
+  try {
+    Map<String, dynamic>? rawData;
+
+    if (params.zipPath != null) {
+      // 从 ZIP 加载
+      final bytes = File(params.zipPath!).readAsBytesSync();
+      if (bytes.isEmpty) {
+        return const IsolateLoadResult(error: 'ZIP 文件为空');
+      }
+
+      final archive = ZipDecoder().decodeBytes(bytes);
+      for (final file in archive) {
+        if (file.name == 'data.json' && file.isFile) {
+          final content = file.content as List<int>;
+          final jsonString = utf8.decode(content);
+          rawData = json.decode(jsonString) as Map<String, dynamic>;
+          break;
+        }
+      }
+
+      if (rawData == null) {
+        return const IsolateLoadResult(error: 'ZIP 中未找到 data.json');
+      }
+    } else if (params.dataJsonPath != null) {
+      // 从 JSON 加载
+      final jsonString = File(params.dataJsonPath!).readAsStringSync();
+      rawData = json.decode(jsonString) as Map<String, dynamic>;
+    }
+
+    return IsolateLoadResult(rawData: rawData);
+  } on FormatException catch (e) {
+    return IsolateLoadResult(error: 'ZIP 文件损坏或格式无效: ${e.message}');
+  } catch (e) {
+    return IsolateLoadResult(error: '加载失败: $e');
+  }
+}
 
 /// Cherry Studio 数据提取器
 ///
@@ -35,6 +93,37 @@ class CherryExtractor {
   CherryExtractor.fromCachedData(Map<String, dynamic> data) {
     rawData = data;
     _buildIndexes();
+  }
+
+  /// 【后台加载】在 Isolate 中解压和解析，不阻塞 UI
+  ///
+  /// 返回已加载的 CherryExtractor，或抛出异常
+  static Future<CherryExtractor> loadInBackground({
+    String? zipPath,
+    String? dataJsonPath,
+  }) async {
+    debugPrint('🔄 开始后台加载...');
+    final startTime = DateTime.now();
+
+    // 在 Isolate 中执行耗时的解压和解析
+    final result = await compute(
+      _loadInIsolate,
+      IsolateLoadParams(zipPath: zipPath, dataJsonPath: dataJsonPath),
+    );
+
+    if (!result.success) {
+      throw Exception(result.error);
+    }
+
+    // 回到主线程后，构建索引（相对较快）
+    final extractor = CherryExtractor.fromCachedData(result.rawData!);
+    extractor.zipPath = zipPath;
+    extractor.dataJsonPath = dataJsonPath;
+
+    final elapsed = DateTime.now().difference(startTime).inMilliseconds;
+    debugPrint('✅ 后台加载完成，耗时 ${elapsed}ms');
+
+    return extractor;
   }
 
   /// 加载数据（主入口）

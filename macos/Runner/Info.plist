@@ -28,5 +28,8 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- 启用 Impeller 渲染引擎，解决 Shader Compilation Jank -->
+	<key>FLTEnableImpeller</key>
+	<true/>
 </dict>
 </plist>

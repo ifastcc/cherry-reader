@@ -132,13 +132,67 @@ class StatusBarState {
   String get statusText {
     switch (phase) {
       case StatusBarPhase.idle:
+        // 空闲状态：显示话题数 + 版本时间
+        final parts = <String>[];
+        if (topicCount != null && topicCount! > 0) {
+          parts.add('$topicCount 话题');
+        }
+        final timeStr = _formatVersionTime();
+        if (timeStr != null) {
+          parts.add(timeStr);
+        }
+        if (parts.isNotEmpty) {
+          return parts.join(' · ');
+        }
         return _modeText;
       case StatusBarPhase.syncing:
         return syncMessage ?? '同步中...';
       case StatusBarPhase.hasUpdate:
-        return '有新版本';
+        return '点击更新';
       case StatusBarPhase.error:
         return '同步失败';
+    }
+  }
+
+  /// 格式化版本时间（智能显示）
+  /// 今天：14:30
+  /// 其他：12-17 14:30
+  String? _formatVersionTime() {
+    if (versionDisplay == null || versionDisplay!.isEmpty) return null;
+
+    try {
+      // 解析 versionDisplay，格式：2025-12-17 14:30:47
+      final parts = versionDisplay!.split(' ');
+      if (parts.length < 2) return versionDisplay;
+
+      final datePart = parts[0]; // 2025-12-17
+      final timePart = parts[1]; // 14:30:47
+
+      final dateParts = datePart.split('-');
+      if (dateParts.length < 3) return versionDisplay;
+
+      final year = int.tryParse(dateParts[0]);
+      final month = int.tryParse(dateParts[1]);
+      final day = int.tryParse(dateParts[2]);
+
+      if (year == null || month == null || day == null) return versionDisplay;
+
+      // 简化时间：去掉秒
+      final timeShort = timePart.length > 5 ? timePart.substring(0, 5) : timePart;
+
+      final now = DateTime.now();
+      final versionDate = DateTime(year, month, day);
+      final today = DateTime(now.year, now.month, now.day);
+
+      if (versionDate == today) {
+        // 今天：只显示时间
+        return timeShort;
+      } else {
+        // 其他：MM-DD HH:mm
+        return '${dateParts[1]}-${dateParts[2]} $timeShort';
+      }
+    } catch (e) {
+      return versionDisplay;
     }
   }
 

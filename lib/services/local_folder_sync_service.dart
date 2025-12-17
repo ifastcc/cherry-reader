@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:watcher/watcher.dart';
@@ -83,7 +84,11 @@ class LocalFolderSyncService {
 
   // 防抖定时器
   Timer? _debounceTimer;
-  static const _debounceDuration = Duration(milliseconds: 800);
+  static const _debounceDuration = Duration(milliseconds: 1500);
+
+  // 文件稳定性检测间隔
+  static const _fileStabilityCheckInterval = Duration(milliseconds: 500);
+  static const _maxStabilityChecks = 10; // 最多等待 5 秒
 
   // 文件变化回调
   Function(LocalBackupInfo)? onFileChanged;
@@ -207,6 +212,21 @@ class LocalFolderSyncService {
   /// 返回本地文件路径，失败返回 null
   static Future<String?> loadBackup(LocalBackupInfo backup) async {
     try {
+      final sourceFile = File(backup.path);
+      if (!await sourceFile.exists()) {
+        debugPrint('❌ 源文件不存在: ${backup.path}');
+        return null;
+      }
+
+      // 预检: 验证 ZIP 文件完整性（在复制前检查，避免浪费时间）
+      if (backup.path.endsWith('.zip')) {
+        final isValid = await _validateZipFile(sourceFile);
+        if (!isValid) {
+          debugPrint('❌ ZIP 文件不完整，可能正在写入中');
+          return null;
+        }
+      }
+
       // 获取 App 数据目录
       final appPath = await DataPersistenceManager.getAppDataFilePath();
       final appFile = File(appPath);
@@ -217,12 +237,6 @@ class LocalFolderSyncService {
       }
 
       // 复制新文件
-      final sourceFile = File(backup.path);
-      if (!await sourceFile.exists()) {
-        debugPrint('❌ 源文件不存在: ${backup.path}');
-        return null;
-      }
-
       await sourceFile.copy(appPath);
 
       // 保存时间戳
@@ -234,6 +248,26 @@ class LocalFolderSyncService {
     } catch (e) {
       debugPrint('❌ 加载备份失败: $e');
       return null;
+    }
+  }
+
+  /// 验证 ZIP 文件完整性
+  ///
+  /// 尝试读取 ZIP 文件的目录结构来验证文件是否完整
+  static Future<bool> _validateZipFile(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return false;
+
+      // 尝试解码 ZIP（这会验证 End of Central Directory Record）
+      ZipDecoder().decodeBytes(bytes);
+      return true;
+    } on FormatException catch (e) {
+      debugPrint('⚠️ ZIP 验证失败: ${e.message}');
+      return false;
+    } catch (e) {
+      debugPrint('⚠️ ZIP 验证异常: $e');
+      return false;
     }
   }
 
@@ -280,13 +314,45 @@ class LocalFolderSyncService {
     // 防抖处理：文件写入可能触发多次事件
     _debounceTimer?.cancel();
     _debounceTimer = Timer(_debounceDuration, () async {
-      // 延迟后再检查，确保文件写入完成
-      final latest = await findLatestBackup(config);
-      if (latest != null && onFileChanged != null) {
-        debugPrint('📢 通知文件变化: ${latest.name}');
-        onFileChanged!(latest);
+      // 等待文件写入稳定后再检查
+      final stableBackup = await _waitForFileStability(config);
+      if (stableBackup != null && onFileChanged != null) {
+        debugPrint('📢 通知文件变化: ${stableBackup.name}');
+        onFileChanged!(stableBackup);
       }
     });
+  }
+
+  /// 等待文件大小稳定（确保文件写入完成）
+  ///
+  /// 返回稳定后的最新备份信息，如果超时或失败则返回 null
+  Future<LocalBackupInfo?> _waitForFileStability(LocalFolderConfig config) async {
+    int previousSize = -1;
+    int stableCount = 0;
+
+    for (int i = 0; i < _maxStabilityChecks; i++) {
+      final latest = await findLatestBackup(config);
+      if (latest == null) return null;
+
+      if (latest.size == previousSize) {
+        stableCount++;
+        // 文件大小连续 2 次相同，认为写入完成
+        if (stableCount >= 2) {
+          debugPrint('✅ 文件大小稳定: ${latest.name} (${latest.formattedSize})');
+          return latest;
+        }
+      } else {
+        stableCount = 0;
+        previousSize = latest.size;
+        debugPrint('⏳ 文件写入中: ${latest.name} (${latest.formattedSize})');
+      }
+
+      await Future.delayed(_fileStabilityCheckInterval);
+    }
+
+    // 超时后返回最新文件（可能仍在写入）
+    debugPrint('⚠️ 文件稳定性检测超时，尝试使用当前文件');
+    return await findLatestBackup(config);
   }
 
   /// 停止监听
