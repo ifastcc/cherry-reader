@@ -46,14 +46,13 @@ class GetUserQueriesTool extends MCPTool {
             'type': 'integer',
             'description': '最小轮次，默认 1',
           },
-          'assistant_ids': {
-            'type': 'array',
-            'items': {'type': 'string'},
-            'description': '只看指定助手（可选）',
+          'assistant_filter': {
+            'type': 'string',
+            'description': '按助手名称筛选，支持模糊匹配，如"Claude"、"GPT"，多个关键词用空格分隔',
           },
           'limit': {
             'type': 'integer',
-            'description': '返回话题数量，默认 50，最大 500',
+            'description': '返回话题数量，默认 100，最大 500',
           },
         },
         'required': [],
@@ -63,9 +62,9 @@ class GetUserQueriesTool extends MCPTool {
   Future<Map<String, dynamic>> execute(Map<String, dynamic> arguments) async {
     final period = arguments['period'] as String? ?? 'today';
     final minRounds = arguments['min_rounds'] as int? ?? 1;
-    var limit = arguments['limit'] as int? ?? 50;
+    var limit = arguments['limit'] as int? ?? 100;
     if (limit > 500) limit = 500;
-    final assistantIds = (arguments['assistant_ids'] as List?)?.cast<String>();
+    final assistantFilter = arguments['assistant_filter'] as String?;
 
     final topicRepo = RepositoryProvider.instance.topicRepository;
     final messageRepo = RepositoryProvider.instance.messageRepository;
@@ -92,10 +91,19 @@ class GetUserQueriesTool extends MCPTool {
           updatedAt.isBefore(range.end.add(const Duration(days: 1)));
     }).toList();
 
-    // 按助手过滤
-    if (assistantIds != null && assistantIds.isNotEmpty) {
-      allTopics =
-          allTopics.where((t) => assistantIds.contains(t.assistantId)).toList();
+    // 按助手名称模糊匹配过滤
+    if (assistantFilter != null && assistantFilter.isNotEmpty) {
+      final keywords = assistantFilter
+          .toLowerCase()
+          .split(RegExp(r'\s+'))
+          .where((k) => k.isNotEmpty)
+          .toList();
+
+      allTopics = allTopics.where((t) {
+        final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
+        // 任一关键词匹配即可
+        return keywords.any((k) => name.contains(k));
+      }).toList();
     }
 
     // 按轮次过滤

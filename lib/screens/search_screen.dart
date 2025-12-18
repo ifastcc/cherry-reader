@@ -120,6 +120,10 @@ class _SearchScreenState extends State<SearchScreen> {
           extractor: widget.extractor,
           topicId: result.topicId,
           topicName: result.topicName,
+          // 【搜索定位】传递轮次索引，自动滚动到对应位置
+          scrollToRoundIndex: result.roundIndex,
+          // 【搜索高亮】传递搜索关键词，在内容中高亮显示
+          highlightKeyword: _searchController.text.trim(),
         ),
       ),
     );

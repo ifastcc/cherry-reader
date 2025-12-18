@@ -36,7 +36,6 @@ import '../models/isar/prompt_template_entity.dart';
 const String _keyApiUrl = 'openai_api_url';
 const String _keyApiKey = 'openai_api_key';
 const String _keyModel = 'openai_model';
-const String _keyColumnsPerView = 'columns_per_view';
 
 /// 设置页面 - 管理 AI 分析的 API 配置
 class SettingsScreen extends StatefulWidget {
@@ -83,7 +82,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _isLoading = true;
   bool _obscureWebdavPassword = true;
-  int _columnsPerView = 2;
 
   @override
   void initState() {
@@ -144,9 +142,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final localFolderConfig = await LocalFolderSyncService.loadConfig();
     final localFolderAutoLoad = await LocalFolderSyncService.getAutoLoad();
 
-    // 加载列数设置
-    final columnsPerView = prefs.getInt(_keyColumnsPerView) ?? 2;
-
     // 加载 TTS 设置
     final ttsJson = prefs.getString(TtsSettings.prefKey);
     if (ttsJson != null) {
@@ -166,7 +161,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _webdavPathController.text = webdavConfig.path;
       _localFolderPathController.text = localFolderConfig.folderPath;
       _localFolderAutoLoad = localFolderAutoLoad;
-      _columnsPerView = columnsPerView;
       
       // Load Azure Keys
       _azureKeyControllers.clear();
@@ -223,12 +217,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     // ========== 语音服务 ==========
                     _buildSectionHeader('语音服务', Icons.record_voice_over),
                     _buildTtsSettingsSection(),
-
-                    const SizedBox(height: 24),
-
-                    // ========== 显示 ==========
-                    _buildSectionHeader('显示', Icons.display_settings),
-                    _buildDisplaySettingsSection(),
 
                     const SizedBox(height: 24),
 
@@ -472,34 +460,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
       }
     }
-  }
-
-  /// 构建显示设置部分
-  Widget _buildDisplaySettingsSection() {
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.view_column),
-        title: const Text('每屏显示列数'),
-        subtitle: Text('$_columnsPerView 列', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-        trailing: DropdownButton<int>(
-          value: _columnsPerView,
-          underline: const SizedBox(),
-          items: const [
-            DropdownMenuItem(value: 1, child: Text('1 列')),
-            DropdownMenuItem(value: 2, child: Text('2 列')),
-            DropdownMenuItem(value: 3, child: Text('3 列')),
-            DropdownMenuItem(value: 4, child: Text('4 列')),
-          ],
-          onChanged: (value) async {
-            if (value != null) {
-              setState(() => _columnsPerView = value);
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setInt(_keyColumnsPerView, value);
-            }
-          },
-        ),
-      ),
-    );
   }
 
   /// 构建 MCP Server 设置部分（仅桌面端）
@@ -2425,10 +2385,4 @@ Future<Map<String, String>> getApiConfig() async {
         dotenv.env['OPENAI_MODEL'] ??
         'gpt-4-turbo-preview',
   };
-}
-
-/// 获取保存的列数设置（全局函数）
-Future<int> getColumnsPerView() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getInt(_keyColumnsPerView) ?? 2;
 }

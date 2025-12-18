@@ -80,6 +80,9 @@ class HighlightableCard extends StatefulWidget {
   final int? roundIndex;
   final Map<String, dynamic>? contextData;
 
+  /// 【搜索高亮】要高亮的搜索关键词（忽略大小写）
+  final String? searchKeyword;
+
   const HighlightableCard({
     super.key,
     required this.messageId,
@@ -100,6 +103,7 @@ class HighlightableCard extends StatefulWidget {
     this.topicId,
     this.roundIndex,
     this.contextData,
+    this.searchKeyword,
   });
 
   /// 创建助手回复卡片
@@ -117,6 +121,7 @@ class HighlightableCard extends StatefulWidget {
     String? topicId,
     int? roundIndex,
     Map<String, dynamic>? contextData,
+    String? searchKeyword,
   }) {
     final blocks = data['blocks'] as List<dynamic>? ?? [];
     final model = data['model'] as Map<String, dynamic>?;
@@ -151,6 +156,7 @@ class HighlightableCard extends StatefulWidget {
       topicId: topicId,
       roundIndex: roundIndex,
       contextData: contextData,
+      searchKeyword: searchKeyword,
     );
   }
 
@@ -295,8 +301,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
   ///
   /// 只有在 content 或 highlights 变化时才重新创建
   Widget _getMemoizedMarkdownWidget() {
-    // 【优化】使用 highlights 长度作为快速检查
-    final highlightsHash = _highlights.length;
+    // 【优化】使用 highlights 长度和搜索关键词作为快速检查
+    final highlightsHash = _highlights.length + (widget.searchKeyword?.hashCode ?? 0);
     // 【新增】使用 _displayContent 而不是 widget.content，支持折叠显示
     final currentContent = _displayContent;
 
@@ -307,23 +313,35 @@ class _HighlightableCardState extends State<HighlightableCard> {
         _lastRenderedHighlightsHash != highlightsHash;
 
     if (needsRebuild) {
+      // 用户手动标注的高亮
+      final userHighlights = _highlights
+          .where((h) => h.end <= currentContent.length)
+          .map(
+            (h) => HighlightRange(
+              id: h.id,
+              start: h.start,
+              end: h.end,
+              color: Color(h.color),
+              styleType: h.styleType,
+            ),
+          )
+          .toList();
+
+      // 【搜索高亮】生成搜索关键词的高亮范围
+      final searchHighlights = _generateSearchHighlights(currentContent);
+
+      // 合并高亮（搜索高亮 + 用户高亮）
+      final allHighlights = [...searchHighlights, ...userHighlights];
+
       _cachedMarkdownWidget = UnifiedMarkdownRenderer(
         data: currentContent,
         scrollable: false,
         selectable: true,
-        highlights: _highlights
-            .where((h) => h.end <= currentContent.length) // 只渲染在当前内容范围内的高亮
-            .map(
-              (h) => HighlightRange(
-                id: h.id,
-                start: h.start,
-                end: h.end,
-                color: Color(h.color),
-                styleType: h.styleType,
-              ),
-            )
-            .toList(),
+        highlights: allHighlights,
         onHighlightTap: (id, details) {
+          // 搜索高亮不响应点击
+          if (id.startsWith('search_')) return;
+
           final highlight = _highlights.firstWhere(
             (h) => h.id == id,
             orElse: () => _highlights.first,
@@ -343,6 +361,40 @@ class _HighlightableCardState extends State<HighlightableCard> {
     }
 
     return _cachedMarkdownWidget!;
+  }
+
+  /// 【搜索高亮】根据搜索关键词生成高亮范围
+  List<HighlightRange> _generateSearchHighlights(String content) {
+    final keyword = widget.searchKeyword;
+    if (keyword == null || keyword.isEmpty) return [];
+
+    final highlights = <HighlightRange>[];
+    final lowerContent = content.toLowerCase();
+    final lowerKeyword = keyword.toLowerCase();
+
+    int startIndex = 0;
+    int matchCount = 0;
+
+    while (true) {
+      final index = lowerContent.indexOf(lowerKeyword, startIndex);
+      if (index == -1) break;
+
+      highlights.add(HighlightRange(
+        id: 'search_$matchCount',
+        start: index,
+        end: index + keyword.length,
+        color: const Color(0xFFFFEB3B), // 黄色高亮
+        styleType: 'background',
+      ));
+
+      startIndex = index + keyword.length;
+      matchCount++;
+
+      // 限制最多高亮 50 个匹配，避免性能问题
+      if (matchCount >= 50) break;
+    }
+
+    return highlights;
   }
 
   void _addHighlightFromSelection(String text, int start, int end) {

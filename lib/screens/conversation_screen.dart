@@ -21,11 +21,19 @@ class ConversationScreen extends StatefulWidget {
   final String topicId;
   final String topicName;
 
+  /// 【搜索定位】初始滚动到的轮次索引（从 0 开始）
+  final int? scrollToRoundIndex;
+
+  /// 【搜索高亮】要高亮的搜索关键词
+  final String? highlightKeyword;
+
   const ConversationScreen({
     Key? key,
     required this.extractor,
     required this.topicId,
     required this.topicName,
+    this.scrollToRoundIndex,
+    this.highlightKeyword,
   }) : super(key: key);
 
   @override
@@ -328,6 +336,20 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
+  /// 【搜索定位】延迟滚动到指定轮次
+  ///
+  /// 用于页面初始加载后的自动定位，需要等待 ListView 完全渲染
+  Future<void> _scrollToGroupWithDelay(int groupIndex) async {
+    // 等待 ListView 完全构建
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (!mounted) return;
+
+    await _scrollToGroup(groupIndex);
+
+    // 滚动完成后，短暂高亮提示用户
+    debugPrint('🎯 [搜索定位] 已滚动到第 ${groupIndex + 1} 轮');
+  }
+
   Future<void> _loadData() async {
     final totalSw = Stopwatch()..start();
     final sw = Stopwatch()..start();
@@ -384,6 +406,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
     // 测量首帧渲染时间
     WidgetsBinding.instance.addPostFrameCallback((_) {
       debugPrint('⏱️ [ConversationScreen] 首帧渲染完成: ${renderSw.elapsedMilliseconds}ms');
+
+      // 【搜索定位】如果有指定的轮次，自动滚动到该位置
+      if (widget.scrollToRoundIndex != null) {
+        _scrollToGroupWithDelay(widget.scrollToRoundIndex!);
+      }
     });
 
     // ========== 调试信息：打印 Topic 详情 ==========
@@ -1723,6 +1750,8 @@ $modelResponses''';
                 // 传递上下文参数，使全屏阅读时能进行讨论
                 topicId: widget.topicId,
                 roundIndex: groupIndex,
+                // 【搜索高亮】传递搜索关键词
+                searchKeyword: widget.highlightKeyword,
               );
             },
           ),

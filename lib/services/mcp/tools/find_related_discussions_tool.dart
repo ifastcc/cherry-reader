@@ -17,9 +17,7 @@ class FindRelatedDiscussionsTool extends MCPTool {
   @override
   String get description => '''搜索我以前讨论过的相关话题。
 
-当用户问：之前聊过XX吗、找一下关于XX的讨论、有没有讨论过XX — 用这个工具。
-
-支持语义搜索（默认）和关键词搜索。''';
+当用户问：之前聊过XX吗、找一下关于XX的讨论、有没有讨论过XX — 用这个工具。''';
 
   @override
   Map<String, dynamic> get inputSchema => {
@@ -29,15 +27,14 @@ class FindRelatedDiscussionsTool extends MCPTool {
             'type': 'string',
             'description': "想查找的主题，如'人生意义'、'职业规划'",
           },
+          'assistant_filter': {
+            'type': 'string',
+            'description': '按助手名称筛选，支持模糊匹配，如"Claude"、"GPT"，多个关键词用空格分隔',
+          },
           'search_mode': {
             'type': 'string',
             'enum': ['semantic', 'keyword'],
             'description': '搜索模式，默认 semantic',
-          },
-          'search_scope': {
-            'type': 'string',
-            'enum': ['query_only', 'response_only', 'full'],
-            'description': '搜索范围，默认 query_only',
           },
           'min_score': {
             'type': 'number',
@@ -53,7 +50,7 @@ class FindRelatedDiscussionsTool extends MCPTool {
           },
           'limit': {
             'type': 'integer',
-            'description': '返回数量，默认 10',
+            'description': '返回数量，默认 30',
           },
         },
         'required': ['query'],
@@ -66,33 +63,49 @@ class FindRelatedDiscussionsTool extends MCPTool {
       throw ArgumentError('query is required');
     }
 
+    final assistantFilter = arguments['assistant_filter'] as String?;
     final searchMode = arguments['search_mode'] as String? ?? 'semantic';
-    final searchScope = arguments['search_scope'] as String? ?? 'query_only';
     final minScore = (arguments['min_score'] as num?)?.toDouble() ?? 0.5;
     final timeRangeDays = arguments['time_range_days'] as int? ?? 0;
     final minRounds = arguments['min_rounds'] as int? ?? 1;
-    final limit = arguments['limit'] as int? ?? 10;
+    final limit = arguments['limit'] as int? ?? 30;
 
-    // 语义搜索只支持 query_only（因为 embedding 只对首轮问题生成）
-    if (searchMode == 'semantic' && searchScope == 'query_only') {
+    // 1. 先尝试语义搜索（仅搜用户问题）
+    if (searchMode == 'semantic') {
       final semanticResult = await _semanticSearch(
         query: query,
+        assistantFilter: assistantFilter,
         minScore: minScore,
         timeRangeDays: timeRangeDays,
         minRounds: minRounds,
         limit: limit,
       );
 
-      if (semanticResult != null) {
+      if (semanticResult != null &&
+          (semanticResult['related_topics'] as List).isNotEmpty) {
         return semanticResult;
       }
-      // 降级到关键词搜索
     }
 
-    // 关键词搜索
+    // 2. 关键词搜索：先搜用户问题
+    final queryOnlyResult = await _keywordSearch(
+      query: query,
+      assistantFilter: assistantFilter,
+      searchScope: 'query_only',
+      timeRangeDays: timeRangeDays,
+      minRounds: minRounds,
+      limit: limit,
+    );
+
+    if ((queryOnlyResult['related_topics'] as List).isNotEmpty) {
+      return queryOnlyResult;
+    }
+
+    // 3. 降级：搜全部内容
     return _keywordSearch(
       query: query,
-      searchScope: searchScope,
+      assistantFilter: assistantFilter,
+      searchScope: 'full',
       timeRangeDays: timeRangeDays,
       minRounds: minRounds,
       limit: limit,
@@ -102,6 +115,7 @@ class FindRelatedDiscussionsTool extends MCPTool {
   /// 语义搜索
   Future<Map<String, dynamic>?> _semanticSearch({
     required String query,
+    required String? assistantFilter,
     required double minScore,
     required int timeRangeDays,
     required int minRounds,
@@ -129,6 +143,11 @@ class FindRelatedDiscussionsTool extends MCPTool {
     // 获取话题和助手信息
     final topicRepo = RepositoryProvider.instance.topicRepository;
     final messageRepo = RepositoryProvider.instance.messageRepository;
+    final assistantRepo = RepositoryProvider.instance.assistantRepository;
+
+    // 获取助手名称映射
+    final assistants = await assistantRepo.getAllAssistants();
+    final assistantNames = {for (final a in assistants) a.assistantId: a.name};
 
     // 获取所有话题
     var allTopics = await topicRepo.getAllTopics();
@@ -144,6 +163,20 @@ class FindRelatedDiscussionsTool extends MCPTool {
 
     // 按轮次过滤
     allTopics = allTopics.where((t) => t.roundCount >= minRounds).toList();
+
+    // 按助手名称模糊匹配过滤
+    if (assistantFilter != null && assistantFilter.isNotEmpty) {
+      final keywords = assistantFilter
+          .toLowerCase()
+          .split(RegExp(r'\s+'))
+          .where((k) => k.isNotEmpty)
+          .toList();
+
+      allTopics = allTopics.where((t) {
+        final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
+        return keywords.any((k) => name.contains(k));
+      }).toList();
+    }
 
     // 构建 topicId -> Topic 映射
     final topicMap = {for (final t in allTopics) t.topicId: t};
@@ -194,6 +227,7 @@ class FindRelatedDiscussionsTool extends MCPTool {
   /// 关键词搜索
   Future<Map<String, dynamic>> _keywordSearch({
     required String query,
+    required String? assistantFilter,
     required String searchScope,
     required int timeRangeDays,
     required int minRounds,
@@ -201,6 +235,11 @@ class FindRelatedDiscussionsTool extends MCPTool {
   }) async {
     final topicRepo = RepositoryProvider.instance.topicRepository;
     final messageRepo = RepositoryProvider.instance.messageRepository;
+    final assistantRepo = RepositoryProvider.instance.assistantRepository;
+
+    // 获取助手名称映射
+    final assistants = await assistantRepo.getAllAssistants();
+    final assistantNames = {for (final a in assistants) a.assistantId: a.name};
 
     // 获取所有话题
     var allTopics = await topicRepo.getAllTopics();
@@ -216,6 +255,20 @@ class FindRelatedDiscussionsTool extends MCPTool {
 
     // 按轮次过滤
     allTopics = allTopics.where((t) => t.roundCount >= minRounds).toList();
+
+    // 按助手名称模糊匹配过滤
+    if (assistantFilter != null && assistantFilter.isNotEmpty) {
+      final filterKeywords = assistantFilter
+          .toLowerCase()
+          .split(RegExp(r'\s+'))
+          .where((k) => k.isNotEmpty)
+          .toList();
+
+      allTopics = allTopics.where((t) {
+        final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
+        return filterKeywords.any((k) => name.contains(k));
+      }).toList();
+    }
 
     // 搜索关键词（支持多个词）
     final keywords =

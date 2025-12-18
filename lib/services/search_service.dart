@@ -5,6 +5,7 @@ import '../models/isar/topic_entity.dart';
 import '../models/isar/message_entity.dart';
 import '../models/isar/message_block_entity.dart';
 import '../models/isar/assistant_entity.dart';
+import '../utils/text_cleaner.dart';
 import 'repository_provider.dart';
 
 /// 搜索服务
@@ -186,36 +187,24 @@ class SearchService {
 
       final assistant = assistantMap[topic.assistantId];
 
-      // 计算匹配位置
-      final lowerContent = content.toLowerCase();
-      final lowerKeyword = keyword.toLowerCase();
-      final matchIndex = lowerContent.indexOf(lowerKeyword);
+      // 使用 text_cleaner 生成干净的 snippet
+      final snippetResult = generateSearchSnippet(
+        content: content,
+        keyword: keyword,
+        snippetLength: snippetLength,
+      );
 
-      if (matchIndex < 0) continue;
-
-      // 截取上下文片段
-      final snippetStart = (matchIndex - snippetLength).clamp(0, content.length);
-      final snippetEnd =
-          (matchIndex + keyword.length + snippetLength).clamp(0, content.length);
-
-      var snippet = content.substring(snippetStart, snippetEnd);
-
-      // 添加省略号
-      final hasPrefix = snippetStart > 0;
-      final hasSuffix = snippetEnd < content.length;
-      if (hasPrefix) snippet = '...$snippet';
-      if (hasSuffix) snippet = '$snippet...';
-
-      // 计算 snippet 中的匹配位置
-      final snippetMatchStart = matchIndex - snippetStart + (hasPrefix ? 3 : 0);
-      final snippetMatchEnd = snippetMatchStart + keyword.length;
+      // 如果清理后找不到关键词且没有匹配位置，跳过
+      if (snippetResult.matchStart == 0 && snippetResult.matchEnd == 0 && snippetResult.snippet.isEmpty) {
+        continue;
+      }
 
       results.add(SearchResultModel(
         id: 'block_${block.blockId}',
         type: SearchResultType.message,
-        matchSnippet: snippet,
-        matchStart: snippetMatchStart,
-        matchEnd: snippetMatchEnd,
+        matchSnippet: snippetResult.snippet,
+        matchStart: snippetResult.matchStart,
+        matchEnd: snippetResult.matchEnd,
         topicId: block.topicId,
         topicName: topic.name,
         assistantId: topic.assistantId,

@@ -192,7 +192,7 @@ class SearchResultCard extends StatelessWidget {
     );
   }
 
-  /// 底部信息行：助手名称 + 模型名称 + 轮次 + 箭头
+  /// 底部信息行：助手名称 + 模型名称 + 轮次
   Widget _buildBottomRow(BuildContext context, bool isDark) {
     return Row(
       children: [
@@ -243,9 +243,6 @@ class SearchResultCard extends StatelessWidget {
             ),
           ],
         ],
-        const Spacer(),
-        // 跳转箭头
-        Icon(Icons.chevron_right, size: 18, color: Colors.grey[400]),
       ],
     );
   }
