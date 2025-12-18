@@ -19,9 +19,8 @@ from typing import Any, Optional, List, Tuple, Dict
 
 DEFAULT_URL = "http://127.0.0.1:9527/mcp"
 
-# 全局缓存 - 存储 名称 -> ID 的映射
-assistant_map: Dict[str, str] = {}  # 显示名 -> ID
-topic_map: Dict[str, str] = {}  # 显示名 -> ID
+# 全局缓存 - 存储话题选项
+topic_list: List[Dict[str, Any]] = []
 
 
 def call_mcp(url: str, method: str, params: dict = None) -> dict:
@@ -64,7 +63,7 @@ def call_tool(url: str, tool_name: str, arguments: dict) -> dict:
                 parsed = json.loads(text)
                 return {"tool": tool_name, "arguments": arguments, "result": parsed}
             except:
-                pass
+                return {"tool": tool_name, "arguments": arguments, "result": text}
     return result
 
 
@@ -73,63 +72,6 @@ def get_tool_result(result: dict) -> Any:
     if "result" in result:
         return result["result"]
     return result
-
-
-def get_id_from_display(display_name: str, mapping: Dict[str, str]) -> str:
-    """从显示名获取 ID"""
-    if not display_name:
-        return ""
-    return mapping.get(display_name, display_name)
-
-
-# ===== 数据获取函数 =====
-
-def fetch_and_cache_data(url: str) -> Tuple[List[str], List[str], dict]:
-    """获取并缓存助手和话题数据，返回下拉框选项"""
-    global assistant_map, topic_map
-
-    assistant_map = {}
-    topic_map = {}
-    assistant_choices = ["全部"]
-    topic_choices = []
-
-    # 获取助手列表
-    result = call_tool(url, "get_overview", {})
-    data = get_tool_result(result)
-
-    if isinstance(data, dict) and "assistants" in data:
-        for a in data["assistants"]:
-            name = a.get("name", "未知")
-            aid = a.get("id", "")
-            count = a.get("topic_count", 0)
-            display = f"{name} ({count}个话题)"
-            assistant_map[display] = aid
-            assistant_choices.append(display)
-
-    # 获取话题列表
-    result = call_tool(url, "list_topics", {"limit": 500})
-    data = get_tool_result(result)
-
-    if isinstance(data, dict) and "topics" in data:
-        for t in data["topics"]:
-            name = t.get("name", "未知")
-            tid = t.get("id", "")
-            assistant = t.get("assistant_name", "")
-            # 截断过长的名称
-            short_name = name[:50] + "..." if len(name) > 50 else name
-            short_assistant = assistant[:15] if assistant else "未知"
-            display = f"[{short_assistant}] {short_name}"
-            topic_map[display] = tid
-            topic_choices.append(display)
-
-    status = {
-        "status": "ok",
-        "助手数量": len(assistant_map),
-        "话题数量": len(topic_map),
-        "message": "数据已加载，可以从下拉框选择"
-    }
-
-    return assistant_choices, topic_choices, status
 
 
 # ===== 工具调用函数 =====
@@ -147,7 +89,7 @@ def test_health(url: str) -> dict:
 def test_initialize(url: str) -> dict:
     """测试 MCP 初始化"""
     return call_mcp(url, "initialize", {
-        "protocolVersion": "2024-11-05",
+        "protocolVersion": "2025-03-26",
         "capabilities": {},
         "clientInfo": {"name": "mcp-debug", "version": "1.0.0"}
     })
@@ -158,117 +100,139 @@ def test_list_tools(url: str) -> dict:
     return call_mcp(url, "tools/list", {})
 
 
-def test_get_overview(url: str) -> dict:
-    """获取数据库总览"""
-    return call_tool(url, "get_overview", {})
+# ===== recall_my_conversations =====
 
+def recall_conversations(url: str, period: str, start_date: str, end_date: str,
+                         min_rounds: int, assistant_filter: str, limit: int) -> dict:
+    """回顾对话"""
+    global topic_list
 
-def query_topics(url, assistant_display, date_range, start_date, end_date, offset, limit):
-    """根据时间范围查询话题"""
     args = {}
 
-    # 从显示名获取助手 ID
-    if assistant_display and assistant_display != "全部":
-        assistant_id = get_id_from_display(assistant_display, assistant_map)
-        if assistant_id:
-            args["assistant_id"] = assistant_id
+    if period and period != "全部":
+        args["period"] = period
 
-    # 计算日期范围
-    today = datetime.now().date()
-    if date_range == "今天":
-        args["start_date"] = today.strftime("%Y-%m-%d")
-        args["end_date"] = today.strftime("%Y-%m-%d")
-    elif date_range == "昨天":
-        yesterday = today - timedelta(days=1)
-        args["start_date"] = yesterday.strftime("%Y-%m-%d")
-        args["end_date"] = yesterday.strftime("%Y-%m-%d")
-    elif date_range == "本周":
-        week_start = today - timedelta(days=today.weekday())
-        args["start_date"] = week_start.strftime("%Y-%m-%d")
-        args["end_date"] = today.strftime("%Y-%m-%d")
-    elif date_range == "本月":
-        month_start = today.replace(day=1)
-        args["start_date"] = month_start.strftime("%Y-%m-%d")
-        args["end_date"] = today.strftime("%Y-%m-%d")
-    elif date_range == "最近7天":
-        args["start_date"] = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        args["end_date"] = today.strftime("%Y-%m-%d")
-    elif date_range == "最近30天":
-        args["start_date"] = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-        args["end_date"] = today.strftime("%Y-%m-%d")
-    elif date_range == "自定义":
+    if period == "custom":
         if start_date and start_date.strip():
             args["start_date"] = start_date.strip()
         if end_date and end_date.strip():
             args["end_date"] = end_date.strip()
 
-    if offset and offset > 0:
-        args["offset"] = int(offset)
+    if min_rounds and min_rounds > 0:
+        args["min_rounds"] = int(min_rounds)
+
+    if assistant_filter and assistant_filter.strip():
+        args["assistant_filter"] = assistant_filter.strip()
+
     if limit and limit > 0:
         args["limit"] = int(limit)
 
-    return call_tool(url, "list_topics", args)
+    result = call_tool(url, "recall_my_conversations", args)
+
+    # 缓存话题列表用于下拉框
+    data = get_tool_result(result)
+    if isinstance(data, dict) and "topics" in data:
+        topic_list = data["topics"]
+
+    return result
 
 
-def test_get_topic_info(url: str, topic_display: str) -> dict:
-    """获取话题详情"""
-    if not topic_display:
-        return {"error": "请选择话题"}
-    topic_id = get_id_from_display(topic_display, topic_map)
+# ===== search_past_discussions =====
+
+def search_discussions(url: str, query: str, assistant_filter: str, search_mode: str,
+                       min_score: float, time_range_days: int, min_rounds: int, limit: int) -> dict:
+    """搜索历史讨论"""
+    global topic_list
+
+    if not query or not query.strip():
+        return {"error": "请输入搜索关键词"}
+
+    args = {"query": query.strip()}
+
+    if assistant_filter and assistant_filter.strip():
+        args["assistant_filter"] = assistant_filter.strip()
+
+    if search_mode:
+        args["search_mode"] = search_mode
+
+    if min_score and min_score > 0:
+        args["min_score"] = float(min_score)
+
+    if time_range_days and time_range_days > 0:
+        args["time_range_days"] = int(time_range_days)
+
+    if min_rounds and min_rounds > 0:
+        args["min_rounds"] = int(min_rounds)
+
+    if limit and limit > 0:
+        args["limit"] = int(limit)
+
+    result = call_tool(url, "search_past_discussions", args)
+
+    # 缓存话题列表
+    data = get_tool_result(result)
+    if isinstance(data, dict) and "related_topics" in data:
+        topic_list = data["related_topics"]
+
+    return result
+
+
+# ===== read_conversation_detail =====
+
+def read_conversation(url: str, topic_display: str, mode: str, start_round: int,
+                      round_count: int, include_thinking: bool) -> dict:
+    """读取对话详情"""
+    # 从显示名提取 topic_id
+    topic_id = ""
+    if topic_display:
+        # 显示格式: "话题名称 (topic_id)"
+        if "(" in topic_display and topic_display.endswith(")"):
+            topic_id = topic_display.rsplit("(", 1)[-1].rstrip(")")
+        else:
+            topic_id = topic_display
+
     if not topic_id:
-        return {"error": f"找不到话题 ID: {topic_display}"}
-    return call_tool(url, "get_topic_info", {"topic_id": topic_id})
-
-
-def test_get_conversation(url: str, topic_display: str, mode: str,
-                          offset: int, limit: int) -> dict:
-    """获取对话内容"""
-    if not topic_display:
-        return {"error": "请选择话题"}
-    topic_id = get_id_from_display(topic_display, topic_map)
-    if not topic_id:
-        return {"error": f"找不到话题 ID: {topic_display}"}
+        return {"error": "请选择或输入话题 ID"}
 
     args = {"topic_id": topic_id}
+
     if mode:
         args["mode"] = mode
-    if offset and offset > 0:
-        args["offset"] = int(offset)
-    if limit and limit > 0:
-        args["limit"] = int(limit)
-    return call_tool(url, "get_conversation", args)
+
+    if start_round and start_round > 0:
+        args["start_round"] = int(start_round)
+
+    if round_count and round_count > 0:
+        args["round_count"] = int(round_count)
+
+    if include_thinking:
+        args["include_thinking"] = True
+
+    return call_tool(url, "read_conversation_detail", args)
 
 
-def test_search(url: str, keyword: str, limit: int) -> dict:
-    """搜索对话"""
-    if not keyword or not keyword.strip():
-        return {"error": "请输入搜索关键词"}
-    args = {"keyword": keyword.strip()}
-    if limit and limit > 0:
-        args["limit"] = int(limit)
-    return call_tool(url, "search_conversations", args)
+def get_topic_choices() -> List[str]:
+    """获取话题下拉框选项"""
+    if not topic_list:
+        return []
+
+    choices = []
+    for t in topic_list:
+        name = t.get("topic_name", "未知")
+        tid = t.get("topic_id", "")
+        rounds = t.get("round_count", 0)
+        # 截断过长的名称
+        short_name = name[:40] + "..." if len(name) > 40 else name
+        display = f"{short_name} [{rounds}轮] ({tid})"
+        choices.append(display)
+
+    return choices
 
 
-def test_activity_summary(url: str, days: int) -> dict:
-    """获取活动摘要"""
-    args = {}
-    if days and days > 0:
-        args["days"] = int(days)
-    return call_tool(url, "get_activity_summary", args)
-
-
-def test_related_topics(url: str, topic_display: str, limit: int) -> dict:
-    """获取相关话题"""
-    if not topic_display:
-        return {"error": "请选择话题"}
-    topic_id = get_id_from_display(topic_display, topic_map)
-    if not topic_id:
-        return {"error": f"找不到话题 ID: {topic_display}"}
-
-    args = {"topic_id": topic_id}
-    if limit and limit > 0:
-        args["limit"] = int(limit)
-    return call_tool(url, "get_related_topics", args)
+def update_topic_dropdown():
+    """更新话题下拉框"""
+    choices = get_topic_choices()
+    return gr.update(choices=choices, value=None if not choices else choices[0])
 
 
 # ===== Gradio UI =====
@@ -276,6 +240,7 @@ def test_related_topics(url: str, topic_display: str, limit: int) -> dict:
 def create_ui():
     with gr.Blocks(title="MCP Server 调试工具", theme=gr.themes.Soft()) as app:
         gr.Markdown("# 🍒 Cherry Reader MCP Server 调试工具")
+        gr.Markdown("**新版工具**: `recall_my_conversations`, `search_past_discussions`, `read_conversation_detail`")
 
         with gr.Row():
             url_input = gr.Textbox(
@@ -284,7 +249,6 @@ def create_ui():
                 scale=3
             )
             health_btn = gr.Button("🏥 健康检查", scale=1)
-            refresh_btn = gr.Button("🔄 加载数据", scale=1, variant="primary")
 
         status_output = gr.JSON(label="状态", open=True)
         health_btn.click(test_health, inputs=[url_input], outputs=[status_output])
@@ -292,6 +256,7 @@ def create_ui():
         with gr.Tabs():
             # 基础测试
             with gr.Tab("🔧 基础"):
+                gr.Markdown("### MCP 协议基础测试")
                 with gr.Row():
                     init_btn = gr.Button("Initialize", scale=1)
                     list_btn = gr.Button("List Tools", scale=1)
@@ -299,170 +264,187 @@ def create_ui():
                 init_btn.click(test_initialize, inputs=[url_input], outputs=[base_output])
                 list_btn.click(test_list_tools, inputs=[url_input], outputs=[base_output])
 
-            # get_overview
-            with gr.Tab("📊 Overview"):
-                overview_btn = gr.Button("获取数据库总览")
-                overview_output = gr.JSON(label="结果", open=True)
-                overview_btn.click(test_get_overview, inputs=[url_input], outputs=[overview_output])
+            # recall_my_conversations
+            with gr.Tab("📅 回顾对话"):
+                gr.Markdown("""### recall_my_conversations
 
-            # list_topics
-            with gr.Tab("📋 Topics"):
+回顾某段时间内聊过的内容，按话题分组返回用户问题列表。
+
+**使用场景**: "这周聊了什么"、"最近在关注什么"、"回顾一下我的对话"
+                """)
+
                 with gr.Row():
-                    topics_assistant = gr.Dropdown(
-                        label="选择助手",
-                        choices=["全部"],
-                        value="全部",
-                        scale=2
-                    )
-                    topics_date_range = gr.Radio(
+                    recall_period = gr.Radio(
                         label="时间范围",
-                        choices=["全部", "今天", "昨天", "本周", "本月", "最近7天", "最近30天", "自定义"],
-                        value="全部",
-                        scale=2
+                        choices=["today", "yesterday", "this_week", "this_month",
+                                 "last_7_days", "last_30_days", "custom"],
+                        value="this_week",
+                        scale=3
                     )
-                with gr.Row(visible=False) as custom_date_row:
-                    topics_start = gr.Textbox(label="开始日期", placeholder="YYYY-MM-DD", scale=1)
-                    topics_end = gr.Textbox(label="结束日期", placeholder="YYYY-MM-DD", scale=1)
 
-                topics_date_range.change(
-                    lambda x: gr.update(visible=(x == "自定义")),
-                    inputs=[topics_date_range],
+                with gr.Row(visible=False) as custom_date_row:
+                    recall_start = gr.Textbox(label="开始日期", placeholder="YYYY-MM-DD", scale=1)
+                    recall_end = gr.Textbox(label="结束日期", placeholder="YYYY-MM-DD", scale=1)
+
+                recall_period.change(
+                    lambda x: gr.update(visible=(x == "custom")),
+                    inputs=[recall_period],
                     outputs=[custom_date_row]
                 )
 
                 with gr.Row():
-                    topics_offset = gr.Number(label="Offset", value=0, precision=0)
-                    topics_limit = gr.Number(label="Limit", value=20, precision=0)
-                topics_btn = gr.Button("获取话题列表")
-                topics_output = gr.JSON(label="结果", open=True)
+                    recall_min_rounds = gr.Number(label="最小轮次", value=1, precision=0)
+                    recall_limit = gr.Number(label="数量限制", value=100, precision=0)
 
-                topics_btn.click(
-                    query_topics,
-                    inputs=[url_input, topics_assistant, topics_date_range,
-                            topics_start, topics_end, topics_offset, topics_limit],
-                    outputs=[topics_output]
+                recall_assistant = gr.Textbox(
+                    label="助手筛选（可选）",
+                    placeholder="如 Claude、GPT，支持空格分隔多个关键词"
                 )
 
-            # get_topic_info
-            with gr.Tab("📄 Topic Info"):
-                topic_info_dropdown = gr.Dropdown(
-                    label="选择话题",
-                    choices=[],
-                    value=None,
-                    allow_custom_value=True
-                )
-                topic_info_btn = gr.Button("获取话题详情")
-                topic_info_output = gr.JSON(label="结果", open=True)
-                topic_info_btn.click(
-                    test_get_topic_info,
-                    inputs=[url_input, topic_info_dropdown],
-                    outputs=[topic_info_output]
+                recall_btn = gr.Button("获取对话回顾", variant="primary")
+                recall_output = gr.JSON(label="结果", open=True)
+
+                recall_btn.click(
+                    recall_conversations,
+                    inputs=[url_input, recall_period, recall_start, recall_end,
+                            recall_min_rounds, recall_assistant, recall_limit],
+                    outputs=[recall_output]
                 )
 
-            # get_conversation
-            with gr.Tab("💬 Conversation"):
-                conv_topic_dropdown = gr.Dropdown(
-                    label="选择话题",
-                    choices=[],
-                    value=None,
-                    allow_custom_value=True
+            # search_past_discussions
+            with gr.Tab("🔍 搜索讨论"):
+                gr.Markdown("""### search_past_discussions
+
+搜索历史讨论过的相关话题，支持语义搜索和关键词搜索。
+
+**使用场景**: "之前聊过XX吗"、"找一下关于XX的讨论"、"有没有讨论过XX"
+                """)
+
+                search_query = gr.Textbox(
+                    label="搜索关键词（必填）",
+                    placeholder="如：人生意义、职业规划、代码重构"
                 )
-                conv_mode = gr.Radio(
-                    label="模式",
-                    choices=["mainline", "queries_only", "full"],
-                    value="mainline"
-                )
+
                 with gr.Row():
-                    conv_offset = gr.Number(label="Offset", value=0, precision=0)
-                    conv_limit = gr.Number(label="Limit", value=50, precision=0)
-                conv_btn = gr.Button("获取对话内容")
-                conv_output = gr.JSON(label="结果", open=True)
-                conv_btn.click(
-                    test_get_conversation,
-                    inputs=[url_input, conv_topic_dropdown, conv_mode, conv_offset, conv_limit],
-                    outputs=[conv_output]
+                    search_mode = gr.Radio(
+                        label="搜索模式",
+                        choices=["semantic", "keyword"],
+                        value="semantic",
+                        scale=2
+                    )
+                    search_min_score = gr.Slider(
+                        label="最小相似度（仅语义搜索）",
+                        minimum=0,
+                        maximum=1,
+                        value=0.5,
+                        step=0.1,
+                        scale=2
+                    )
+
+                with gr.Row():
+                    search_time_range = gr.Number(label="时间范围（天，0=全部）", value=0, precision=0)
+                    search_min_rounds = gr.Number(label="最小轮次", value=1, precision=0)
+                    search_limit = gr.Number(label="数量限制", value=30, precision=0)
+
+                search_assistant = gr.Textbox(
+                    label="助手筛选（可选）",
+                    placeholder="如 Claude、GPT，支持空格分隔多个关键词"
                 )
 
-            # search_conversations
-            with gr.Tab("🔍 Search"):
-                search_keyword = gr.Textbox(label="搜索关键词", placeholder="输入要搜索的内容")
-                search_limit = gr.Number(label="Limit", value=20, precision=0)
-                search_btn = gr.Button("搜索")
+                search_btn = gr.Button("搜索", variant="primary")
                 search_output = gr.JSON(label="结果", open=True)
+
                 search_btn.click(
-                    test_search,
-                    inputs=[url_input, search_keyword, search_limit],
+                    search_discussions,
+                    inputs=[url_input, search_query, search_assistant, search_mode,
+                            search_min_score, search_time_range, search_min_rounds, search_limit],
                     outputs=[search_output]
                 )
 
-            # get_activity_summary
-            with gr.Tab("📈 Activity"):
-                activity_days = gr.Number(label="统计天数", value=7, precision=0)
-                activity_btn = gr.Button("获取活动摘要")
-                activity_output = gr.JSON(label="结果", open=True)
-                activity_btn.click(
-                    test_activity_summary,
-                    inputs=[url_input, activity_days],
-                    outputs=[activity_output]
+            # read_conversation_detail
+            with gr.Tab("💬 对话详情"):
+                gr.Markdown("""### read_conversation_detail
+
+读取某个话题的完整对话内容。
+
+**使用场景**: 需要查看具体某个话题的详细问答（需要先用其他工具获取 topic_id）
+
+**模式说明**:
+| 模式 | 说明 |
+|------|------|
+| queries_only | 仅用户问题 |
+| mainline | 主线对话（用户问题 + 选中的回复）|
+| full | 完整对话（包含所有多模型回复）|
+                """)
+
+                with gr.Row():
+                    conv_topic = gr.Dropdown(
+                        label="选择话题",
+                        choices=[],
+                        value=None,
+                        allow_custom_value=True,
+                        scale=3
+                    )
+                    refresh_topics_btn = gr.Button("🔄 刷新列表", scale=1)
+
+                refresh_topics_btn.click(
+                    update_topic_dropdown,
+                    outputs=[conv_topic]
                 )
 
-            # get_related_topics
-            with gr.Tab("🔗 Related"):
-                related_topic_dropdown = gr.Dropdown(
-                    label="选择参考话题",
-                    choices=[],
-                    value=None,
-                    allow_custom_value=True
-                )
-                related_limit = gr.Number(label="Limit", value=5, precision=0)
-                related_btn = gr.Button("获取相关话题")
-                related_output = gr.JSON(label="结果", open=True)
-                related_btn.click(
-                    test_related_topics,
-                    inputs=[url_input, related_topic_dropdown, related_limit],
-                    outputs=[related_output]
+                conv_mode = gr.Radio(
+                    label="获取模式",
+                    choices=["queries_only", "mainline", "full"],
+                    value="mainline"
                 )
 
-        # 刷新数据按钮 - 更新所有下拉框
-        def refresh_all_dropdowns(url):
-            assistant_choices, topic_choices, status = fetch_and_cache_data(url)
-            return (
-                gr.update(choices=assistant_choices, value="全部"),
-                gr.update(choices=topic_choices, value=None),
-                gr.update(choices=topic_choices, value=None),
-                gr.update(choices=topic_choices, value=None),
-                status
-            )
+                with gr.Row():
+                    conv_start_round = gr.Number(label="起始轮次", value=0, precision=0)
+                    conv_round_count = gr.Number(label="获取轮数", value=10, precision=0)
+                    conv_include_thinking = gr.Checkbox(label="包含思考过程", value=False)
 
-        refresh_btn.click(
-            refresh_all_dropdowns,
-            inputs=[url_input],
-            outputs=[
-                topics_assistant,
-                topic_info_dropdown,
-                conv_topic_dropdown,
-                related_topic_dropdown,
-                status_output
-            ]
-        )
+                conv_btn = gr.Button("读取对话", variant="primary")
+                conv_output = gr.JSON(label="结果", open=True)
+
+                conv_btn.click(
+                    read_conversation,
+                    inputs=[url_input, conv_topic, conv_mode, conv_start_round,
+                            conv_round_count, conv_include_thinking],
+                    outputs=[conv_output]
+                )
+
+                # 当回顾或搜索完成后自动更新下拉框
+                recall_btn.click(
+                    update_topic_dropdown,
+                    outputs=[conv_topic]
+                )
+                search_btn.click(
+                    update_topic_dropdown,
+                    outputs=[conv_topic]
+                )
 
         gr.Markdown("""
-        ---
-        ### 🚀 快速开始
-        1. 确保 Cherry Reader 已启动并开启 MCP Server
-        2. **点击「🔄 加载数据」按钮** 加载助手和话题列表
-        3. 然后就可以从下拉框选择助手/话题了
+---
+### 🚀 快速开始
 
-        ### 📝 说明
-        - 下拉框显示名称，自动转换为 ID 调用 API
-        - 点击 JSON 结果中的 **▶** 可以展开/折叠
+1. 确保 Cherry Reader 已启动并开启 MCP Server
+2. 点击「🏥 健康检查」验证连接
+3. 使用「📅 回顾对话」或「🔍 搜索讨论」获取话题列表
+4. 在「💬 对话详情」中查看具体对话内容
 
-        ### 💬 对话模式
-        | 模式 | 说明 |
-        |------|------|
-        | mainline | 主线对话（用户问题 + 选中的回复）|
-        | queries_only | 仅用户问题 |
-        | full | 完整对话（包含所有多模型回复）|
+### 📝 工具说明
+
+| 工具 | 用途 | 必填参数 |
+|------|------|---------|
+| `recall_my_conversations` | 时间维度回顾对话 | 无 |
+| `search_past_discussions` | 搜索历史讨论 | query |
+| `read_conversation_detail` | 读取对话详情 | topic_id |
+
+### 💡 提示
+
+- **语义搜索**需要配置 Embedding 服务，否则会自动降级到关键词搜索
+- 点击 JSON 结果中的 **▶** 可以展开/折叠
+- 话题列表会在「回顾对话」或「搜索讨论」后自动缓存，可在「对话详情」中选择
         """)
 
     return app
