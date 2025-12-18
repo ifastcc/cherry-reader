@@ -8,17 +8,14 @@ import 'mcp_tool_base.dart';
 /// 用于回答"我最近在关注什么"
 class GetUserQueriesTool extends MCPTool {
   @override
-  String get name => 'get_user_queries';
+  String get name => 'recall_my_conversations';
 
   @override
-  String get description => '''获取指定时间范围内用户提出的所有问题，按话题分组。
+  String get description => '''回顾我在某段时间内聊过的内容。
 
-用于回答"我最近在关注什么"类型的问题。
+当用户问：这周聊了什么、最近在关注什么、回顾一下我的对话 — 用这个工具。
 
-特点：
-- 只返回用户问题（不返回 AI 回复）
-- 按话题分组，保持上下文
-- 按投入深度（round_count）降序排序''';
+返回按话题分组的问题列表，深度讨论排前面。''';
 
   @override
   Map<String, dynamic> get inputSchema => {

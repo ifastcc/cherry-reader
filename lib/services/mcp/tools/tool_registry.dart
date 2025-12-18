@@ -12,17 +12,17 @@ import 'find_related_discussions_tool.dart';
 /// 管理所有 MCP 工具的注册和调用
 ///
 /// 工具列表（3 个）：
-/// - get_user_queries: 时间维度回顾（今天/本周/本月问了什么）
-/// - find_related_discussions: 语义/关键词搜索相关话题
-/// - get_conversation: 深入读取对话内容
+/// - recall_my_conversations: 时间维度回顾（这周/这月聊了什么）
+/// - search_past_discussions: 搜索历史讨论
+/// - read_conversation_detail: 读取对话详情
 class ToolRegistry {
   late final Map<String, MCPTool> _tools;
 
   ToolRegistry() {
     _tools = {
-      'get_user_queries': GetUserQueriesTool(),
-      'find_related_discussions': FindRelatedDiscussionsTool(),
-      'get_conversation': GetConversationTool(),
+      'recall_my_conversations': GetUserQueriesTool(),
+      'search_past_discussions': FindRelatedDiscussionsTool(),
+      'read_conversation_detail': GetConversationTool(),
     };
   }
 

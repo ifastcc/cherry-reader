@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/webdav_service.dart';
@@ -84,7 +82,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final AudioPlayer _previewPlayer = AudioPlayer();
 
   bool _isLoading = true;
-  bool _obscureApiKey = true;
   bool _obscureWebdavPassword = true;
   int _columnsPerView = 2;
 
@@ -192,81 +189,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  /// 保存设置
-  Future<void> _saveSettings() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    final prefs = await SharedPreferences.getInstance();
-
-    await prefs.setString(_keyApiUrl, _apiUrlController.text.trim());
-    await prefs.setString(_keyApiKey, _apiKeyController.text.trim());
-    await prefs.setString(_keyModel, _modelController.text.trim());
-
-    // 保存 TTS 设置
-    _ttsSettings.azureApiKeys = _azureKeyControllers
-        .map((c) => c.text.trim())
-        .where((text) => text.isNotEmpty)
-        .toList();
-    // Sync legacy key for backward compatibility
-    if (_ttsSettings.azureApiKeys.isNotEmpty) {
-      _ttsSettings.azureApiKey = _ttsSettings.azureApiKeys.first;
-    } else {
-      _ttsSettings.azureApiKey = '';
-    }
-
-    _ttsSettings.azureRegion = _azureRegionController.text.trim();
-    await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
-
-    // 通知 TtsProvider 重新加载配置
-    if (mounted) {
-      final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
-      await ttsProvider.reloadSettings();
-    }
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ 设置已保存'), backgroundColor: Colors.green),
-      );
-    }
-  }
-
-  /// 重置为 .env 默认值
-  Future<void> _resetToDefault() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('重置设置'),
-        content: const Text('确定要重置为 .env 文件中的默认值吗？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyApiUrl);
-    await prefs.remove(_keyApiKey);
-    await prefs.remove(_keyModel);
-
-    // 重新加载（会从 .env 读取）
-    await _loadSettings();
-
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('已重置为默认值')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -355,7 +277,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 【新增】构建版本管理部分
+  /// 构建版本管理部分
   Widget _buildVersionManagementSection() {
     return Card(
       child: Padding(
@@ -363,52 +285,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.history, color: Colors.purple[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '版本管理',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '管理导入的数据版本，支持切换历史版本',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 16),
-
             // 使用 FutureBuilder 获取版本列表
             FutureBuilder<List<DataVersion>>(
               future: VersionService.instance.listVersions(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: CircularProgressIndicator(),
-                    ),
+                    child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()),
                   );
                 }
 
                 final versions = snapshot.data ?? [];
 
                 if (versions.isEmpty) {
-                  return Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.info_outline, color: Colors.grey[500]),
-                        const SizedBox(width: 8),
-                        const Text('暂无版本数据'),
-                      ],
-                    ),
+                  return Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.grey[400], size: 18),
+                      const SizedBox(width: 8),
+                      Text('暂无版本数据', style: TextStyle(color: Colors.grey[500])),
+                    ],
                   );
                 }
 
@@ -422,81 +317,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // 当前版本信息
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.green[50],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.green[200]!),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.check_circle, color: Colors.green[600], size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '当前版本: ${activeVersion.displayName}',
-                                  style: const TextStyle(fontWeight: FontWeight.w500),
-                                ),
-                                Text(
-                                  '${activeVersion.topicCount} 话题 • ${activeVersion.formattedSize}',
-                                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                                ),
-                              ],
-                            ),
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green[600], size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(activeVersion.displayName, style: const TextStyle(fontWeight: FontWeight.w500)),
+                              Text(
+                                '${activeVersion.topicCount} 话题 · ${activeVersion.formattedSize}',
+                                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                              ),
+                            ],
                           ),
-                          if (activeVersion.isLocked)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.orange[100],
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.lock, size: 14, color: Colors.orange[700]),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '已锁定',
-                                    style: TextStyle(fontSize: 11, color: Colors.orange[700]),
-                                  ),
-                                ],
-                              ),
-                            ),
-                        ],
-                      ),
+                        ),
+                        if (activeVersion.isLocked)
+                          Icon(Icons.lock, size: 16, color: Colors.orange[700]),
+                      ],
                     ),
 
                     const SizedBox(height: 12),
 
                     // 锁定开关
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('锁定当前版本'),
-                      subtitle: Text(
-                        '锁定后不会自动切换到新版本',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                      ),
-                      value: activeVersion.isLocked,
-                      onChanged: (value) async {
-                        await VersionService.instance.setVersionLocked(value);
-                        setState(() {}); // 刷新 UI
-                      },
+                    Row(
+                      children: [
+                        Text('锁定版本', style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+                        const Spacer(),
+                        Switch(
+                          value: activeVersion.isLocked,
+                          onChanged: (value) async {
+                            await VersionService.instance.setVersionLocked(value);
+                            setState(() {});
+                          },
+                        ),
+                      ],
                     ),
-
-                    const Divider(),
 
                     // 历史版本列表
                     if (versions.length > 1) ...[
-                      const SizedBox(height: 8),
-                      const Text(
-                        '历史版本',
-                        style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
-                      ),
+                      const Divider(),
+                      Text('历史版本', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.grey[600])),
                       const SizedBox(height: 8),
                       ...versions
                           .where((v) => v.status != VersionStatus.active)
@@ -648,86 +510,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.api, color: Colors.purple[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  'MCP Server',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-                const Spacer(),
-                // 状态指示器
-                StreamBuilder<MCPServerStatus>(
-                  stream: MCPServerService.instance.statusStream,
-                  initialData: MCPServerService.instance.currentStatus,
-                  builder: (context, snapshot) {
-                    final isRunning = snapshot.data?.isRunning ?? false;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: isRunning ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            isRunning ? Icons.circle : Icons.circle_outlined,
-                            size: 8,
-                            color: isRunning ? Colors.green : Colors.grey,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            isRunning ? '运行中' : '已停止',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isRunning ? Colors.green[700] : Colors.grey[600],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '启用后，Claude Code、Cursor 等 AI 编程工具可以访问聊天记录数据',
-              style: TextStyle(color: Colors.grey[400], fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-
-            // 启用开关
+            // 启用开关 + 状态
             StreamBuilder<MCPServerStatus>(
               stream: MCPServerService.instance.statusStream,
               initialData: MCPServerService.instance.currentStatus,
               builder: (context, snapshot) {
                 final isRunning = snapshot.data?.isRunning ?? false;
-                return SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('启用 MCP Server'),
-                  subtitle: Text(isRunning
-                      ? '端口: ${snapshot.data?.port ?? MCPServerConfig.defaultPort}'
-                      : '点击启动服务'),
-                  value: isRunning,
-                  onChanged: (value) async {
-                    if (value) {
-                      final success = await MCPServerService.instance.start();
-                      if (mounted && !success) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('❌ MCP Server 启动失败'),
-                            backgroundColor: Colors.red,
+                return Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Text('MCP Server', style: TextStyle(fontWeight: FontWeight.w500)),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: isRunning ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  isRunning ? '运行中' : '已停止',
+                                  style: TextStyle(fontSize: 11, color: isRunning ? Colors.green[700] : Colors.grey[600]),
+                                ),
+                              ),
+                            ],
                           ),
-                        );
-                      }
-                    } else {
-                      await MCPServerService.instance.stop();
-                    }
-                    setState(() {});
-                  },
+                          const SizedBox(height: 4),
+                          Text(
+                            '允许 Claude Code、Cursor 等访问数据',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: isRunning,
+                      onChanged: (value) async {
+                        if (value) {
+                          await MCPServerService.instance.start();
+                        } else {
+                          await MCPServerService.instance.stop();
+                        }
+                        setState(() {});
+                      },
+                    ),
+                  ],
                 );
               },
             ),
@@ -903,44 +734,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.cloud_sync, color: Colors.blue[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '数据加载配置',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              PlatformUtils.supportsLocalFolderSync
-                  ? '支持手动加载、本地文件夹监听或 WebDAV 自动同步'
-                  : '支持手动加载或从 WebDAV 自动同步 Cherry Studio 备份文件',
-              style: TextStyle(color: Colors.grey[400], fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-
             // 模式切换
             SegmentedButton<DataLoadMode>(
               segments: [
                 const ButtonSegment(
                   value: DataLoadMode.manual,
-                  label: Text('手动加载'),
-                  icon: Icon(Icons.folder_open),
+                  label: Text('手动'),
+                  icon: Icon(Icons.folder_open, size: 18),
                 ),
-                // 仅桌面端显示本地文件夹选项
                 if (PlatformUtils.supportsLocalFolderSync)
                   const ButtonSegment(
                     value: DataLoadMode.localFolder,
-                    label: Text('本地文件夹'),
-                    icon: Icon(Icons.folder_copy),
+                    label: Text('文件夹'),
+                    icon: Icon(Icons.folder_copy, size: 18),
                   ),
                 const ButtonSegment(
                   value: DataLoadMode.webdav,
                   label: Text('WebDAV'),
-                  icon: Icon(Icons.cloud),
+                  icon: Icon(Icons.cloud, size: 18),
                 ),
               ],
               selected: {_loadMode},
@@ -1699,7 +1510,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   /// 构建 TTS 设置部分
-  /// 构建 TTS 设置部分
   Widget _buildTtsSettingsSection() {
     return Card(
       child: Padding(
@@ -1707,22 +1517,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(Icons.record_voice_over, color: Colors.blue[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '语音合成配置 (Azure TTS)',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '配置 Microsoft Azure Speech 服务以启用语音朗读功能',
-              style: TextStyle(color: Colors.grey[400], fontSize: 13),
-            ),
-            const SizedBox(height: 8),
+            // Azure 配置链接
             InkWell(
               onTap: () => launchUrl(Uri.parse('https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices')),
               child: Row(
@@ -1731,11 +1526,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(width: 4),
                   Text(
                     '获取 Azure Speech Key',
-                    style: TextStyle(
-                      color: Colors.blue[300],
-                      fontSize: 13,
-                      decoration: TextDecoration.underline,
-                    ),
+                    style: TextStyle(color: Colors.blue[300], fontSize: 13, decoration: TextDecoration.underline),
                   ),
                 ],
               ),
@@ -2615,30 +2406,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
         }
       },
-    );
-  }
-
-  /// 将 Provider 配置应用到传统配置字段
-  void _useProviderConfig() {
-    final config = AIProviderService.instance.getActiveConfig();
-    if (config == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先选择一个有效的 Provider 和模型')),
-      );
-      return;
-    }
-
-    setState(() {
-      _apiUrlController.text = config.baseUrl;
-      _apiKeyController.text = config.apiKey;
-      _modelController.text = config.modelId;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('已应用 Provider 配置: ${config.modelId}'),
-        backgroundColor: Colors.green,
-      ),
     );
   }
 }

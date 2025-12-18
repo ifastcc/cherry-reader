@@ -8,19 +8,14 @@ import 'mcp_tool_base.dart';
 /// 核心工具，支持三种模式获取对话内容
 class GetConversationTool extends MCPTool {
   @override
-  String get name => 'get_conversation';
+  String get name => 'read_conversation_detail';
 
   @override
-  String get description => '''获取话题的对话内容，支持三种模式：
+  String get description => '''读取某个话题的完整对话内容。
 
-1. **queries_only**: 仅返回用户问题（快速浏览话题内容）
-2. **mainline**: 返回主线对话，包括问题和主线回复（useful=true 的消息）
-3. **full**: 返回完整对话，包括被弃用的多模型回复
+当需要查看具体某个话题的详细问答时使用（需要先用其他工具获取 topic_id）。
 
-适用场景：
-- 快速了解话题讨论了什么：使用 queries_only
-- 回顾完整的讨论过程：使用 mainline
-- 查看所有多模型对比回复：使用 full''';
+模式：queries_only（仅问题）、mainline（主线对话）、full（全部含弃用回复）。''';
 
   @override
   Map<String, dynamic> get inputSchema => {

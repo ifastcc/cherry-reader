@@ -12,21 +12,14 @@ import 'mcp_tool_base.dart';
 /// 支持语义搜索和关键词搜索
 class FindRelatedDiscussionsTool extends MCPTool {
   @override
-  String get name => 'find_related_discussions';
+  String get name => 'search_past_discussions';
 
   @override
-  String get description => '''根据主题词查找相关的历史讨论。
+  String get description => '''搜索我以前讨论过的相关话题。
 
-搜索模式：
-- semantic: 语义搜索（推荐，能找到语义相关但用词不同的话题）
-- keyword: 关键词搜索（精确匹配）
+当用户问：之前聊过XX吗、找一下关于XX的讨论、有没有讨论过XX — 用这个工具。
 
-搜索范围：
-- query_only: 只搜索用户问题（默认，推荐）
-- response_only: 只搜索 AI 回复
-- full: 搜索全部内容
-
-返回匹配话题的完整 user_queries 列表。''';
+支持语义搜索（默认）和关键词搜索。''';
 
   @override
   Map<String, dynamic> get inputSchema => {

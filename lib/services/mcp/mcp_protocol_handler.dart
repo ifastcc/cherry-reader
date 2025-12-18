@@ -17,7 +17,7 @@ class MCPProtocolHandler {
   static const String protocolVersion = '2025-03-26';
 
   /// 服务器信息
-  static const String serverName = 'cherry-reader-mcp';
+  static const String serverName = 'chat-history-mcp';
   static const String serverVersion = '1.0.0';
 
   /// 工具注册表
