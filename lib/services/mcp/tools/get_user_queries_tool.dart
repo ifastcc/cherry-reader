@@ -91,7 +91,7 @@ class GetUserQueriesTool extends MCPTool {
           updatedAt.isBefore(range.end.add(const Duration(days: 1)));
     }).toList();
 
-    // 按助手名称模糊匹配过滤
+    // 按助手名称匹配过滤（完全匹配优先）
     if (assistantFilter != null && assistantFilter.isNotEmpty) {
       final keywords = assistantFilter
           .toLowerCase()
@@ -99,11 +99,22 @@ class GetUserQueriesTool extends MCPTool {
           .where((k) => k.isNotEmpty)
           .toList();
 
-      allTopics = allTopics.where((t) {
+      // 1. 先找完全匹配的（名称等于关键词）
+      final exactMatches = allTopics.where((t) {
         final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-        // 任一关键词匹配即可
-        return keywords.any((k) => name.contains(k));
+        return keywords.any((k) => name == k);
       }).toList();
+
+      // 2. 如果有完全匹配，只返回完全匹配的
+      if (exactMatches.isNotEmpty) {
+        allTopics = exactMatches;
+      } else {
+        // 3. 否则返回模糊匹配的
+        allTopics = allTopics.where((t) {
+          final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
+          return keywords.any((k) => name.contains(k));
+        }).toList();
+      }
     }
 
     // 按轮次过滤

@@ -13,7 +13,8 @@ class GetConversationTool extends MCPTool {
   @override
   String get description => '''读取某个话题的完整对话内容。
 
-当需要查看具体某个话题的详细问答时使用（需要先用其他工具获取 topic_id）。
+当需要查看具体某个话题的详细问答时使用。
+支持通过 topic_id 或 topic_name（模糊匹配）查找话题。
 
 模式：queries_only（仅问题）、mainline（主线对话）、full（全部含弃用回复）。''';
 
@@ -23,7 +24,11 @@ class GetConversationTool extends MCPTool {
         'properties': {
           'topic_id': {
             'type': 'string',
-            'description': '话题 ID',
+            'description': '话题 ID（与 topic_name 二选一）',
+          },
+          'topic_name': {
+            'type': 'string',
+            'description': '话题名称，支持模糊匹配（与 topic_id 二选一）',
           },
           'mode': {
             'type': 'string',
@@ -43,14 +48,44 @@ class GetConversationTool extends MCPTool {
             'description': '是否包含 AI 思考过程，默认 false',
           },
         },
-        'required': ['topic_id'],
+        'required': [],
       };
 
   @override
   Future<Map<String, dynamic>> execute(Map<String, dynamic> arguments) async {
-    final topicId = arguments['topic_id'] as String?;
+    var topicId = arguments['topic_id'] as String?;
+    final topicName = arguments['topic_name'] as String?;
+
+    // 需要提供 topic_id 或 topic_name
+    if ((topicId == null || topicId.isEmpty) &&
+        (topicName == null || topicName.isEmpty)) {
+      throw ArgumentError('topic_id 或 topic_name 至少需要提供一个');
+    }
+
+    final topicRepo = RepositoryProvider.instance.topicRepository;
+    String? matchedTopicName;
+
+    // 通过话题名查找
     if (topicId == null || topicId.isEmpty) {
-      throw ArgumentError('topic_id is required');
+      final allTopics = await topicRepo.getAllTopics();
+      final nameLower = topicName!.toLowerCase();
+
+      // 1. 先找完全匹配的（名称等于关键词）
+      var matches = allTopics.where((t) => t.name.toLowerCase() == nameLower).toList();
+
+      // 2. 如果没有完全匹配，找包含匹配的
+      if (matches.isEmpty) {
+        matches = allTopics.where((t) => t.name.toLowerCase().contains(nameLower)).toList();
+      }
+
+      if (matches.isEmpty) {
+        throw ArgumentError('未找到名称匹配 "$topicName" 的话题');
+      }
+
+      // 如果有多个匹配，按更新时间降序取最新的
+      matches.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      topicId = matches.first.topicId;
+      matchedTopicName = matches.first.name;
     }
 
     final mode = arguments['mode'] as String? ?? 'mainline';
@@ -121,13 +156,20 @@ class GetConversationTool extends MCPTool {
       rounds.add(currentRoundData);
     }
 
-    return {
+    final result = <String, dynamic>{
       'topic_id': topicId,
       'mode': mode,
       'start_round': startRound,
       'round_count': rounds.length,
       'rounds': rounds,
     };
+
+    // 如果是通过话题名匹配的，返回匹配的话题名
+    if (matchedTopicName != null) {
+      result['topic_name'] = matchedTopicName;
+    }
+
+    return result;
   }
 
   /// 过滤主线消息

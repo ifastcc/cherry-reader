@@ -164,7 +164,7 @@ class FindRelatedDiscussionsTool extends MCPTool {
     // 按轮次过滤
     allTopics = allTopics.where((t) => t.roundCount >= minRounds).toList();
 
-    // 按助手名称模糊匹配过滤
+    // 按助手名称匹配过滤（完全匹配优先）
     if (assistantFilter != null && assistantFilter.isNotEmpty) {
       final keywords = assistantFilter
           .toLowerCase()
@@ -172,10 +172,22 @@ class FindRelatedDiscussionsTool extends MCPTool {
           .where((k) => k.isNotEmpty)
           .toList();
 
-      allTopics = allTopics.where((t) {
+      // 1. 先找完全匹配的（名称等于关键词）
+      final exactMatches = allTopics.where((t) {
         final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-        return keywords.any((k) => name.contains(k));
+        return keywords.any((k) => name == k);
       }).toList();
+
+      // 2. 如果有完全匹配，只返回完全匹配的
+      if (exactMatches.isNotEmpty) {
+        allTopics = exactMatches;
+      } else {
+        // 3. 否则返回模糊匹配的
+        allTopics = allTopics.where((t) {
+          final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
+          return keywords.any((k) => name.contains(k));
+        }).toList();
+      }
     }
 
     // 构建 topicId -> Topic 映射
@@ -256,7 +268,7 @@ class FindRelatedDiscussionsTool extends MCPTool {
     // 按轮次过滤
     allTopics = allTopics.where((t) => t.roundCount >= minRounds).toList();
 
-    // 按助手名称模糊匹配过滤
+    // 按助手名称匹配过滤（完全匹配优先）
     if (assistantFilter != null && assistantFilter.isNotEmpty) {
       final filterKeywords = assistantFilter
           .toLowerCase()
@@ -264,10 +276,22 @@ class FindRelatedDiscussionsTool extends MCPTool {
           .where((k) => k.isNotEmpty)
           .toList();
 
-      allTopics = allTopics.where((t) {
+      // 1. 先找完全匹配的（名称等于关键词）
+      final exactMatches = allTopics.where((t) {
         final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-        return filterKeywords.any((k) => name.contains(k));
+        return filterKeywords.any((k) => name == k);
       }).toList();
+
+      // 2. 如果有完全匹配，只返回完全匹配的
+      if (exactMatches.isNotEmpty) {
+        allTopics = exactMatches;
+      } else {
+        // 3. 否则返回模糊匹配的
+        allTopics = allTopics.where((t) {
+          final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
+          return filterKeywords.any((k) => name.contains(k));
+        }).toList();
+      }
     }
 
     // 搜索关键词（支持多个词）

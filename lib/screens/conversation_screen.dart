@@ -761,6 +761,49 @@ $modelResponses''';
           ),
         ],
       ),
+      // 悬浮讨论按钮
+      floatingActionButton: _conversation == null
+          ? null
+          : ValueListenableBuilder<int>(
+              valueListenable: _currentVisibleGroupNotifier,
+              builder: (context, currentGroup, _) {
+                final groups = _getConversationGroups();
+                if (groups.isEmpty) return const SizedBox.shrink();
+
+                // 获取当前轮次的讨论数量
+                final contextId = '${widget.topicId}:$currentGroup';
+                final discussionCount = _discussionCounts[contextId] ?? 0;
+                final hasDiscussion = discussionCount > 0;
+
+                return Padding(
+                  // 避开底部 TtsMiniPlayer
+                  padding: const EdgeInsets.only(bottom: 60),
+                  child: FloatingActionButton.extended(
+                    onPressed: () => _openAnalysisChat(currentGroup),
+                    backgroundColor: hasDiscussion
+                        ? const Color(0xFF8B5CF6)
+                        : Theme.of(context).colorScheme.primaryContainer,
+                    foregroundColor: hasDiscussion
+                        ? Colors.white
+                        : Theme.of(context).colorScheme.onPrimaryContainer,
+                    icon: Badge(
+                      isLabelVisible: discussionCount > 0,
+                      label: Text(
+                        discussionCount > 99 ? '99+' : '$discussionCount',
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                      child: Icon(
+                        hasDiscussion
+                            ? Icons.chat_bubble
+                            : Icons.chat_bubble_outline,
+                      ),
+                    ),
+                    label: Text('讨论 #${currentGroup + 1}'),
+                  ),
+                );
+              },
+            ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 
