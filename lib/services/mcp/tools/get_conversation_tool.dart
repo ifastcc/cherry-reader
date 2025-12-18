@@ -1,5 +1,6 @@
 import '../../repository_provider.dart';
 import '../../../models/domain/block_model.dart';
+import '../../../models/domain/message_model.dart';
 import 'mcp_tool_base.dart';
 
 /// 获取对话内容
@@ -81,7 +82,9 @@ class GetConversationTool extends MCPTool {
         filtered = messages.where((m) => m.isUser).toList();
         break;
       case 'mainline':
-        filtered = messages.where((m) => m.isUser || m.useful).toList();
+        // 主线模式：用户消息 + 主线回复
+        // 如果某轮没有 useful=true 的回复，回退到该轮第一个助手消息
+        filtered = _filterMainline(messages.toList());
         break;
       case 'full':
       default:
@@ -130,6 +133,48 @@ class GetConversationTool extends MCPTool {
       'round_count': rounds.length,
       'rounds': rounds,
     };
+  }
+
+  /// 过滤主线消息
+  ///
+  /// 规则：
+  /// 1. 用户消息全部保留
+  /// 2. 助手消息只保留 useful=true 的
+  /// 3. 如果某轮没有 useful=true 的助手消息，回退到该轮第一个助手消息
+  List<MessageModel> _filterMainline(List<MessageModel> messages) {
+    // 按轮次分组
+    final roundMap = <int, List<MessageModel>>{};
+    for (final msg in messages) {
+      roundMap.putIfAbsent(msg.roundIndex, () => []).add(msg);
+    }
+
+    final result = <MessageModel>[];
+
+    // 按轮次顺序处理
+    final sortedRounds = roundMap.keys.toList()..sort();
+    for (final round in sortedRounds) {
+      final roundMessages = roundMap[round]!;
+
+      // 添加所有用户消息
+      final userMessages = roundMessages.where((m) => m.isUser).toList();
+      result.addAll(userMessages);
+
+      // 处理助手消息
+      final assistantMessages = roundMessages.where((m) => m.isAssistant).toList();
+      if (assistantMessages.isEmpty) continue;
+
+      // 找 useful=true 的
+      final usefulMessages = assistantMessages.where((m) => m.useful).toList();
+      if (usefulMessages.isNotEmpty) {
+        // 有主线消息，只添加主线
+        result.addAll(usefulMessages);
+      } else {
+        // 没有主线消息，回退到第一个助手消息
+        result.add(assistantMessages.first);
+      }
+    }
+
+    return result;
   }
 
   /// 提取消息内容

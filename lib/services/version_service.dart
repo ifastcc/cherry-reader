@@ -13,6 +13,7 @@ import '../models/isar/topic_entity.dart';
 import '../models/isar/message_entity.dart';
 import '../models/isar/message_block_entity.dart';
 import '../models/isar/file_entity.dart';
+import '../models/isar/topic_embedding_entity.dart';
 import 'isar_database.dart';
 
 /// 版本管理服务
@@ -62,6 +63,7 @@ class VersionService {
     MessageEntitySchema,
     MessageBlockEntitySchema,
     FileEntitySchema,
+    TopicEmbeddingEntitySchema,
   ];
 
   // ============ 初始化 ============

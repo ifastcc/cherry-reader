@@ -272,13 +272,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('设置'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _resetToDefault,
-            tooltip: '重置为默认值',
-          ),
-        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -289,192 +282,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 说明卡片
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.info_outline,
-                                  color: Colors.blue[300],
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  'AI 分析配置',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '配置 OpenAI 兼容的 API 用于生成对话分析。'
-                              '支持 OpenAI、Azure OpenAI、Claude 等兼容接口。',
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    // ========== 数据源 ==========
+                    _buildSectionHeader('数据源', Icons.folder_open),
+                    _buildWebDavSection(),
+                    const SizedBox(height: 12),
+                    _buildVersionManagementSection(),
 
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 24),
 
-                    // Provider 管理入口
+                    // ========== AI 服务 ==========
+                    _buildSectionHeader('AI 服务', Icons.auto_awesome),
                     _buildProviderManagementCard(),
-
-                    const SizedBox(height: 16),
-
-                    // AI 偏好设置
+                    const SizedBox(height: 12),
                     _buildAIPreferencesCard(),
 
                     const SizedBox(height: 24),
 
-                    // API URL
-                    TextFormField(
-                      controller: _apiUrlController,
-                      decoration: const InputDecoration(
-                        labelText: 'API URL',
-                        hintText: 'https://api.openai.com/v1',
-                        prefixIcon: Icon(Icons.link),
-                        border: OutlineInputBorder(),
-                        helperText: 'OpenAI 兼容的 API 地址',
-                      ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return '请输入 API URL';
-                        }
-                        if (!value.startsWith('http://') &&
-                            !value.startsWith('https://')) {
-                          return 'URL 必须以 http:// 或 https:// 开头';
-                        }
-                        return null;
-                      },
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // Model
-                    TextFormField(
-                      controller: _modelController,
-                      decoration: const InputDecoration(
-                        labelText: '模型名称',
-                        hintText: 'gpt-4-turbo-preview',
-                        prefixIcon: Icon(Icons.smart_toy),
-                        border: OutlineInputBorder(),
-                        helperText: '如 gpt-4、gpt-3.5-turbo、claude-3-opus 等',
-                      ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return '请输入模型名称';
-                        }
-                        return null;
-                      },
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // API Key
-                    TextFormField(
-                      controller: _apiKeyController,
-                      obscureText: _obscureApiKey,
-                      decoration: InputDecoration(
-                        labelText: 'API Key',
-                        hintText: 'sk-...',
-                        prefixIcon: const Icon(Icons.key),
-                        border: const OutlineInputBorder(),
-                        helperText: 'API 密钥（将安全存储在本地）',
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscureApiKey
-                                ? Icons.visibility_off
-                                : Icons.visibility,
-                          ),
-                          onPressed: () {
-                            setState(() {
-                              _obscureApiKey = !_obscureApiKey;
-                            });
-                          },
-                        ),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return '请输入 API Key';
-                        }
-                        return null;
-                      },
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    // 保存按钮
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _saveSettings,
-                        icon: const Icon(Icons.save),
-                        label: const Text('保存设置'),
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 32),
-                    const Divider(),
-                    const SizedBox(height: 16),
-
-                    // WebDAV 配置部分
-                    _buildWebDavSection(),
-
-                    const SizedBox(height: 16),
-
-                    // 【新增】版本管理部分
-                    _buildVersionManagementSection(),
-
-                    const SizedBox(height: 16),
-
-                    // 显示设置部分
-                    _buildDisplaySettingsSection(),
-
-                    const SizedBox(height: 16),
-
-                    // MCP Server 设置部分（仅桌面端）
-                    if (PlatformUtils.isDesktop) ...[
-                      _buildMCPServerSection(),
-                      const SizedBox(height: 16),
-                    ],
-
-                    // TTS 设置部分
+                    // ========== 语音服务 ==========
+                    _buildSectionHeader('语音服务', Icons.record_voice_over),
                     _buildTtsSettingsSection(),
 
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 24),
 
-                    // 数据管理部分
+                    // ========== 显示 ==========
+                    _buildSectionHeader('显示', Icons.display_settings),
+                    _buildDisplaySettingsSection(),
+
+                    const SizedBox(height: 24),
+
+                    // ========== 高级 ==========
+                    _buildSectionHeader('高级', Icons.build),
+                    // MCP Server（仅桌面端）
+                    if (PlatformUtils.isDesktop) ...[
+                      _buildMCPServerSection(),
+                      const SizedBox(height: 12),
+                    ],
                     _buildDataManagementSection(),
 
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 24),
 
-                    // 关于与帮助部分
+                    // ========== 关于 ==========
+                    _buildSectionHeader('关于', Icons.info_outline),
                     _buildAboutSection(),
-
-                    const SizedBox(height: 16),
-
-                    // 反馈部分
+                    const SizedBox(height: 12),
                     _buildFeedbackSection(),
                   ],
                 ),
               ),
             ),
+    );
+  }
+
+  /// 构建分组标题
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, top: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: Colors.grey[500]),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[500],
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -738,60 +615,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 构建显示设置部分
   Widget _buildDisplaySettingsSection() {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.display_settings, color: Colors.blue[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '显示设置',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '配置对话查看器的显示选项',
-              style: TextStyle(color: Colors.grey[400], fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-
-            // 列数设置
-            ListTile(
-              leading: const Icon(Icons.view_column),
-              title: const Text('每屏显示卡片列数'),
-              subtitle: Text('当前设置: $_columnsPerView 列'),
-              trailing: DropdownButton<int>(
-                value: _columnsPerView,
-                items: const [
-                  DropdownMenuItem(value: 1, child: Text('1 列')),
-                  DropdownMenuItem(value: 2, child: Text('2 列')),
-                  DropdownMenuItem(value: 3, child: Text('3 列')),
-                  DropdownMenuItem(value: 4, child: Text('4 列')),
-                ],
-                onChanged: (value) async {
-                  if (value != null) {
-                    setState(() => _columnsPerView = value);
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setInt(_keyColumnsPerView, value);
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('✅ 列数设置已保存'),
-                          backgroundColor: Colors.green,
-                          duration: Duration(seconds: 1),
-                        ),
-                      );
-                    }
-                  }
-                },
-              ),
-            ),
+      child: ListTile(
+        leading: const Icon(Icons.view_column),
+        title: const Text('每屏显示列数'),
+        subtitle: Text('$_columnsPerView 列', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+        trailing: DropdownButton<int>(
+          value: _columnsPerView,
+          underline: const SizedBox(),
+          items: const [
+            DropdownMenuItem(value: 1, child: Text('1 列')),
+            DropdownMenuItem(value: 2, child: Text('2 列')),
+            DropdownMenuItem(value: 3, child: Text('3 列')),
+            DropdownMenuItem(value: 4, child: Text('4 列')),
           ],
+          onChanged: (value) async {
+            if (value != null) {
+              setState(() => _columnsPerView = value);
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setInt(_keyColumnsPerView, value);
+            }
+          },
         ),
       ),
     );
@@ -1423,118 +1266,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 构建数据管理部分
   Widget _buildDataManagementSection() {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.storage, color: Colors.blue[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '数据管理',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+      child: Column(
+        children: [
+          // 数据统计
+          _buildDataStatisticsTile(),
+          const Divider(height: 1),
+          // 导出数据
+          ListTile(
+            leading: const Icon(Icons.upload_file, color: Colors.green),
+            title: const Text('导出数据'),
+            subtitle: Text('导出为 Cherry Studio 兼容格式', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+            trailing: const Icon(Icons.chevron_right, size: 18),
+            onTap: _showExportDialog,
+          ),
+          const Divider(height: 1),
+          // 清除缓存
+          ListTile(
+            leading: const Icon(Icons.delete_outline, color: Colors.orange),
+            title: const Text('清除缓存'),
+            subtitle: Text('保留数据文件，仅清除解析缓存', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+            trailing: const Icon(Icons.chevron_right, size: 18),
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('清除缓存'),
+                  content: const Text('下次启动时会重新解析数据文件'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('取消'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                      child: const Text('清除'),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
+              );
 
-            // 显示App数据目录
-            ListTile(
-              leading: const Icon(Icons.folder_open),
-              title: const Text('数据文件位置'),
-              subtitle: FutureBuilder<String>(
-                future: DataPersistenceManager.getAppDataFilePath(),
-                builder: (context, snapshot) {
-                  if (snapshot.hasData) {
-                    return Text(
-                      snapshot.data!,
-                      style: const TextStyle(fontSize: 12),
-                    );
-                  }
-                  return const Text('加载中...');
-                },
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.copy),
-                tooltip: '复制路径',
-                onPressed: () async {
-                  final path =
-                      await DataPersistenceManager.getAppDataFilePath();
-                  await Clipboard.setData(ClipboardData(text: path));
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('📋 路径已复制'),
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                  }
-                },
-              ),
-            ),
-
-            const Divider(),
-
-            // 数据统计
-            _buildDataStatisticsTile(),
-
-            const Divider(),
-
-            // 导出数据
-            ListTile(
-              leading: const Icon(Icons.upload_file, color: Colors.green),
-              title: const Text('导出数据'),
-              subtitle: const Text('导出为 Cherry Studio 兼容的备份格式'),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-              onTap: _showExportDialog,
-            ),
-
-            const Divider(),
-
-            // 清除缓存按钮
-            ListTile(
-              leading: const Icon(Icons.delete_outline, color: Colors.orange),
-              title: const Text('清除缓存'),
-              subtitle: const Text('保留数据文件，仅清除解析缓存'),
-              onTap: () async {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('清除缓存'),
-                    content: const Text('确定要清除缓存吗？下次启动时会重新解析数据文件。'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('取消'),
-                      ),
-                      ElevatedButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange,
-                        ),
-                        child: const Text('清除'),
-                      ),
-                    ],
-                  ),
-                );
-
-                if (confirmed == true) {
-                  await DataPersistenceManager.clearCache();
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('✅ 缓存已清除'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
+              if (confirmed == true) {
+                await DataPersistenceManager.clearCache();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('缓存已清除'), backgroundColor: Colors.green),
+                  );
                 }
-              },
-            ),
-          ],
-        ),
+              }
+            },
+          ),
+        ],
       ),
     );
   }
@@ -1550,16 +1332,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return ListTile(
           leading: const Icon(Icons.analytics_outlined, color: Colors.purple),
           title: const Text('数据统计'),
-          subtitle: isLoading
-              ? const Text('加载中...')
-              : Text(
-                  '${stats!['assistants']} 个助手 · ${stats['topics']} 个话题 · ${stats['messages']} 条消息',
-                  style: const TextStyle(fontSize: 12),
-                ),
-          trailing: IconButton(
-            icon: const Icon(Icons.refresh, size: 20),
-            onPressed: () => setState(() {}),
-            tooltip: '刷新统计',
+          subtitle: Text(
+            isLoading
+                ? '加载中...'
+                : '${stats!['assistants']} 助手 · ${stats['topics']} 话题 · ${stats['messages']} 消息',
+            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
           ),
         );
       },
@@ -1811,105 +1588,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 构建关于与帮助部分
   Widget _buildAboutSection() {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.help_outline, color: Colors.blue[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '关于与帮助',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // 重新查看引导
-            ListTile(
-              leading: const Icon(Icons.school_outlined),
-              title: const Text('新手引导'),
-              subtitle: const Text('重新查看首次使用引导'),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-              onTap: () async {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('重新查看引导'),
-                    content: const Text('是否重新查看新手引导？\n\n这将返回引导页面，你可以重新配置数据来源。'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('取消'),
-                      ),
-                      ElevatedButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('确定'),
-                      ),
-                    ],
-                  ),
-                );
-
-                if (confirmed == true && mounted) {
-                  await OnboardingScreen.resetOnboarding();
-                  Navigator.of(context).pushNamedAndRemoveUntil(
-                    '/onboarding',
-                    (route) => false,
-                  );
-                }
-              },
-            ),
-
-            const Divider(),
-
-            // 应用信息
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('关于 Cherry Reader'),
-              subtitle: const Text('查看应用信息'),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-              onTap: () {
-                showAboutDialog(
-                  context: context,
-                  applicationName: 'Cherry Reader',
-                  applicationVersion: '1.0.0',
-                  applicationIcon: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          Theme.of(context).colorScheme.primary,
-                          Theme.of(context).colorScheme.secondary,
-                        ],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.school_outlined),
+            title: const Text('新手引导'),
+            trailing: const Icon(Icons.chevron_right, size: 18),
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('重新查看引导'),
+                  content: const Text('将返回引导页面重新配置'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('取消'),
                     ),
-                    child: const Icon(
-                      Icons.menu_book_rounded,
-                      size: 28,
-                      color: Colors.white,
-                    ),
-                  ),
-                  children: [
-                    const Text('优雅地阅读你的 AI 对话'),
-                    const SizedBox(height: 8),
-                    const Text(
-                      '专为 Cherry Studio 用户打造的对话阅读器，'
-                      '支持 WebDAV 自动同步、语音朗读等功能。',
-                      style: TextStyle(fontSize: 13),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('确定'),
                     ),
                   ],
+                ),
+              );
+
+              if (confirmed == true && mounted) {
+                await OnboardingScreen.resetOnboarding();
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  '/onboarding',
+                  (route) => false,
                 );
-              },
-            ),
-          ],
-        ),
+              }
+            },
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于 Cherry Reader'),
+            trailing: const Icon(Icons.chevron_right, size: 18),
+            onTap: () {
+              showAboutDialog(
+                context: context,
+                applicationName: 'Cherry Reader',
+                applicationVersion: '1.0.0',
+                applicationIcon: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Theme.of(context).colorScheme.primary,
+                        Theme.of(context).colorScheme.secondary,
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.menu_book_rounded, size: 28, color: Colors.white),
+                ),
+                children: const [
+                  Text('Cherry Studio 对话的阅读器与知识管理工具'),
+                ],
+              );
+            },
+          ),
+        ],
       ),
     );
   }
@@ -1917,31 +1662,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 构建反馈部分
   Widget _buildFeedbackSection() {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.feedback, color: Colors.blue[300], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  '反馈与建议',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const Icon(Icons.email),
-              title: const Text('发送邮件反馈'),
-              subtitle: const Text('jimmyhe66@gmail.com'),
-              onTap: _sendFeedbackEmail,
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-            ),
-          ],
-        ),
+      child: ListTile(
+        leading: const Icon(Icons.email_outlined),
+        title: const Text('反馈建议'),
+        subtitle: Text('jimmyhe66@gmail.com', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+        trailing: const Icon(Icons.chevron_right, size: 18),
+        onTap: _sendFeedbackEmail,
       ),
     );
   }
@@ -2708,53 +2434,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 构建 AI 偏好设置卡片
   Widget _buildAIPreferencesCard() {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.tune, color: Colors.purple[400], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  'AI 偏好设置',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-              ],
+      child: FutureBuilder<UserPreferenceEntity?>(
+        future: PromptTemplateService.instance.getActivePreference(),
+        builder: (context, snapshot) {
+          final pref = snapshot.data;
+          return ListTile(
+            leading: Icon(Icons.tune, color: Colors.purple[300]),
+            title: Text(pref?.name ?? '默认偏好'),
+            subtitle: Text(
+              pref?.systemPrompt.isNotEmpty == true
+                  ? pref!.systemPrompt.split('\n').first
+                  : '配置全局 System Prompt',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
             ),
-            const SizedBox(height: 8),
-            Text(
-              '配置全局 System Prompt，对所有 AI 对话生效',
-              style: TextStyle(color: Colors.grey[500], fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-
-            // 当前偏好
-            FutureBuilder<UserPreferenceEntity?>(
-              future: PromptTemplateService.instance.getActivePreference(),
-              builder: (context, snapshot) {
-                final pref = snapshot.data;
-                return ListTile(
-                  leading: Icon(Icons.person_outline, color: Colors.purple[300]),
-                  title: Text(pref?.name ?? '默认偏好'),
-                  subtitle: Text(
-                    pref?.systemPrompt.split('\n').first ?? '点击编辑偏好设置',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                  ),
-                  trailing: const Icon(Icons.edit, size: 18),
-                  onTap: () => _showPreferenceEditor(pref),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: BorderSide(color: Colors.grey.shade300),
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showPreferenceEditor(pref),
+          );
+        },
       ),
     );
   }
@@ -2852,73 +2550,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final hasProviders = providerService.providers.isNotEmpty;
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.cloud, color: Colors.green[400], size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  'AI Provider 管理',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                ),
-                const Spacer(),
-                if (hasProviders)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green[100],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${providerService.validProviders.length} 个可用',
-                      style: TextStyle(fontSize: 12, color: Colors.green[700]),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              hasProviders
-                  ? '当前: ${activeProvider?.name ?? "未选择"} / ${activeModel?.displayName ?? "未选择模型"}'
-                  : '从 Cherry Studio 备份导入 AI 配置，快速使用多个模型',
-              style: TextStyle(color: Colors.grey[500], fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const AIProviderScreen(),
-                        ),
-                      ).then((_) => setState(() {})); // 返回时刷新状态
-                    },
-                    icon: const Icon(Icons.settings, size: 18),
-                    label: Text(hasProviders ? '管理 Provider' : '导入配置'),
-                  ),
-                ),
-                if (hasProviders) ...[
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    onPressed: _useProviderConfig,
-                    icon: const Icon(Icons.sync, size: 18),
-                    label: const Text('应用到上方'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.green[700],
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ],
+      child: ListTile(
+        leading: Icon(
+          hasProviders ? Icons.check_circle : Icons.cloud_outlined,
+          color: hasProviders ? Colors.green : Colors.grey,
         ),
+        title: Text(
+          hasProviders
+              ? '${activeProvider?.name ?? "未选择"} / ${activeModel?.displayName ?? "未选择"}'
+              : '配置 AI Provider',
+        ),
+        subtitle: Text(
+          hasProviders
+              ? '${providerService.validProviders.length} 个可用'
+              : '从 Cherry Studio 导入或手动添加',
+          style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AIProviderScreen()),
+          ).then((_) => setState(() {}));
+        },
       ),
     );
   }

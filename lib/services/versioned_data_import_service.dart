@@ -5,7 +5,9 @@ import '../models/isar/topic_entity.dart';
 import '../models/isar/message_entity.dart';
 import '../models/isar/message_block_entity.dart';
 import '../models/isar/file_entity.dart';
+import '../models/isar/topic_embedding_entity.dart';
 import 'cherry_extractor.dart';
+import 'embedding_service.dart';
 
 /// 版本化数据导入服务
 ///
@@ -23,8 +25,10 @@ class VersionedDataImportService {
   /// 从 Cherry Studio 导出文件导入数据
   ///
   /// [onProgress] 进度回调 (progress: 0.0-1.0, message: 状态描述)
+  /// [generateEmbeddings] 是否生成首轮问题的 embedding（需要配置 API Key）
   Future<ImportResult> importFromExtractor({
     void Function(double progress, String message)? onProgress,
+    bool generateEmbeddings = true,
   }) async {
     final result = ImportResult();
 
@@ -86,13 +90,24 @@ class VersionedDataImportService {
 
         result.importedTopics = end;
 
-        final progress = 0.1 + 0.85 * end / allTopics.length;
+        final progress = 0.1 + 0.75 * end / allTopics.length;
         onProgress?.call(progress, '已导入 $end/${allTopics.length} 个话题...');
       }
 
       // 5. 更新 Assistant 的 topicCount
-      onProgress?.call(0.96, '正在更新统计信息...');
+      onProgress?.call(0.86, '正在更新统计信息...');
       await _updateAssistantTopicCounts();
+
+      // 6. 生成 Embedding（如果配置了 API Key）
+      if (generateEmbeddings && EmbeddingService.instance.isConfigured) {
+        onProgress?.call(0.88, '正在生成语义索引...');
+        result.embeddingsGenerated = await _generateEmbeddings(
+          onProgress: (embProgress, msg) {
+            final progress = 0.88 + 0.1 * embProgress;
+            onProgress?.call(progress, msg);
+          },
+        );
+      }
 
       result.success = true;
       onProgress?.call(1.0, '导入完成');
@@ -103,6 +118,82 @@ class VersionedDataImportService {
     }
 
     return result;
+  }
+
+  /// 生成首轮问题的 Embedding
+  ///
+  /// 返回成功生成的数量
+  Future<int> _generateEmbeddings({
+    void Function(double progress, String message)? onProgress,
+  }) async {
+    // 获取所有话题
+    final topics = await _isar.topicEntitys.where().findAll();
+    if (topics.isEmpty) return 0;
+
+    // 收集所有首轮用户问题
+    final topicFirstQueries = <String, String>{}; // topicId -> firstQuery
+
+    for (final topic in topics) {
+      // 获取该话题的首轮用户消息
+      final firstUserMsg = await _isar.messageEntitys
+          .filter()
+          .topicIdEqualTo(topic.topicId)
+          .roleEqualTo('user')
+          .sortByRoundIndex()
+          .findFirst();
+
+      if (firstUserMsg == null) continue;
+
+      // 获取该消息的 main_text block
+      final blocks = await _isar.messageBlockEntitys
+          .filter()
+          .messageIdEqualTo(firstUserMsg.messageId)
+          .typeEqualTo('main_text')
+          .findAll();
+
+      final content = blocks.map((b) => b.content ?? '').join().trim();
+      if (content.isNotEmpty) {
+        topicFirstQueries[topic.topicId] = content;
+      }
+    }
+
+    if (topicFirstQueries.isEmpty) return 0;
+
+    // 批量生成 embedding
+    final topicIds = topicFirstQueries.keys.toList();
+    final queries = topicFirstQueries.values.toList();
+
+    onProgress?.call(0.1, '正在调用 AI 生成语义索引 (${queries.length} 条)...');
+
+    final embeddings = await EmbeddingService.instance.embedBatch(queries);
+
+    // 保存到数据库
+    int successCount = 0;
+    final embeddingEntities = <TopicEmbeddingEntity>[];
+
+    for (var i = 0; i < topicIds.length; i++) {
+      final embedding = embeddings[i];
+      if (embedding != null) {
+        embeddingEntities.add(TopicEmbeddingEntity.fromData(
+          topicId: topicIds[i],
+          firstQueryText: queries[i],
+          embedding: embedding,
+          modelName: 'BAAI/bge-large-zh-v1.5',
+        ));
+        successCount++;
+      }
+    }
+
+    if (embeddingEntities.isNotEmpty) {
+      await _isar.writeTxn(() async {
+        for (final entity in embeddingEntities) {
+          await _isar.topicEmbeddingEntitys.putByIndex('topicId', entity);
+        }
+      });
+    }
+
+    onProgress?.call(1.0, '语义索引生成完成 ($successCount/${topicIds.length})');
+    return successCount;
   }
 
   /// 导入 Assistants
@@ -334,7 +425,7 @@ class VersionedDataImportService {
       roundIndex: roundIndex,
       role: msgData['role'] as String? ?? 'user',
       askId: msgData['askId'] as String?,
-      useful: msgData['useful'] as bool? ?? true,
+      useful: msgData['useful'] as bool? ?? false,
       modelId: (msgData['model'] as Map<String, dynamic>?)?['id'] as String?,
       modelName:
           (msgData['model'] as Map<String, dynamic>?)?['name'] as String?,
@@ -363,7 +454,12 @@ class VersionedDataImportService {
           messageId: messageId,
           orderIndex: j,
           type: blockData['type'] as String? ?? 'main_text',
-          content: blockData['content'] as String?,
+          // content 可能是 String 或 Map（如 tool 类型的 block）
+          content: blockData['content'] is String
+              ? blockData['content'] as String
+              : (blockData['content'] != null
+                  ? jsonEncode(blockData['content'])
+                  : null),
           thinkingMillsec:
               (blockData['thinking_millsec'] as num?)?.toDouble(),
           url: blockData['url'] as String?,
@@ -430,11 +526,13 @@ class ImportResult {
   int importedTopics = 0;
   int importedMessages = 0;
   int importedFiles = 0;
+  int embeddingsGenerated = 0;
 
   @override
   String toString() {
     if (success) {
-      return '导入成功: $importedTopics 个话题, $importedMessages 条消息, $importedFiles 个文件';
+      final embStr = embeddingsGenerated > 0 ? ', $embeddingsGenerated 条语义索引' : '';
+      return '导入成功: $importedTopics 个话题, $importedMessages 条消息, $importedFiles 个文件$embStr';
     } else {
       return '导入失败: $error (已导入 $importedTopics/$totalTopics 个话题)';
     }

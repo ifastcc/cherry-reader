@@ -417,7 +417,7 @@ class DataImportService {
       roundIndex: roundIndex,
       role: msgData['role'] as String? ?? 'user',
       askId: msgData['askId'] as String?,
-      useful: msgData['useful'] as bool? ?? true,
+      useful: msgData['useful'] as bool? ?? false,
       modelId: (msgData['model'] as Map<String, dynamic>?)?['id'] as String?,
       modelName:
           (msgData['model'] as Map<String, dynamic>?)?['name'] as String?,
@@ -445,7 +445,12 @@ class DataImportService {
           messageId: messageId,
           orderIndex: j,
           type: blockData['type'] as String? ?? 'main_text',
-          content: blockData['content'] as String?,
+          // content 可能是 String 或 Map（如 tool 类型的 block）
+          content: blockData['content'] is String
+              ? blockData['content'] as String
+              : (blockData['content'] != null
+                  ? jsonEncode(blockData['content'])
+                  : null),
           thinkingMillsec:
               (blockData['thinking_millsec'] as num?)?.toDouble(),
           url: blockData['url'] as String?,
