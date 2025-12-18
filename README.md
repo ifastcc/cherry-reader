@@ -51,12 +51,27 @@ flutter run -d macos  # 或 ios / android
 | Base URL | 自定义 API 地址 |
 | Azure TTS | 语音朗读密钥 |
 
-## 路线图
+## MCP 服务（桌面端）
 
-- [x] iOS 上架
-- [ ] Android / macOS 上架
-- [ ] WebDAV 同步优化
-- [ ] 更多分析模板
+桌面版（macOS / Windows / Linux）内置 MCP Server，让 AI 编程助手访问你的聊天记录。
+
+**启用**：设置 → MCP 服务 → 开启（默认端口 9527）
+
+**工具**：
+| 名称 | 功能 |
+|------|------|
+| `recall_my_conversations` | 回顾指定时间段的对话 |
+| `search_past_discussions` | 搜索历史讨论 |
+| `read_conversation_detail` | 读取对话详情 |
+
+**配置示例**：
+
+```bash
+# Claude Code
+claude mcp add --transport http cherry-reader http://localhost:9527/mcp
+```
+
+应用内提供 Cursor、VS Code、Cline、Cherry Studio 等工具的一键复制配置。
 
 ## 贡献
 
