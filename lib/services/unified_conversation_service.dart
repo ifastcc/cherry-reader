@@ -1314,4 +1314,85 @@ class UnifiedConversationService {
       rethrow;
     }
   }
+
+  // ============ 主线管理 ============
+
+  /// 将指定消息设为主线
+  ///
+  /// 同一 askId 组中只能有一个主线消息
+  /// 设置新主线时会自动取消同组其他消息的主线状态
+  Future<void> setAsMainline(String messageId) async {
+    // 1. 获取要设为主线的消息
+    final message = await _db.getUnifiedMessage(messageId);
+    if (message == null) {
+      throw Exception('消息不存在: $messageId');
+    }
+    if (message.role != 'assistant') {
+      throw Exception('只有 assistant 消息可以设为主线');
+    }
+    if (message.askId == null) {
+      throw Exception('消息没有关联的用户问题（askId 为空）');
+    }
+
+    // 2. 获取同组的所有消息
+    final allMessages = await getMessages(message.conversationId);
+    final sameGroupMessages = allMessages.where(
+      (m) => m.role == 'assistant' && m.askId == message.askId,
+    ).toList();
+
+    // 3. 批量更新：取消其他消息的主线状态，设置新主线
+    for (final m in sameGroupMessages) {
+      final shouldBeMainline = m.messageId == messageId;
+      if (m.isMainline != shouldBeMainline) {
+        m.isMainline = shouldBeMainline;
+        await _db.saveUnifiedMessage(m);
+      }
+    }
+  }
+
+  // ============ 消息删除 ============
+
+  /// 删除指定的 assistant 消息
+  ///
+  /// 如果删除的是主线消息，会自动将同组第一个剩余消息设为主线
+  Future<void> deleteAssistantMessage(String messageId) async {
+    // 1. 获取要删除的消息
+    final message = await _db.getUnifiedMessage(messageId);
+    if (message == null) {
+      throw Exception('消息不存在: $messageId');
+    }
+    if (message.role != 'assistant') {
+      throw Exception('只能删除 assistant 消息');
+    }
+
+    final conversationId = message.conversationId;
+    final askId = message.askId;
+    final wasMainline = message.isMainline;
+
+    // 2. 删除消息
+    await _db.deleteUnifiedMessage(messageId);
+
+    // 3. 如果删除的是主线消息，需要选出新的主线
+    if (wasMainline && askId != null) {
+      final allMessages = await getMessages(conversationId);
+      final remainingGroup = allMessages.where(
+        (m) => m.role == 'assistant' && m.askId == askId,
+      ).toList();
+
+      // 如果还有剩余消息，将第一个设为主线
+      if (remainingGroup.isNotEmpty) {
+        final newMainline = remainingGroup.first;
+        newMainline.isMainline = true;
+        await _db.saveUnifiedMessage(newMainline);
+      }
+    }
+
+    // 4. 更新对话的消息计数
+    final allMessages = await getMessages(conversationId);
+    final conversation = await _db.getUnifiedConversation(conversationId);
+    if (conversation != null) {
+      conversation.messageCount = allMessages.length;
+      await _db.saveUnifiedConversation(conversation);
+    }
+  }
 }

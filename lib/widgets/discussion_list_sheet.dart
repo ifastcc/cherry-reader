@@ -77,14 +77,7 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
     );
 
     if (result != null && result.trim().isNotEmpty) {
-      // 创建讨论（不发送初始消息，让用户在编辑器中确认）
-      final conversationId = await _conversationService.createSingleMessageDiscussion(
-        messageId: widget.messageId,
-        contextSnapshot: widget.aiReplyContent,
-        title: result.length > 50 ? '${result.substring(0, 50)}...' : result,
-        initialMessage: null, // ← 不自动发送，让用户在编辑器确认
-      );
-
+      // 【修复】不再预先创建对话，让 AIChatScreen 在用户发送消息时懒创建
       // 构建 contextData（包含上下文和用户问题）
       final contextData = {
         'rounds': [
@@ -110,15 +103,17 @@ class _DiscussionListSheetState extends State<DiscussionListSheet> {
       }
 
       // 进入新的 AI 对话界面
+      // 【修复】不传 initialConversationId，让 AIChatScreen 懒创建
       if (mounted) {
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => AIChatScreen(
-              initialConversationId: conversationId,
+              // initialConversationId: null - 不预先创建，懒创建
               initialContextId: widget.messageId,
               initialContextSnapshot: widget.aiReplyContent,
               initialContextData: contextData, // ← 传递原始数据
+              initialTitle: result.length > 50 ? '${result.substring(0, 50)}...' : result,
               contextTypeFilter: ConversationContextType.singleMessage,
             ),
           ),

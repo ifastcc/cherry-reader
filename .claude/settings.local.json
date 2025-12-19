@@ -4,7 +4,16 @@
       "Bash(flutter analyze:*)",
       "Bash(dart run build_runner build:*)",
       "Bash(chmod:*)",
-      "Bash(git rev-parse:*)"
+      "Bash(git rev-parse:*)",
+      "Bash(du:*)",
+      "Bash(docker system:*)",
+      "Bash(mdfind:*)",
+      "Bash(xargs:*)",
+      "Bash(xcrun simctl:*)",
+      "Bash(brew cleanup:*)",
+      "Bash(npm cache clean:*)",
+      "Bash(pip cache:*)",
+      "Bash(docker volume prune:*)"
     ],
     "deny": [],
     "ask": []

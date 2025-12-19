@@ -1388,61 +1388,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onPressed: (_isLoading || _isSyncing) ? null : _refreshData,
             tooltip: _loadMode == DataLoadMode.webdav ? '从 WebDAV 刷新' : '重新加载',
           ),
-          // 清除缓存按钮
-          IconButton(
-            icon: const Icon(Icons.delete_sweep),
-            onPressed: _isLoading ? null : () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('清除缓存'),
-                  content: const Text('确定要清除所有缓存吗？\n\n清除后需要重新加载数据文件。'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('取消'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('确定'),
-                    ),
-                  ],
-                ),
-              );
-
-              if (confirm == true) {
-                try {
-                  await DataPersistenceManager.clearCache();
-                  await RepositoryProvider.instance.database.clearAll();
-
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('✅ 缓存已清除，请重新加载文件'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
-
-                  setState(() {
-                    _extractor = null;
-                    _topicIndex = null;
-                    _assistantMap = null;
-                  });
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('清除缓存失败: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
-                }
-              }
-            },
-            tooltip: '清除缓存',
-          ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _isLoading ? null : () async {

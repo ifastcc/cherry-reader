@@ -305,6 +305,8 @@ class UnifiedMessageEntity {
     }
 
     return UnifiedMessageEntity()
+      // 🔧 保留 Isar 主键 id，确保 put() 会更新而不是插入（避免唯一索引冲突）
+      ..id = original.id
       // 保持身份标识不变
       ..messageId = original.messageId
       ..conversationId = original.conversationId

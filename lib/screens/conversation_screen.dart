@@ -1537,6 +1537,8 @@ $modelResponses''';
                       onTap: () {
                         // 【性能优化】直接更新 ValueNotifier，不触发整页 setState
                         pageNotifier.value = cardIndex;
+                        // 【UX优化】切换模型回复后滚动到轮次顶部，方便从头阅读
+                        _scrollToGroupTop(groupIndex);
                       },
                     );
                   }).toList(),
@@ -1641,7 +1643,14 @@ $modelResponses''';
             // 【修复】切换后等待布局完成，重新计算进度条
             WidgetsBinding.instance.addPostFrameCallback((_) {
               _onScrollChanged();
+              // 【Tab联动】强制滚动 Tab 到可见区域
+              final tabController = _tabScrollControllers[groupIndex];
+              if (tabController != null) {
+                _scrollTabToVisible(groupIndex, newIndex, tabController);
+              }
             });
+            // 【UX优化】切换模型回复后滚动到轮次顶部，方便从头阅读
+            _scrollToGroupTop(groupIndex);
           },
           onDoubleTap: () {
             // 【快速定位】双击内容区域滚动到本轮次顶部
@@ -1923,6 +1932,9 @@ $modelResponses''';
 
 
   /// 打开 AI 分析对话界面（多轮对话模式）
+  ///
+  /// 【修复】不再预先创建空对话，而是传递参数让 AIChatScreen 懒创建
+  /// 只有当用户实际发送消息时才会创建对话，避免产生空对话
   Future<void> _openAnalysisChat(int groupIndex) async {
     final groups = _getConversationGroups();
     if (groupIndex >= groups.length) return;
@@ -1948,26 +1960,21 @@ $modelResponses''';
     final formattedContext = _buildFormattedContext(userMsg, assistantReplies);
     contextData['formattedContext'] = formattedContext;
 
-    // 创建消息组分析对话（不发送 initialPrompt，让用户在编辑器中确认后发送）
-    final conversationService = UnifiedConversationService.instance;
-    final conversationId = await conversationService.createMessageGroupAnalysis(
-      topicId: widget.topicId,
-      groupIndex: groupIndex,
-      contextSnapshot: contextSnapshot,
-      initialPrompt: null, // ← 不自动发送
-    );
+    // 构建 contextId（用于对话分组和查询）
+    final contextId = '${widget.topicId}:$groupIndex';
 
     // 跳转到 AI 对话界面
+    // 【修复】不传 initialConversationId，让 AIChatScreen 在用户发送消息时懒创建
     if (mounted) {
-      final contextId = '${widget.topicId}:$groupIndex';
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => AIChatScreen(
-            initialConversationId: conversationId,
+            // initialConversationId: null - 不预先创建，懒创建
             initialContextId: contextId,
             initialContextSnapshot: contextSnapshot,
             initialContextData: contextData, // ← 传递原始数据
+            initialTitle: '分析 - 第 ${groupIndex + 1} 轮对话',
             contextTypeFilter: ConversationContextType.messageGroup,
           ),
         ),

@@ -1148,6 +1148,8 @@ class _AIChatScreenState extends State<AIChatScreen> {
                     onRetry: () => _regenerateMessage(msg.messageId),
                     onCopy: () => _copyToClipboard(msg.content),
                     onQuote: () => _quoteToInput(msg.content),
+                    onSetMainline: () => _setAsMainline(msg.messageId),
+                    onDelete: () => _deleteAssistantMessage(msg.messageId),
                   ),
                 );
               }).toList(),
@@ -1749,6 +1751,78 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
     final lastAssistantMessage = assistantMessages.last;
     await _regenerateMessage(lastAssistantMessage.messageId);
+  }
+
+  /// 将指定消息设为主线
+  Future<void> _setAsMainline(String messageId) async {
+    try {
+      await _service.setAsMainline(messageId);
+
+      // 刷新消息列表
+      await _loadMessages();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已设为主线'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('设置失败: $e')),
+        );
+      }
+    }
+  }
+
+  /// 删除指定的 assistant 消息
+  Future<void> _deleteAssistantMessage(String messageId) async {
+    // 显示确认对话框
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认删除'),
+        content: const Text('确定要删除这条回复吗？此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await _service.deleteAssistantMessage(messageId);
+
+      // 刷新消息列表
+      await _loadMessages();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已删除'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('删除失败: $e')),
+        );
+      }
+    }
   }
 
   /// 重试单个模型调用
@@ -2867,12 +2941,16 @@ class _SavedModelResponseCard extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onCopy;
   final VoidCallback? onQuote;
+  final VoidCallback? onSetMainline;
+  final VoidCallback? onDelete;
 
   const _SavedModelResponseCard({
     required this.message,
     this.onRetry,
     this.onCopy,
     this.onQuote,
+    this.onSetMainline,
+    this.onDelete,
   });
 
   @override
@@ -3033,6 +3111,21 @@ class _SavedModelResponseCard extends StatelessWidget {
               tooltip: '引用',
               onTap: onQuote,
             ),
+          // 设为主线（非主线消息才显示）
+          if (onSetMainline != null && message.isMainline != true)
+            _buildActionButton(
+              icon: Icons.star_outline,
+              tooltip: '设为主线',
+              onTap: onSetMainline,
+            ),
+          // 删除
+          if (onDelete != null)
+            _buildActionButton(
+              icon: Icons.delete_outline,
+              tooltip: '删除',
+              onTap: onDelete,
+              color: Colors.red[400],
+            ),
 
           const Spacer(),
 
@@ -3053,6 +3146,7 @@ class _SavedModelResponseCard extends StatelessWidget {
     required IconData icon,
     required String tooltip,
     VoidCallback? onTap,
+    Color? color,
   }) {
     return Tooltip(
       message: tooltip,
@@ -3064,7 +3158,7 @@ class _SavedModelResponseCard extends StatelessWidget {
           child: Icon(
             icon,
             size: 18,
-            color: Colors.grey[600],
+            color: color ?? Colors.grey[600],
           ),
         ),
       ),

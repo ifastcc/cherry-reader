@@ -319,10 +319,9 @@ class PromptTemplateService {
 
     // 定义所有内置模板及其名称
     final builtInTemplates = {
-      '元分析': () => TaskTemplateEntity.createMetaAnalysis(_uuid.v4()),
       '视角': () => TaskTemplateEntity.createPerspective(_uuid.v4()),
-      '内容总结': () => TaskTemplateEntity.createSummary(_uuid.v4()),
-      '翻译': () => TaskTemplateEntity.createTranslation(_uuid.v4()),
+      '元分析': () => TaskTemplateEntity.createMetaAnalysis(_uuid.v4()),
+      '深度分析': () => TaskTemplateEntity.createDeepAnalysis(_uuid.v4()),
     };
 
     // 获取现有模板名称

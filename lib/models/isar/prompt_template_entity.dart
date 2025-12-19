@@ -142,12 +142,12 @@ class TaskTemplateEntity {
     return create(
       templateId: templateId,
       name: '视角',
-      description: '梳理每轮对话的脉络和核心亮点，提炼有价值的视角和透镜',
-      content: '''这里有好多轮对话，而且每一轮对话可能有多个模型的回复，因为这个对话太长了，信息量太多了，所以我希望你能够用直观而不失本质理解的语言去梳理和讲解每一轮对话，我的关注的点，每一轮对话的每个回复的核心/亮点/本质/局限等等？
+      description: '梳理对话脉络，提炼有价值的视角和透镜',
+      content: '''请梳理这段对话，用直观而不失本质的语言讲解：
 
-然后也要讲清楚每一轮对话的脉络发展，最后尝试抓住我想要精准提问的点是什么？
-
-最重要的是提炼出一些你认为有意思，可能对与我的问题有帮助的视角/透镜？
+1. **每轮对话的核心**：各个回复的亮点、本质、局限
+2. **脉络发展**：对话是如何演进的，我真正想问的是什么
+3. **视角提炼**：提炼出可能对问题有帮助的视角或透镜
 ''',
       isBuiltIn: true,
       targetType: TemplateTargetType.multiModel,
@@ -181,46 +181,24 @@ class TaskTemplateEntity {
     );
   }
 
-  /// 内置的总结模版
-  static TaskTemplateEntity createSummary(String templateId) {
+  /// 内置的深度分析模版（多模型对比）
+  static TaskTemplateEntity createDeepAnalysis(String templateId) {
     return create(
       templateId: templateId,
-      name: '内容总结',
-      description: '对内容进行简洁的总结提炼',
-      content: '''请对以下内容进行总结：
+      name: '深度分析',
+      description: '全面分析各模型回复的优劣，给出基于第一性原理的独立见解',
+      content: '''请你详细分析上述内容，并给出你的深度思考和见解。要求：
 
-1. **核心观点**：提取最重要的 3-5 个观点
-2. **关键信息**：列出必须记住的关键事实或数据
-3. **行动建议**：如果有的话，提取可执行的建议
+1. 仔细阅读所有模型回复，全面分析它们各自的优劣点（包括但不限于：洞察深度、逻辑严密性、知识广度、实用价值、表达清晰度等）
 
-要求：简洁、准确、不遗漏重要信息
+2. 基于第一性原理，综合所有回复，给出你自己的深度分析和洞见，不要只是总结或复述已有内容
 
----
+3. 如果所有回复都存在共同的遗漏点或盲区，请明确指出
 
-**原始内容：**
+4. 采用清晰的结构化表达，但避免空洞的话语
 ''',
       isBuiltIn: true,
-    );
-  }
-
-  /// 内置的翻译模版
-  static TaskTemplateEntity createTranslation(String templateId) {
-    return create(
-      templateId: templateId,
-      name: '翻译',
-      description: '将内容翻译成目标语言',
-      content: '''请将以下内容翻译成简体中文：
-
-要求：
-1. 保持原文的语气和风格
-2. 专业术语需准确翻译
-3. 如有文化差异，适当本地化
-
----
-
-**原文：**
-''',
-      isBuiltIn: true,
+      targetType: TemplateTargetType.multiModel,
     );
   }
 }
