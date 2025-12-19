@@ -1,19 +1,10 @@
 import 'package:flutter/material.dart';
 import 'context_selector.dart' show TopicSummary;
 
-/// UI 风格枚举
+/// UI 风格枚举（仅保留语义图标风格）
 enum ContextStyleVariant {
   semantic,    // 语义化图标（有边框卡片）
-  textOnly,    // 纯文字标签
-  compact,     // 简约语义（综合版：语义图标 + 极简布局）
 }
-
-/// 风格描述
-const _styleNames = {
-  ContextStyleVariant.semantic: '语义图标',
-  ContextStyleVariant.textOnly: '纯文字',
-  ContextStyleVariant.compact: '简约语义',
-};
 
 /// Context 选择器 - 混合风格（卡片质感 + 极简连接线 + 层级颜色）
 class ContextSelectorWithStyles extends StatefulWidget {
@@ -59,18 +50,7 @@ const _selectedColor = Color(0xFF4CAF50);  // 选中状态：绿色
 const _currentColor = Color(0xFF2196F3);   // 当前位置：蓝色
 const _mainlineColor = Color(0xFFFFB300);  // 主线推荐：琥珀色
 
-/// 层级灰度（用于边框和图标，不用于背景）
-const _levelGrays = [
-  Color(0xFF616161), // L0 助手层
-  Color(0xFF757575), // L1 话题层
-  Color(0xFF9E9E9E), // L2 轮次层
-  Color(0xFFBDBDBD), // L3 回复层
-];
-
 class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
-
-  // ===== UI 风格 =====
-  ContextStyleVariant _currentStyle = ContextStyleVariant.semantic;
 
   // ===== 4 层数据结构 =====
   final List<_AssistantNode> _assistants = [];
@@ -705,42 +685,6 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
               ),
             ],
           ),
-          // 风格切换按钮行
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: ContextStyleVariant.values.map((style) {
-                final isSelected = _currentStyle == style;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: InkWell(
-                    onTap: () => setState(() => _currentStyle = style),
-                    borderRadius: BorderRadius.circular(6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: isSelected ? primary.withAlpha(20) : Colors.grey[100],
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: isSelected ? primary : Colors.transparent,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Text(
-                        _styleNames[style]!,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                          color: isSelected ? primary : Colors.grey[600],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
         ],
       ),
     );
@@ -788,77 +732,87 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   }
 
   Widget _buildAssistantNode(_AssistantNode assistant, Color primary) {
-    switch (_currentStyle) {
-      case ContextStyleVariant.semantic:
-        return _buildSemanticAssistant(assistant, primary);
-      case ContextStyleVariant.textOnly:
-        return _buildTextOnlyAssistant(assistant, primary);
-      case ContextStyleVariant.compact:
-        return _buildCompactAssistant(assistant, primary);
-    }
+    return _buildSemanticAssistant(assistant, primary);
   }
 
   // ========================================
-  // 风格一：语义化图标
-  // 层级设计：助手(L0) > 话题(L1) > 轮次(L2) > 回复(L3)
-  // 文字大小：15 > 14 > 12 > 11
-  // 间距递减：10 > 8 > 6 > 4
+  // 风格一：语义化图标（简洁版 + 统计）
+  // 设计原则：
+  // 1. Checkbox 在行首
+  // 2. 用缩进表示层级
+  // 3. 保留统计数字帮助用户了解选中情况
   // ========================================
+
+  /// 固定缩进量
+  static const double _indentUnit = 20.0;
 
   Widget _buildSemanticAssistant(_AssistantNode assistant, Color primary) {
     final isExpanded = _expandedAssistants.contains(assistant.id);
-    int selectedCount = _countAssistantSelections(assistant);
-    final hasSelection = selectedCount > 0;
+    final stats = _countAssistantStats(assistant);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // 助手行
           InkWell(
             onTap: () => _toggleAssistantExpand(assistant.id),
-            borderRadius: BorderRadius.circular(10),
-            child: Stack(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.grey[300]!, width: 1),
-                    boxShadow: [BoxShadow(color: Colors.black.withAlpha(10), blurRadius: 6, offset: const Offset(0, 2))],
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: Row(
+                children: [
+                  // 展开箭头
+                  Icon(
+                    isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                    size: 20,
+                    color: Colors.grey[400],
                   ),
-                  child: Row(
-                    children: [
-                      // 选中竖条
-                      if (hasSelection)
-                        Container(
-                          width: 3,
-                          height: 28,
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                            color: _selectedColor,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      Icon(isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 20, color: Colors.grey[500]),
-                      const SizedBox(width: 8),
-                      Icon(Icons.person, size: 20, color: const Color(0xFF5C6BC0)),
-                      const SizedBox(width: 10),
-                      Expanded(child: Text(assistant.name, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.grey[800]))),
-                      if (hasSelection) _buildSelectionBadge(selectedCount),
-                      Text('${assistant.topics.length} 话题', style: TextStyle(fontSize: 12, color: Colors.grey[400])),
-                    ],
+                  const SizedBox(width: 8),
+                  // 助手图标
+                  Icon(Icons.person_outline, size: 18, color: const Color(0xFF5C6BC0)),
+                  const SizedBox(width: 8),
+                  // 名称
+                  Flexible(
+                    child: Text(
+                      assistant.name,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[800],
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                if (assistant.isCurrent) _buildCornerTag('当前', _currentColor),
-              ],
+                  // 当前标记（紧跟标题）
+                  if (assistant.isCurrent) ...[
+                    const SizedBox(width: 8),
+                    _buildInlineTag('当前', _currentColor),
+                  ],
+                  // 选中状态标签（✓ + 字符数 / 仅字符数）
+                  if (stats.selected > 0) ...[
+                    const SizedBox(width: 8),
+                    _buildSelectionLabel(stats),
+                  ],
+                  // 弹性空间
+                  const Spacer(),
+                ],
+              ),
             ),
           ),
+          // 展开的话题列表
           if (isExpanded)
             Padding(
-              padding: const EdgeInsets.only(left: 16, top: 8),
-              child: Column(children: assistant.topics.map((t) => _buildSemanticTopic(assistant, t, primary)).toList()),
+              padding: const EdgeInsets.only(left: _indentUnit, top: 4),
+              child: Column(
+                children: assistant.topics.map((t) => _buildSemanticTopic(assistant, t, primary)).toList(),
+              ),
             ),
         ],
       ),
@@ -869,64 +823,78 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     final topicKey = _getTopicKey(assistant.id, topic.id);
     final isExpanded = _expandedTopics.contains(topicKey);
     final isLoading = _loadingTopicIds.contains(topic.id);
-    int selectedCount = _countTopicSelections(assistant, topic);
-    final hasSelection = selectedCount > 0;
+    final stats = _countTopicStats(assistant, topic);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // 话题行
           InkWell(
             onTap: () async {
               if (!topic.isLoaded && !isLoading) await _loadTopicDetail(assistant.id, topic);
               _toggleTopicExpand(topicKey);
             },
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[50],
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey[200]!, width: 1),
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.grey[50],
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: Row(
+                children: [
+                  // 展开箭头
+                  Icon(
+                    isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                    size: 18,
+                    color: Colors.grey[400],
                   ),
-                  child: Row(
-                    children: [
-                      // 选中竖条
-                      if (hasSelection)
-                        Container(
-                          width: 3,
-                          height: 22,
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                            color: _selectedColor,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      Icon(Icons.chat_bubble_outline, size: 17, color: const Color(0xFF7E57C2)),
-                      const SizedBox(width: 10),
-                      Expanded(child: Text(topic.name, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.grey[700]), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                      if (hasSelection) _buildSelectionBadge(selectedCount, small: true),
-                      if (isLoading)
-                        SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey[400]))
-                      else ...[
-                        Text('${topic.isLoaded ? topic.rounds.length : topic.roundCount} 轮', style: TextStyle(fontSize: 11, color: Colors.grey[400])),
-                        const SizedBox(width: 4),
-                        Icon(isExpanded ? Icons.expand_less : Icons.expand_more, size: 18, color: Colors.grey[400]),
-                      ],
-                    ],
+                  const SizedBox(width: 6),
+                  // 话题图标
+                  Icon(Icons.chat_bubble_outline, size: 15, color: const Color(0xFF7E57C2)),
+                  const SizedBox(width: 8),
+                  // 名称
+                  Flexible(
+                    child: Text(
+                      topic.name,
+                      style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                if (topic.isCurrent) _buildCornerTag('当前', _currentColor),
-              ],
+                  // 当前标记（紧跟标题）
+                  if (topic.isCurrent) ...[
+                    const SizedBox(width: 8),
+                    _buildInlineTag('当前', _currentColor),
+                  ],
+                  // 选中状态标签（✓ + 字符数 / 仅字符数）
+                  if (stats.selected > 0) ...[
+                    const SizedBox(width: 8),
+                    _buildSelectionLabel(stats, small: true),
+                  ],
+                  // 弹性空间
+                  const Spacer(),
+                  // 加载指示器
+                  if (isLoading)
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey[400]),
+                    ),
+                ],
+              ),
             ),
           ),
+          // 展开的轮次列表 - 简化容器（移除背景色避免阴影感）
           if (isExpanded && topic.isLoaded)
             Padding(
-              padding: const EdgeInsets.only(left: 12, top: 6),
-              child: Column(children: topic.rounds.map((r) => _buildSemanticRound(assistant, topic, r, primary)).toList()),
+              padding: const EdgeInsets.only(left: 12, top: 4),
+              child: Column(
+                children: topic.rounds.map((r) => _buildSemanticRound(assistant, topic, r, primary)).toList(),
+              ),
             ),
         ],
       ),
@@ -939,78 +907,102 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     final isQuestionSelected = _selections['$roundKey:q'] == true;
     final selectedReplyCount = round.replies.where((r) => _selections['$roundKey:${r.id}'] == true).length;
     final isCurrent = topic.isCurrent && round.index == widget.currentRoundIndex;
-    final hasSelection = isQuestionSelected || selectedReplyCount > 0;
 
+    // 整体卡片设计：问题和回复在同一个容器里
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[200]!, width: 1),
+        border: Border.all(color: Colors.grey[300]!),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 轮次头部（问题行）
+          // 问题行（卡片头部）
           InkWell(
             onTap: () => _toggleRoundExpand(roundKey),
-            borderRadius: BorderRadius.vertical(top: const Radius.circular(8), bottom: isExpanded ? Radius.zero : const Radius.circular(8)),
-            child: Stack(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Row(
-                    children: [
-                      // 左侧选中竖条（只在选中时显示）
-                      if (hasSelection)
-                        Container(
-                          width: 3,
-                          height: 20,
-                          margin: const EdgeInsets.only(right: 6),
-                          decoration: BoxDecoration(
-                            color: _selectedColor,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      // 蓝色问题标识条
-                      Container(
-                        width: 3,
-                        height: 20,
-                        margin: const EdgeInsets.only(right: 8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF42A5F5),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      _buildCheckbox(isQuestionSelected, () => _toggleRound(assistant.id, topic.id, round), small: true),
-                      const SizedBox(width: 8),
-                      Icon(Icons.help_outline, size: 14, color: const Color(0xFF42A5F5)),
-                      const SizedBox(width: 6),
-                      Text('Q${round.index + 1}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700])),
-                      const SizedBox(width: 10),
-                      Expanded(child: Text(round.question, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: Colors.grey[600]))),
-                      if (selectedReplyCount > 0) _buildRatioTag('$selectedReplyCount/${round.replies.length}'),
-                      Icon(isExpanded ? Icons.expand_less : Icons.expand_more, size: 16, color: Colors.grey[400]),
-                    ],
+            borderRadius: BorderRadius.vertical(
+              top: const Radius.circular(8),
+              bottom: isExpanded ? Radius.zero : const Radius.circular(8),
+            ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              child: Row(
+                children: [
+                  // Checkbox
+                  _buildCheckbox(
+                    isQuestionSelected,
+                    () => _toggleRound(assistant.id, topic.id, round),
+                    small: true,
                   ),
-                ),
-                if (isCurrent) _buildCornerTag('当前', _currentColor),
-              ],
+                  const SizedBox(width: 10),
+                  // 问题图标
+                  Icon(Icons.help_outline, size: 14, color: const Color(0xFF42A5F5)),
+                  const SizedBox(width: 4),
+                  // Q 编号
+                  Text(
+                    'Q${round.index + 1}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // 问题内容
+                  Expanded(
+                    child: Text(
+                      round.question,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ),
+                  // 当前标记
+                  if (isCurrent) ...[
+                    _buildInlineTag('当前', _currentColor),
+                    const SizedBox(width: 8),
+                  ],
+                  // 回复选中统计
+                  if (round.replies.isNotEmpty) ...[
+                    Text(
+                      '$selectedReplyCount/${round.replies.length}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: selectedReplyCount > 0 ? _selectedColor : Colors.grey[400],
+                        fontWeight: selectedReplyCount > 0 ? FontWeight.w500 : FontWeight.normal,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  // 展开箭头
+                  Icon(
+                    isExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: Colors.grey[400],
+                  ),
+                ],
+              ),
             ),
           ),
-          // 分隔线 + 回复列表
-          if (isExpanded) ...[
+          // 展开时显示回复列表（在同一卡片内）
+          if (isExpanded && round.replies.isNotEmpty) ...[
+            // 分隔线
             Divider(height: 1, thickness: 1, color: Colors.grey[200]),
+            // 回复区域（淡色背景 + 左侧缩进，更紧凑）
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.only(left: 24, right: 6, top: 4, bottom: 4),
               decoration: BoxDecoration(
                 color: Colors.grey[50],
                 borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
               ),
               child: Column(
-                children: round.replies.asMap().entries.map((e) {
-                  final isLast = e.key == round.replies.length - 1;
-                  return _buildSemanticReply(assistant, topic, round, e.value, isLast, primary);
+                children: round.replies.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final reply = entry.value;
+                  final isLast = index == round.replies.length - 1;
+                  return _buildSemanticReply(assistant, topic, round, reply, isLast, primary);
                 }).toList(),
               ),
             ),
@@ -1028,459 +1020,99 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
 
     return Column(
       children: [
+        // 点击整行 = 选中；点击箭头 = 展开
         InkWell(
-          onTap: () => _toggleReplyExpand(replyKey),
+          onTap: () => _toggleReply(assistant.id, topic.id, round, reply),
           borderRadius: BorderRadius.circular(4),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: reply.isMainline ? _mainlineColor.withAlpha(12) : null,
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: reply.isMainline ? _mainlineColor.withAlpha(60) : Colors.grey[200]!,
-                width: 1,
-              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    // 左侧选中竖条
-                    if (isSelected)
-                      Container(
-                        width: 2,
-                        height: 16,
-                        margin: const EdgeInsets.only(right: 6),
-                        decoration: BoxDecoration(
-                          color: _selectedColor,
-                          borderRadius: BorderRadius.circular(1),
+                    // Checkbox（subtle 模式，视觉更轻）
+                    _buildCheckbox(
+                      isSelected,
+                      () => _toggleReply(assistant.id, topic.id, round, reply),
+                      small: true,
+                      subtle: true,
+                    ),
+                    const SizedBox(width: 6),
+                    // 回复图标
+                    Icon(
+                      Icons.lightbulb_outline,
+                      size: 12,
+                      color: reply.isMainline ? _mainlineColor : const Color(0xFF26A69A),
+                    ),
+                    const SizedBox(width: 4),
+                    // 模型名称
+                    Expanded(
+                      child: Text(
+                        reply.modelName,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.grey[700],
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    // 主线标记
+                    if (reply.isMainline) ...[
+                      Icon(Icons.star, size: 11, color: _mainlineColor),
+                      const SizedBox(width: 4),
+                    ],
+                    // 字数
+                    Text(
+                      _formatChars(reply.charCount),
+                      style: TextStyle(fontSize: 10, color: Colors.grey[400]),
+                    ),
+                    const SizedBox(width: 2),
+                    // 展开箭头（独立点击区域）
+                    GestureDetector(
+                      onTap: () => _toggleReplyExpand(replyKey),
+                      behavior: HitTestBehavior.opaque,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        child: Icon(
+                          isContentExpanded ? Icons.expand_less : Icons.expand_more,
+                          size: 16,
+                          color: Colors.grey[400],
                         ),
                       ),
-                    _buildCheckbox(isSelected, () => _toggleReply(assistant.id, topic.id, round, reply), small: true),
-                    const SizedBox(width: 6),
-                    Icon(Icons.lightbulb_outline, size: 12, color: reply.isMainline ? _mainlineColor : const Color(0xFF26A69A)),
-                    const SizedBox(width: 6),
-                    Expanded(child: Text(reply.modelName, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.grey[700]), overflow: TextOverflow.ellipsis)),
-                    if (reply.isMainline) Text('★', style: TextStyle(fontSize: 10, color: _mainlineColor)),
-                    const SizedBox(width: 4),
-                    Text(_formatChars(reply.charCount), style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-                    const SizedBox(width: 4),
-                    Icon(isContentExpanded ? Icons.expand_less : Icons.expand_more, size: 14, color: Colors.grey[400]),
+                    ),
                   ],
                 ),
+                // 内容预览
                 _buildReplyContent(reply, isContentExpanded, onCollapse: () => _toggleReplyExpand(replyKey)),
               ],
             ),
           ),
         ),
-        if (!isLast) const SizedBox(height: 6),
+        // 分隔线（最后一个不显示，颜色更深）
+        if (!isLast)
+          Divider(height: 1, thickness: 1, color: Colors.grey[300], indent: 28),
       ],
     );
   }
 
-  /// 右上角标签
-  Widget _buildCornerTag(String text, Color color) {
-    return Positioned(
-      top: 0,
-      right: 0,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: color.withAlpha(20),
-          borderRadius: const BorderRadius.only(
-            topRight: Radius.circular(6),
-            bottomLeft: Radius.circular(6),
-          ),
-          border: Border.all(color: color.withAlpha(60), width: 0.5),
-        ),
-        child: Text(text, style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w500)),
-      ),
-    );
-  }
-
-  // ========================================
-  // 风格二：纯文字标签
-  // ========================================
-
-  Widget _buildTextOnlyAssistant(_AssistantNode assistant, Color primary) {
-    final isExpanded = _expandedAssistants.contains(assistant.id);
-    int selectedCount = _countAssistantSelections(assistant);
-    final hasSelection = selectedCount > 0;
-
+  /// 内联标签（当前）
+  Widget _buildInlineTag(String text, Color color) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => _toggleAssistantExpand(assistant.id),
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: hasSelection ? _selectedColor.withAlpha(10) : Colors.grey[50],
-                borderRadius: BorderRadius.circular(8),
-                border: hasSelection ? Border.all(color: _selectedColor.withAlpha(60), width: 1.5) : null,
-              ),
-              child: Row(
-                children: [
-                  if (hasSelection) _buildSelectionBar(3, 24),
-                  Text(isExpanded ? '▼' : '▶', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(assistant.name, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.grey[800]))),
-                  if (assistant.isCurrent) _buildCurrentTag(),
-                  if (hasSelection) _buildSelectionBadge(selectedCount),
-                  Text('${assistant.topics.length}', style: TextStyle(fontSize: 12, color: Colors.grey[400])),
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded)
-            Padding(
-              padding: const EdgeInsets.only(left: 20),
-              child: Column(children: assistant.topics.asMap().entries.map((e) => _buildTextOnlyTopic(assistant, e.value, e.key == assistant.topics.length - 1, primary)).toList()),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTextOnlyTopic(_AssistantNode assistant, _TopicNode topic, bool isLast, Color primary) {
-    final topicKey = _getTopicKey(assistant.id, topic.id);
-    final isExpanded = _expandedTopics.contains(topicKey);
-    final isLoading = _loadingTopicIds.contains(topic.id);
-    int selectedCount = _countTopicSelections(assistant, topic);
-    final hasSelection = selectedCount > 0;
-
-    return Container(
-      margin: EdgeInsets.only(top: 4, bottom: isLast ? 4 : 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () async {
-              if (!topic.isLoaded && !isLoading) await _loadTopicDetail(assistant.id, topic);
-              _toggleTopicExpand(topicKey);
-            },
-            borderRadius: BorderRadius.circular(6),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: hasSelection ? _selectedColor.withAlpha(8) : Colors.white,
-                borderRadius: BorderRadius.circular(6),
-                border: hasSelection ? Border.all(color: _selectedColor.withAlpha(50), width: 1) : Border.all(color: Colors.grey[200]!),
-              ),
-              child: Row(
-                children: [
-                  if (hasSelection) _buildSelectionBar(2, 20),
-                  Text(isExpanded ? '▼' : '▶', style: TextStyle(fontSize: 9, color: Colors.grey[400])),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(topic.name, style: TextStyle(fontSize: 13, color: Colors.grey[700]), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                  if (topic.isCurrent) _buildCurrentTag(small: true),
-                  if (hasSelection) _buildSelectionBadge(selectedCount, small: true),
-                  if (isLoading) SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey[400])),
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded && topic.isLoaded)
-            Padding(
-              padding: const EdgeInsets.only(left: 16),
-              child: Column(children: topic.rounds.asMap().entries.map((e) => _buildTextOnlyRound(assistant, topic, e.value, e.key == topic.rounds.length - 1, primary)).toList()),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTextOnlyRound(_AssistantNode assistant, _TopicNode topic, _RoundNode round, bool isLast, Color primary) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final isExpanded = _expandedRounds.contains(roundKey);
-    final isQuestionSelected = _selections['$roundKey:q'] == true;
-    final selectedReplyCount = round.replies.where((r) => _selections['$roundKey:${r.id}'] == true).length;
-    final isCurrent = topic.isCurrent && round.index == widget.currentRoundIndex;
-    final hasSelection = isQuestionSelected || selectedReplyCount > 0;
-
-    return Container(
-      margin: EdgeInsets.only(top: 4, bottom: isLast ? 4 : 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => _toggleRoundExpand(roundKey),
-            borderRadius: BorderRadius.circular(4),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: hasSelection ? _selectedColor.withAlpha(6) : Colors.grey[50],
-                borderRadius: BorderRadius.circular(4),
-                border: hasSelection ? Border.all(color: _selectedColor.withAlpha(40)) : null,
-              ),
-              child: Row(
-                children: [
-                  if (hasSelection) _buildSelectionBar(2, 16),
-                  _buildCheckbox(isQuestionSelected, () => _toggleRound(assistant.id, topic.id, round), small: true),
-                  const SizedBox(width: 8),
-                  Text('Q${round.index + 1}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(round.question, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: Colors.grey[500]))),
-                  if (isCurrent) _buildCurrentTag(small: true),
-                  if (selectedReplyCount > 0) _buildRatioTag('$selectedReplyCount/${round.replies.length}'),
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded)
-            Padding(
-              padding: const EdgeInsets.only(left: 24),
-              child: Column(children: round.replies.asMap().entries.map((e) => _buildTextOnlyReply(assistant, topic, round, e.value, e.key == round.replies.length - 1, primary)).toList()),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTextOnlyReply(_AssistantNode assistant, _TopicNode topic, _RoundNode round, _ReplyNode reply, bool isLast, Color primary) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final replyKey = '$roundKey:${reply.id}';
-    final isSelected = _selections[replyKey] == true;
-    final isContentExpanded = _expandedReplies.contains(replyKey);
-
-    return Container(
-      margin: EdgeInsets.only(top: 3, bottom: isLast ? 3 : 0),
-      child: InkWell(
-        onTap: () => _toggleReplyExpand(replyKey),
-        borderRadius: BorderRadius.circular(4),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          decoration: BoxDecoration(
-            color: isSelected ? _selectedColor.withAlpha(8) : Colors.white,
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: isSelected ? _selectedColor.withAlpha(50) : reply.isMainline ? _mainlineColor.withAlpha(60) : Colors.grey[100]!),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  if (isSelected) _buildSelectionBar(2, 14),
-                  _buildCheckbox(isSelected, () => _toggleReply(assistant.id, topic.id, round, reply), small: true),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text(reply.modelName, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.grey[700]))),
-                  if (reply.isMainline) _buildMainlineTag(),
-                  Text(_formatChars(reply.charCount), style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-                  const SizedBox(width: 4),
-                  Icon(isContentExpanded ? Icons.expand_less : Icons.expand_more, size: 14, color: Colors.grey[400]),
-                ],
-              ),
-              _buildReplyContent(reply, isContentExpanded, onCollapse: () => _toggleReplyExpand(replyKey)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ========================================
-  // 风格三：简约语义（综合版）
-  // 特点：语义图标 + 极简布局 + 无边框卡片
-  // ========================================
-
-  Widget _buildCompactAssistant(_AssistantNode assistant, Color primary) {
-    final isExpanded = _expandedAssistants.contains(assistant.id);
-    int selectedCount = _countAssistantSelections(assistant);
-    final hasSelection = selectedCount > 0;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        border: Border(left: hasSelection ? BorderSide(color: _selectedColor, width: 3) : BorderSide.none),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => _toggleAssistantExpand(assistant.id),
-            borderRadius: BorderRadius.circular(6),
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(hasSelection ? 9 : 12, 10, 12, 10),
-              child: Row(
-                children: [
-                  // 语义图标：人物代表助手
-                  Icon(Icons.person, size: 18, color: const Color(0xFF5C6BC0)),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(assistant.name, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.grey[800]))),
-                  if (assistant.isCurrent) _buildCurrentTag(small: true),
-                  if (hasSelection) _buildCompactBadge(selectedCount),
-                  Text('${assistant.topics.length}', style: TextStyle(fontSize: 11, color: Colors.grey[400])),
-                  const SizedBox(width: 6),
-                  Icon(isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 18, color: Colors.grey[400]),
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded)
-            Padding(
-              padding: const EdgeInsets.only(left: 18),
-              child: Column(children: assistant.topics.asMap().entries.map((e) => _buildCompactTopic(assistant, e.value, e.key == assistant.topics.length - 1, primary)).toList()),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCompactTopic(_AssistantNode assistant, _TopicNode topic, bool isLast, Color primary) {
-    final topicKey = _getTopicKey(assistant.id, topic.id);
-    final isExpanded = _expandedTopics.contains(topicKey);
-    final isLoading = _loadingTopicIds.contains(topic.id);
-    int selectedCount = _countTopicSelections(assistant, topic);
-    final hasSelection = selectedCount > 0;
-
-    return Container(
-      margin: EdgeInsets.only(bottom: isLast ? 4 : 2),
-      decoration: BoxDecoration(
-        border: Border(left: hasSelection ? BorderSide(color: _selectedColor.withAlpha(150), width: 2) : BorderSide.none),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () async {
-              if (!topic.isLoaded && !isLoading) await _loadTopicDetail(assistant.id, topic);
-              _toggleTopicExpand(topicKey);
-            },
-            borderRadius: BorderRadius.circular(4),
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(hasSelection ? 10 : 12, 7, 10, 7),
-              child: Row(
-                children: [
-                  // 语义图标：对话气泡代表话题
-                  Icon(Icons.chat_bubble_outline, size: 15, color: const Color(0xFF7E57C2)),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(topic.name, style: TextStyle(fontSize: 13, color: Colors.grey[700]), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                  if (topic.isCurrent) _buildCurrentTag(small: true),
-                  if (hasSelection) _buildCompactBadge(selectedCount),
-                  if (isLoading)
-                    SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.grey[400]))
-                  else ...[
-                    Text('${topic.isLoaded ? topic.rounds.length : topic.roundCount}', style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-                    const SizedBox(width: 4),
-                    Icon(isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 16, color: Colors.grey[400]),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded && topic.isLoaded)
-            Padding(
-              padding: const EdgeInsets.only(left: 14),
-              child: Column(children: topic.rounds.asMap().entries.map((e) => _buildCompactRound(assistant, topic, e.value, e.key == topic.rounds.length - 1, primary)).toList()),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCompactRound(_AssistantNode assistant, _TopicNode topic, _RoundNode round, bool isLast, Color primary) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final isExpanded = _expandedRounds.contains(roundKey);
-    final isQuestionSelected = _selections['$roundKey:q'] == true;
-    final selectedReplyCount = round.replies.where((r) => _selections['$roundKey:${r.id}'] == true).length;
-    final isCurrent = topic.isCurrent && round.index == widget.currentRoundIndex;
-    final hasSelection = isQuestionSelected || selectedReplyCount > 0;
-
-    return Container(
-      margin: EdgeInsets.only(bottom: isLast ? 4 : 2),
-      decoration: BoxDecoration(
-        color: hasSelection ? _selectedColor.withAlpha(6) : null,
+        color: color.withAlpha(15),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => _toggleRoundExpand(roundKey),
-            borderRadius: BorderRadius.circular(4),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Row(
-                children: [
-                  _buildCheckbox(isQuestionSelected, () => _toggleRound(assistant.id, topic.id, round), small: true),
-                  const SizedBox(width: 8),
-                  // 语义图标：问号代表问题
-                  Icon(Icons.help_outline, size: 14, color: const Color(0xFF42A5F5)),
-                  const SizedBox(width: 6),
-                  Text('Q${round.index + 1}', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: hasSelection ? _selectedColor : Colors.grey[600])),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(round.question, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: Colors.grey[500]))),
-                  if (isCurrent) _buildCurrentTag(small: true),
-                  if (selectedReplyCount > 0) Text('$selectedReplyCount/${round.replies.length}', style: TextStyle(fontSize: 10, color: _selectedColor)),
-                  const SizedBox(width: 4),
-                  Icon(isExpanded ? Icons.expand_less : Icons.expand_more, size: 16, color: Colors.grey[400]),
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded)
-            Padding(
-              padding: const EdgeInsets.only(left: 26, bottom: 4),
-              child: Column(children: round.replies.asMap().entries.map((e) => _buildCompactReply(assistant, topic, round, e.value, e.key == round.replies.length - 1, primary)).toList()),
-            ),
-        ],
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w500),
       ),
-    );
-  }
-
-  Widget _buildCompactReply(_AssistantNode assistant, _TopicNode topic, _RoundNode round, _ReplyNode reply, bool isLast, Color primary) {
-    final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-    final replyKey = '$roundKey:${reply.id}';
-    final isSelected = _selections[replyKey] == true;
-    final isContentExpanded = _expandedReplies.contains(replyKey);
-
-    return Container(
-      margin: EdgeInsets.only(bottom: isLast ? 0 : 2),
-      child: InkWell(
-        onTap: () => _toggleReplyExpand(replyKey),
-        borderRadius: BorderRadius.circular(4),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-          decoration: BoxDecoration(
-            color: isSelected ? _selectedColor.withAlpha(10) : null,
-            borderRadius: BorderRadius.circular(4),
-            border: reply.isMainline && !isSelected ? Border.all(color: _mainlineColor.withAlpha(60)) : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  _buildCheckbox(isSelected, () => _toggleReply(assistant.id, topic.id, round, reply), small: true),
-                  const SizedBox(width: 6),
-                  // 语义图标：灯泡代表AI回答
-                  Icon(Icons.lightbulb_outline, size: 12, color: reply.isMainline ? _mainlineColor : const Color(0xFF26A69A)),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text(reply.modelName, style: TextStyle(fontSize: 11, color: isSelected ? _selectedColor : Colors.grey[600]))),
-                  if (reply.isMainline) Text('★', style: TextStyle(fontSize: 10, color: _mainlineColor)),
-                  const SizedBox(width: 4),
-                  Text(_formatChars(reply.charCount), style: TextStyle(fontSize: 10, color: Colors.grey[400])),
-                  const SizedBox(width: 4),
-                  Icon(isContentExpanded ? Icons.expand_less : Icons.expand_more, size: 14, color: Colors.grey[400]),
-                ],
-              ),
-              _buildReplyContent(reply, isContentExpanded, onCollapse: () => _toggleReplyExpand(replyKey)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 简约版选中数量标记
-  Widget _buildCompactBadge(int count) {
-    return Container(
-      margin: const EdgeInsets.only(right: 6),
-      child: Text('✓$count', style: TextStyle(fontSize: 11, color: _selectedColor, fontWeight: FontWeight.w500)),
     );
   }
 
@@ -1488,71 +1120,13 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   // 共用的辅助组件
   // ========================================
 
-  Widget _buildSelectionBar(double width, double height) {
-    return Container(
-      width: width,
-      height: height,
-      margin: const EdgeInsets.only(right: 10),
-      decoration: BoxDecoration(color: _selectedColor, borderRadius: BorderRadius.circular(width / 2)),
-    );
-  }
-
-  Widget _buildCurrentTag({bool small = false}) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: small ? 5 : 8, vertical: small ? 2 : 3),
-      margin: const EdgeInsets.only(right: 8),
-      decoration: BoxDecoration(
-        color: _currentColor.withAlpha(20),
-        borderRadius: BorderRadius.circular(small ? 4 : 6),
-        border: Border.all(color: _currentColor.withAlpha(60)),
-      ),
-      child: Text('当前', style: TextStyle(fontSize: small ? 9 : 10, color: _currentColor, fontWeight: FontWeight.w500)),
-    );
-  }
-
-  Widget _buildSelectionBadge(int count, {bool small = false}) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: small ? 5 : 8, vertical: small ? 2 : 3),
-      margin: const EdgeInsets.only(right: 8),
-      decoration: BoxDecoration(color: _selectedColor.withAlpha(20), borderRadius: BorderRadius.circular(small ? 8 : 10)),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.check_circle, size: small ? 10 : 12, color: _selectedColor),
-          SizedBox(width: small ? 3 : 4),
-          Text('$count', style: TextStyle(fontSize: small ? 10 : 11, color: _selectedColor, fontWeight: FontWeight.w600)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRatioTag(String ratio) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      margin: const EdgeInsets.only(right: 6),
-      decoration: BoxDecoration(color: _selectedColor.withAlpha(20), borderRadius: BorderRadius.circular(8)),
-      child: Text(ratio, style: TextStyle(fontSize: 10, color: _selectedColor, fontWeight: FontWeight.w600)),
-    );
-  }
-
-  Widget _buildMainlineTag() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-      margin: const EdgeInsets.only(right: 6),
-      decoration: BoxDecoration(color: _mainlineColor.withAlpha(25), borderRadius: BorderRadius.circular(4), border: Border.all(color: _mainlineColor.withAlpha(60))),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.star, size: 10, color: _mainlineColor),
-          SizedBox(width: 3),
-          Text('主线', style: TextStyle(fontSize: 9, color: _mainlineColor, fontWeight: FontWeight.w600)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCheckbox(bool isSelected, VoidCallback onTap, {bool small = false}) {
+  Widget _buildCheckbox(bool isSelected, VoidCallback onTap, {bool small = false, bool subtle = false}) {
     final size = small ? 16.0 : 18.0;
+    // subtle 模式：未选中时更淡，降低视觉重量
+    final borderColor = isSelected
+        ? _selectedColor
+        : (subtle ? Colors.grey[300]! : Colors.grey[400]!);
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1561,7 +1135,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
         decoration: BoxDecoration(
           color: isSelected ? _selectedColor : Colors.transparent,
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: isSelected ? _selectedColor : Colors.grey[400]!, width: 1.5),
+          border: Border.all(color: borderColor, width: subtle && !isSelected ? 1.0 : 1.5),
         ),
         child: isSelected ? Icon(Icons.check, size: size - 4, color: Colors.white) : null,
       ),
@@ -1571,11 +1145,13 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   Widget _buildReplyContent(_ReplyNode reply, bool isExpanded, {VoidCallback? onCollapse}) {
     // 清理内容：跳过开头的空行和标题行
     final cleanedContent = _cleanReplyContent(reply.content);
+    // 获取前2行有效内容（跳过空行）
+    final previewContent = _getPreviewLines(cleanedContent, 2);
 
     if (!isExpanded) {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-        child: Text(cleanedContent, maxLines: 4, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: Colors.grey[500], height: 1.4)),
+        padding: const EdgeInsets.only(left: 10, right: 10, top: 2),
+        child: Text(previewContent, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: Colors.grey[500], height: 1.3)),
       );
     }
     return GestureDetector(
@@ -1610,28 +1186,93 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     return lines.sublist(startIndex).join('\n').trim();
   }
 
-  // ========================================
-  // 辅助方法：计算选中数量
-  // ========================================
+  /// 获取预览行：跳过空行，取前 N 行有效内容
+  String _getPreviewLines(String content, int lineCount) {
+    final lines = content.split('\n');
+    final validLines = <String>[];
 
-  int _countAssistantSelections(_AssistantNode assistant) {
-    int count = 0;
-    for (final topic in assistant.topics) {
-      count += _countTopicSelections(assistant, topic);
-    }
-    return count;
-  }
-
-  int _countTopicSelections(_AssistantNode assistant, _TopicNode topic) {
-    int count = 0;
-    for (final round in topic.rounds) {
-      final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
-      if (_selections['$roundKey:q'] == true) count++;
-      for (var reply in round.replies) {
-        if (_selections['$roundKey:${reply.id}'] == true) count++;
+    for (final line in lines) {
+      if (line.trim().isNotEmpty) {
+        validLines.add(line);
+        if (validLines.length >= lineCount) break;
       }
     }
-    return count;
+
+    return validLines.join('\n');
+  }
+
+  // ========================================
+  // 辅助方法：计算选中数量和字符数
+  // ========================================
+
+  /// 计算助手下的选中统计 (选中数, 总数, 选中字符数)
+  ({int selected, int total, int chars}) _countAssistantStats(_AssistantNode assistant) {
+    int selected = 0;
+    int total = 0;
+    int chars = 0;
+    for (final topic in assistant.topics) {
+      final stats = _countTopicStats(assistant, topic);
+      selected += stats.selected;
+      total += stats.total;
+      chars += stats.chars;
+    }
+    return (selected: selected, total: total, chars: chars);
+  }
+
+  /// 计算话题下的选中统计 (选中数, 总数, 选中字符数)
+  ({int selected, int total, int chars}) _countTopicStats(_AssistantNode assistant, _TopicNode topic) {
+    int selected = 0;
+    int total = 0;
+    int chars = 0;
+    for (final round in topic.rounds) {
+      final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
+      // 问题
+      if (round.question.isNotEmpty) {
+        total++;
+        if (_selections['$roundKey:q'] == true) {
+          selected++;
+          chars += round.question.length;
+        }
+      }
+      // 回复
+      for (var reply in round.replies) {
+        total++;
+        if (_selections['$roundKey:${reply.id}'] == true) {
+          selected++;
+          chars += reply.charCount;
+        }
+      }
+    }
+    return (selected: selected, total: total, chars: chars);
+  }
+
+  /// 构建选中状态标签（全选 ✓ / 字符数）
+  Widget _buildSelectionLabel(({int selected, int total, int chars}) stats, {bool small = false}) {
+    if (stats.selected == 0) return const SizedBox.shrink();
+
+    final isFullySelected = stats.selected == stats.total && stats.total > 0;
+    final fontSize = small ? 10.0 : 11.0;
+
+    if (isFullySelected) {
+      // 全选：显示 ✓ 图标 + 字符数
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.check_circle, size: fontSize + 2, color: _selectedColor),
+          const SizedBox(width: 3),
+          Text(
+            _formatChars(stats.chars),
+            style: TextStyle(fontSize: fontSize, color: _selectedColor, fontWeight: FontWeight.w500),
+          ),
+        ],
+      );
+    } else {
+      // 部分选：只显示字符数
+      return Text(
+        _formatChars(stats.chars),
+        style: TextStyle(fontSize: fontSize, color: _selectedColor, fontWeight: FontWeight.w500),
+      );
+    }
   }
 
   // ========================================

@@ -104,6 +104,45 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
+  /// 【快速定位】滚动到指定轮次的 Tab 栏顶部
+  /// 让 Tab 栏正好位于 AppBar 下方，用户可以直接看到回复内容
+  void _scrollToTabTop(int groupIndex) {
+    final tabKey = _inlineTabKeys[groupIndex];
+    if (tabKey?.currentContext == null) {
+      // Tab 还未渲染，回退到轮次顶部
+      _scrollToGroupTop(groupIndex);
+      return;
+    }
+
+    final RenderBox? tabBox = tabKey!.currentContext!.findRenderObject() as RenderBox?;
+    if (tabBox == null || !tabBox.hasSize) {
+      _scrollToGroupTop(groupIndex);
+      return;
+    }
+
+    // 获取 Tab 栏在屏幕上的当前位置
+    final tabPosition = tabBox.localToGlobal(Offset.zero);
+
+    // 计算目标位置：让 Tab 栏顶部位于 AppBar 下方
+    // viewportTop = 状态栏高度 + AppBar 高度
+    final viewportTop = MediaQuery.of(context).padding.top + kToolbarHeight;
+
+    // 需要滚动的距离 = Tab 当前位置 - 目标位置
+    final scrollDelta = tabPosition.dy - viewportTop;
+
+    // 计算新的滚动位置
+    final targetOffset = (_scrollController.offset + scrollDelta).clamp(
+      0.0,
+      _scrollController.position.maxScrollExtent,
+    );
+
+    _scrollController.animateTo(
+      targetOffset,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -894,11 +933,13 @@ $modelResponses''';
               final reply = assistantReplies[i] as Map<String, dynamic>;
               final model = reply['model'] as Map<String, dynamic>?;
               final modelName = model?['name'] as String? ?? 'Assistant';
+              final isMainline = reply['useful'] as bool? ?? false;
               cardInfoList.add({
                 'type': 'assistant',
                 'name': modelName,
                 'index': aiAnalysisCount + i,
                 'data': reply,
+                'isMainline': isMainline,
               });
             }
 
@@ -952,6 +993,7 @@ $modelResponses''';
                                     final cardIndex = entry.key;
                                     final info = entry.value;
                                     final isSelected = cardIndex == currentPage;
+                                    final isMainline = info['isMainline'] as bool? ?? false;
 
                                     return _AnimatedModelTab(
                                       modelName: info['name'] as String,
@@ -961,6 +1003,7 @@ $modelResponses''';
                                       modelColor: info['type'] == 'analysis'
                                           ? const Color(0xFF10B981)
                                           : _getModelColor(info['name'] as String),
+                                      isMainline: isMainline,
                                       onTap: () {
                                         // 【性能优化】直接更新 ValueNotifier，不触发整页 setState
                                         _getCardPageNotifier(currentVisibleGroup).value = cardIndex;
@@ -1420,11 +1463,13 @@ $modelResponses''';
       final reply = assistantReplies[i] as Map<String, dynamic>;
       final model = reply['model'] as Map<String, dynamic>?;
       final modelName = model?['name'] as String? ?? 'Assistant';
+      final isMainline = reply['useful'] as bool? ?? false;
       cardInfoList.add({
         'type': 'assistant',
         'name': modelName,
         'index': aiAnalysisCount + i,
         'data': reply,
+        'isMainline': isMainline,
       });
     }
 
@@ -1521,6 +1566,7 @@ $modelResponses''';
                     final info = entry.value;
                     final isSelected = cardIndex == currentPage;
                     final tabKey = 'tab_${groupIndex}_$cardIndex';
+                    final isMainline = info['isMainline'] as bool? ?? false;
 
                     // 确保每个 Tab 有唯一的 GlobalKey
                     _tabKeys[tabKey] ??= GlobalKey();
@@ -1534,11 +1580,12 @@ $modelResponses''';
                       modelColor: info['type'] == 'analysis'
                           ? const Color(0xFF10B981)
                           : _getModelColor(info['name'] as String),
+                      isMainline: isMainline,
                       onTap: () {
                         // 【性能优化】直接更新 ValueNotifier，不触发整页 setState
                         pageNotifier.value = cardIndex;
-                        // 【UX优化】切换模型回复后滚动到轮次顶部，方便从头阅读
-                        _scrollToGroupTop(groupIndex);
+                        // 【UX优化】切换模型回复后滚动到 Tab 栏顶部，直接看到回复内容
+                        _scrollToTabTop(groupIndex);
                       },
                     );
                   }).toList(),
@@ -1649,8 +1696,8 @@ $modelResponses''';
                 _scrollTabToVisible(groupIndex, newIndex, tabController);
               }
             });
-            // 【UX优化】切换模型回复后滚动到轮次顶部，方便从头阅读
-            _scrollToGroupTop(groupIndex);
+            // 【UX优化】切换模型回复后滚动到 Tab 栏顶部，直接看到回复内容
+            _scrollToTabTop(groupIndex);
           },
           onDoubleTap: () {
             // 【快速定位】双击内容区域滚动到本轮次顶部
@@ -2204,6 +2251,7 @@ class _AnimatedModelTab extends StatelessWidget {
   final bool isAnalysis;
   final bool isDark;
   final Color modelColor;
+  final bool isMainline;
   final VoidCallback? onTap;
 
   const _AnimatedModelTab({
@@ -2213,6 +2261,7 @@ class _AnimatedModelTab extends StatelessWidget {
     required this.isAnalysis,
     required this.isDark,
     required this.modelColor,
+    this.isMainline = false,
     this.onTap,
   });
 
@@ -2229,18 +2278,34 @@ class _AnimatedModelTab extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 文字（选中时稍微放大）
-            AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-              style: TextStyle(
-                fontSize: isSelected ? 15 : 14,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                color: isSelected
-                    ? modelColor
-                    : (isDark ? Colors.grey[500] : Colors.grey[600]),
-              ),
-              child: Text(modelName),
+            // 文字（选中时稍微放大）+ 主线标记
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  style: TextStyle(
+                    fontSize: isSelected ? 15 : 14,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                    color: isSelected
+                        ? modelColor
+                        : (isDark ? Colors.grey[500] : Colors.grey[600]),
+                  ),
+                  child: Text(modelName),
+                ),
+                // 主线标记：金色星号
+                if (isMainline) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.star,
+                    size: 12,
+                    color: isSelected
+                        ? const Color(0xFFFFB800)
+                        : (isDark ? const Color(0xFFB8860B) : const Color(0xFFDAA520)),
+                  ),
+                ],
+              ],
             ),
             const SizedBox(height: 4),
             // 底部指示条
