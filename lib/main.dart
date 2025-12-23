@@ -9,6 +9,8 @@ import 'services/repository_provider.dart';
 import 'services/ai_provider_service.dart';
 import 'services/version_service.dart';
 import 'services/mcp/mcp_server_service.dart';
+import 'services/tts_cache_migration.dart';
+import 'services/topic_index_service.dart';
 import 'utils/platform_utils.dart';
 
 import 'package:provider/provider.dart';
@@ -31,6 +33,10 @@ void main() async {
   // 崩溃恢复：清理未完成的导入版本
   await VersionService.instance.recoverFromCrash();
 
+  // 初始化话题索引服务（常驻内存，加速 Context 编辑器）
+  // 必须在 RepositoryProvider 之后初始化
+  await TopicIndexService.instance.init();
+
   // 初始化缓存管理器（后续会迁移到 Isar）
   await AnalysisCacheManager().init();
 
@@ -41,6 +47,9 @@ void main() async {
   if (PlatformUtils.isDesktop) {
     await MCPServerService.instance.init();
   }
+
+  // TTS 缓存迁移检查
+  await TtsCacheMigration.migrateIfNeeded();
 
   // 检查是否需要显示引导页
   final showOnboarding = await OnboardingScreen.shouldShowOnboarding();

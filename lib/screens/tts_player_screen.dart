@@ -94,8 +94,18 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
             ),
             centerTitle: true,
             actions: [
+              // 失败段落重试按钮
+              if (tts.hasFailedSegments)
+                IconButton(
+                  icon: Badge(
+                    label: Text('${tts.failedSegmentCount}'),
+                    child: const Icon(Icons.refresh, color: Colors.red),
+                  ),
+                  onPressed: () => tts.retryAllFailedSegments(),
+                  tooltip: '重试失败的段落',
+                ),
               // 下载进度指示器
-              if (session != null && !session.isFullyDownloaded)
+              if (session != null && !session.isFullyDownloaded && !tts.hasFailedSegments)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: Center(
@@ -181,7 +191,7 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
                     shape: BoxShape.circle,
                   ),
                   child: Center(
-                    child: _buildStatusIcon(status, index, isCurrent),
+                    child: _buildStatusIcon(status, index, isCurrent, tts),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -243,7 +253,7 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
     }
   }
 
-  Widget _buildStatusIcon(SegmentStatus status, int index, bool isCurrent) {
+  Widget _buildStatusIcon(SegmentStatus status, int index, bool isCurrent, TtsProvider tts) {
     if (isCurrent) {
       return const Icon(Icons.play_arrow, color: Colors.white, size: 18);
     }
@@ -268,7 +278,11 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
           ),
         );
       case SegmentStatus.error:
-        return Icon(Icons.error_outline, color: Colors.red[700], size: 16);
+        // 错误状态：显示刷新图标，可点击重试
+        return GestureDetector(
+          onTap: () => tts.retrySegment(index),
+          child: Icon(Icons.refresh, color: Colors.red[700], size: 18),
+        );
       case SegmentStatus.pending:
         return Text(
           '${index + 1}',
@@ -543,7 +557,7 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
                             shape: BoxShape.circle,
                           ),
                           child: Center(
-                            child: _buildStatusIcon(segment.status, index, isCurrent),
+                            child: _buildStatusIcon(segment.status, index, isCurrent, tts),
                           ),
                         ),
                         title: Text(
@@ -585,14 +599,16 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                leading: const Icon(Icons.refresh),
-                title: const Text('重新下载'),
-                onTap: () {
-                  Navigator.pop(context);
-                  // TODO: 实现重新下载
-                },
-              ),
+              // 重试失败段落（如果有失败的）
+              if (tts.hasFailedSegments)
+                ListTile(
+                  leading: const Icon(Icons.refresh, color: Colors.red),
+                  title: Text('重试失败的段落 (${tts.failedSegmentCount})'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    tts.retryAllFailedSegments();
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.delete_outline),
                 title: const Text('清除缓存'),

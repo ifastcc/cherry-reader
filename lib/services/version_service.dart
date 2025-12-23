@@ -15,6 +15,7 @@ import '../models/isar/message_block_entity.dart';
 import '../models/isar/file_entity.dart';
 import '../models/isar/topic_embedding_entity.dart';
 import 'isar_database.dart';
+import 'topic_index_service.dart';
 
 /// 版本管理服务
 ///
@@ -296,6 +297,9 @@ class VersionService {
     await prefs.setString(_activeVersionKey, versionId);
 
     debugPrint('✅ 已切换到版本: $versionId');
+
+    // 重建话题索引（异步，不阻塞）
+    TopicIndexService.instance.rebuild();
 
     // 清理旧版本
     await cleanupOldVersions();

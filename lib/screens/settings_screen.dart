@@ -80,6 +80,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _previewingVoiceName;
   final AudioPlayer _previewPlayer = AudioPlayer();
 
+  // TTS 自动保存（防抖）
+  Timer? _ttsSaveTimer;
+
   bool _isLoading = true;
   bool _obscureWebdavPassword = true;
 
@@ -101,6 +104,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    // 取消防抖 Timer 并立即保存 TTS 设置
+    _ttsSaveTimer?.cancel();
+    _saveTtsSettingsSync();
+
     _apiUrlController.dispose();
     _apiKeyController.dispose();
     _modelController.dispose();
@@ -116,6 +123,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _azureRegionController.dispose();
     _previewPlayer.dispose();
     super.dispose();
+  }
+
+  /// TTS 设置变化时调用（防抖保存）
+  void _onTtsSettingsChanged() {
+    _ttsSaveTimer?.cancel();
+    _ttsSaveTimer = Timer(const Duration(milliseconds: 500), () {
+      _saveTtsSettingsAsync();
+    });
+  }
+
+  /// 异步保存 TTS 设置
+  Future<void> _saveTtsSettingsAsync() async {
+    // 收集当前的 API Keys
+    final keys = _azureKeyControllers
+        .map((c) => c.text.trim())
+        .where((text) => text.isNotEmpty)
+        .toList();
+
+    _ttsSettings.azureApiKeys = keys;
+    if (keys.isNotEmpty) {
+      _ttsSettings.azureApiKey = keys.first;
+    }
+    _ttsSettings.azureRegion = _azureRegionController.text.trim();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+
+    // 通知 TtsProvider
+    if (mounted) {
+      final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+      await ttsProvider.reloadSettings();
+    }
+
+    debugPrint('🔐 TTS 设置已自动保存');
+  }
+
+  /// 同步保存 TTS 设置（在 dispose 中使用）
+  void _saveTtsSettingsSync() {
+    final keys = _azureKeyControllers
+        .map((c) => c.text.trim())
+        .where((text) => text.isNotEmpty)
+        .toList();
+
+    _ttsSettings.azureApiKeys = keys;
+    if (keys.isNotEmpty) {
+      _ttsSettings.azureApiKey = keys.first;
+    }
+    _ttsSettings.azureRegion = _azureRegionController.text.trim();
+
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+    });
   }
 
   /// 加载设置
@@ -1503,6 +1562,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 border: OutlineInputBorder(),
                 helperText: '例如: eastus, japaneast, southeastasia',
               ),
+              onChanged: (_) => _onTtsSettingsChanged(),
             ),
             const SizedBox(height: 16),
 
@@ -1526,11 +1586,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           labelText: 'Key ${index + 1}${isCurrent ? " (当前使用)" : ""}',
                           hintText: 'Enter Key',
                           prefixIcon: Icon(
-                            Icons.vpn_key, 
+                            Icons.vpn_key,
                             color: isCurrent ? Colors.green : null
                           ),
                           border: const OutlineInputBorder(),
                         ),
+                        onChanged: (_) => _onTtsSettingsChanged(),
                       ),
                     ),
                     const SizedBox(width: 8),

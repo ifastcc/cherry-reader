@@ -8,8 +8,9 @@ import '../models/tts_settings.dart';
 import '../models/tts_segment.dart';
 import '../models/tts_play_session.dart';
 import '../services/ast_tts_converter.dart';
-import '../services/tts_segment_cache.dart';
+import '../services/tts_session_storage.dart';
 import '../services/tts_segment_downloader.dart';
+import '../utils/audio_cache_key.dart';
 
 enum TtsState { stopped, playing, paused, loading }
 
@@ -21,7 +22,7 @@ class TtsProvider extends ChangeNotifier {
   // 新的分段播放系统
   TtsPlaySession? _currentSession;
   AstBasedTtsConverter? _astConverter;
-  final TtsSegmentCache _cache = TtsSegmentCache();
+  final TtsSessionStorage _sessionStorage = TtsSessionStorage();
   TtsSegmentDownloader? _downloader;
 
   // 播放器
@@ -90,7 +91,7 @@ class TtsProvider extends ChangeNotifier {
               seg.index,
               seg.copyWith(duration: d),
             );
-            _cache.saveSessionMeta(_currentSession!);
+            _sessionStorage.saveSession(_currentSession!);
           }
         }
         notifyListeners();
@@ -141,7 +142,7 @@ class TtsProvider extends ChangeNotifier {
     if (_currentSession!.hasNext) {
       _currentSession!.currentIndex++;
       _currentSession!.lastPlayedIndex = _currentSession!.currentIndex;
-      await _cache.saveSessionMeta(_currentSession!);
+      await _sessionStorage.saveSession(_currentSession!);
       notifyListeners();
       await _playCurrentSegment();
     } else {
@@ -149,7 +150,7 @@ class TtsProvider extends ChangeNotifier {
       debugPrint('🎵 全部段落播放完成');
       _currentSession!.currentIndex = 0;
       _currentSession!.lastPlayedIndex = 0;
-      await _cache.saveSessionMeta(_currentSession!);
+      await _sessionStorage.saveSession(_currentSession!);
       _currentPosition = Duration.zero;
       _totalDuration = Duration.zero;
       notifyListeners();
@@ -251,17 +252,17 @@ class TtsProvider extends ChangeNotifier {
       _playerState = TtsState.loading;
       notifyListeners();
 
-      // 生成内容 hash
-      final contentHash = TtsPlaySession.generateContentHash(text);
+      // 生成内容 hash（16 位）
+      final contentHash = AudioCacheKey.generateContentHash(text);
       final settings = TtsSessionSettings(
         voice: _settings.defaultVoiceName,
         rate: _playbackSpeed,
         style: 'general',
       );
 
-      // 检查缓存
-      var session = await _cache.getValidSession(
-        messageId: messageId,
+      // 检查会话缓存
+      var session = await _sessionStorage.getValidSession(
+        sessionId: messageId,
         contentHash: contentHash,
         settings: settings,
       );
@@ -300,7 +301,7 @@ class TtsProvider extends ChangeNotifier {
           segments: segments,
         );
 
-        await _cache.createSession(session);
+        await _sessionStorage.saveSession(session);
       } else {
         // 恢复上次播放位置
         session.currentIndex = session.lastPlayedIndex;
@@ -415,9 +416,9 @@ class TtsProvider extends ChangeNotifier {
       await _audioPlayer.play();
     } catch (e) {
       debugPrint('🎵 播放失败: $e');
-      // 可能是缓存文件损坏，删除并重试
+      // 可能是缓存文件损坏，删除会话重试
       try {
-        await _cache.clearMessageCache(_currentSession!.messageId);
+        await _sessionStorage.deleteSession(_currentSession!.messageId);
       } catch (_) {}
       _playerState = TtsState.stopped;
       notifyListeners();
@@ -460,7 +461,7 @@ class TtsProvider extends ChangeNotifier {
     await _audioPlayer.stop();
     _currentSession!.currentIndex++;
     _currentSession!.lastPlayedIndex = _currentSession!.currentIndex;
-    await _cache.saveSessionMeta(_currentSession!);
+    await _sessionStorage.saveSession(_currentSession!);
     notifyListeners();
     await _waitAndPlayCurrentSegment();
   }
@@ -472,7 +473,7 @@ class TtsProvider extends ChangeNotifier {
     await _audioPlayer.stop();
     _currentSession!.currentIndex--;
     _currentSession!.lastPlayedIndex = _currentSession!.currentIndex;
-    await _cache.saveSessionMeta(_currentSession!);
+    await _sessionStorage.saveSession(_currentSession!);
     notifyListeners();
     await _waitAndPlayCurrentSegment();
   }
@@ -485,7 +486,7 @@ class TtsProvider extends ChangeNotifier {
     await _audioPlayer.stop();
     _currentSession!.currentIndex = index;
     _currentSession!.lastPlayedIndex = index;
-    await _cache.saveSessionMeta(_currentSession!);
+    await _sessionStorage.saveSession(_currentSession!);
 
     // 如果点击的段落还没下载，优先下载它
     final segment = _currentSession!.segments[index];
@@ -586,6 +587,83 @@ class TtsProvider extends ChangeNotifier {
     _astConverter = null; // 重新创建转换器
     await _saveSettings();
     notifyListeners();
+  }
+
+  // ============ 重试 API ============
+
+  /// 获取失败的段落数量
+  int get failedSegmentCount {
+    if (_currentSession == null) return 0;
+    return _currentSession!.segments
+        .where((s) => s.status == SegmentStatus.error)
+        .length;
+  }
+
+  /// 是否有失败的段落
+  bool get hasFailedSegments => failedSegmentCount > 0;
+
+  /// 重试单个失败的段落
+  Future<void> retrySegment(int segmentIndex) async {
+    if (_currentSession == null) return;
+    if (segmentIndex < 0 || segmentIndex >= _currentSession!.segments.length) return;
+
+    final segment = _currentSession!.segments[segmentIndex];
+    if (segment.status != SegmentStatus.error) return;
+
+    debugPrint('🎵 重试段落 $segmentIndex');
+
+    // 重置状态为 pending
+    _currentSession!.updateSegment(
+      segmentIndex,
+      segment.copyWith(
+        status: SegmentStatus.pending,
+        retryCount: 0,
+        errorMessage: null,
+      ),
+    );
+    notifyListeners();
+
+    // 重新下载
+    final downloader = _getDownloader();
+    await downloader.downloadSingleSegment(
+      session: _currentSession!,
+      segmentIndex: segmentIndex,
+      voiceName: _settings.defaultVoiceName,
+      rate: _playbackSpeed,
+    );
+  }
+
+  /// 重试所有失败的段落
+  Future<void> retryAllFailedSegments() async {
+    if (_currentSession == null) return;
+
+    final failedIndices = <int>[];
+    for (int i = 0; i < _currentSession!.segments.length; i++) {
+      if (_currentSession!.segments[i].status == SegmentStatus.error) {
+        failedIndices.add(i);
+      }
+    }
+
+    if (failedIndices.isEmpty) return;
+
+    debugPrint('🎵 重试 ${failedIndices.length} 个失败段落');
+
+    // 重置所有失败段落的状态
+    for (final index in failedIndices) {
+      final segment = _currentSession!.segments[index];
+      _currentSession!.updateSegment(
+        index,
+        segment.copyWith(
+          status: SegmentStatus.pending,
+          retryCount: 0,
+          errorMessage: null,
+        ),
+      );
+    }
+    notifyListeners();
+
+    // 重新下载
+    _startDownloadingAllSegments();
   }
 
   @override

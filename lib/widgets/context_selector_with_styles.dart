@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'context_selector.dart' show TopicSummary;
+import '../services/topic_index_service.dart';
 
 /// UI 风格枚举（仅保留语义图标风格）
 enum ContextStyleVariant {
@@ -7,6 +8,8 @@ enum ContextStyleVariant {
 }
 
 /// Context 选择器 - 混合风格（卡片质感 + 极简连接线 + 层级颜色）
+///
+/// 优化：使用 TopicIndexService 常驻索引，打开即显示
 class ContextSelectorWithStyles extends StatefulWidget {
   final Map<String, dynamic>? contextData;
   final String contextSnapshot;
@@ -17,6 +20,7 @@ class ContextSelectorWithStyles extends StatefulWidget {
   final String? currentAssistantName;
   final Function(String newSnapshot, String? contextDataJson)? onContextChanged;
   final VoidCallback? onClear;
+  /// 备用：如果 TopicIndexService 未初始化时使用
   final Future<List<TopicSummary>> Function(String? assistantId)? onLoadTopics;
   final Future<Map<String, dynamic>?> Function(String topicId)? onLoadTopicDetail;
 
@@ -65,8 +69,14 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   // ===== 加载状态 =====
   bool _isLoadingTopics = false;
   bool _hasLoadedTopics = false;
-  List<TopicSummary>? _availableTopics;
   final Set<String> _loadingTopicIds = {};
+  final Set<String> _loadingReplyIds = {};  // 正在加载完整内容的回复
+
+  // ===== 完整内容缓存（按需加载）=====
+  final Map<String, String> _fullContentCache = {};
+
+  // 索引服务引用
+  final _indexService = TopicIndexService.instance;
 
   final ScrollController _scrollController = ScrollController();
 
@@ -77,10 +87,146 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   void initState() {
     super.initState();
     _parseContextData();
+    _initFromIndexService();
+  }
+
+  /// 从索引服务初始化（同步，无闪烁）
+  void _initFromIndexService() {
+    // 如果索引服务已初始化，直接使用
+    if (_indexService.isInitialized) {
+      _buildFromIndexService();
+      return;
+    }
+
+    // 索引服务未初始化，用当前话题数据先展示
+    if (widget.currentTopicId != null && _currentTopicRounds.isNotEmpty) {
+      _initCurrentTopicOnly();
+      return;
+    }
+
+    // 都没有，回退到传统加载方式
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (widget.onLoadTopics != null) {
         _loadTopics();
       }
+    });
+  }
+
+  /// 从索引服务构建视图（同步）
+  void _buildFromIndexService() {
+    _assistants.clear();
+
+    final groupedTopics = _indexService.topicsGroupedByAssistant;
+    final currentAssistantId = widget.currentAssistantId;
+    final currentTopicId = widget.currentTopicId;
+
+    for (final entry in groupedTopics.entries) {
+      final assistantId = entry.key;
+      final topics = entry.value;
+      final assistantInfo = _indexService.getAssistant(assistantId);
+      final isCurrentAssistant = assistantId == currentAssistantId;
+
+      final topicNodes = <_TopicNode>[];
+      for (final topic in topics) {
+        final isCurrentTopic = topic.id == currentTopicId;
+
+        // 如果是当前话题，使用传入的 contextData 构建轮次
+        List<_RoundNode> rounds;
+        bool isLoaded;
+        if (isCurrentTopic && _currentTopicRounds.isNotEmpty) {
+          rounds = _currentTopicRounds;
+          isLoaded = true;
+        } else if (topic.isRoundsLoaded) {
+          // 从索引服务获取轮次（预览数据）
+          rounds = topic.rounds.map((r) => _RoundNode(
+            index: r.index,
+            question: r.questionPreview,
+            replies: r.replies.map((reply) => _ReplyNode(
+              id: reply.id,
+              modelName: reply.modelName,
+              content: reply.contentPreview,  // 只有预览
+              isMainline: reply.isMainline,
+              charCount: reply.charCount,
+            )).toList(),
+          )).toList();
+          isLoaded = true;
+        } else {
+          rounds = [];
+          isLoaded = false;
+        }
+
+        topicNodes.add(_TopicNode(
+          id: topic.id,
+          name: topic.name,
+          isCurrent: isCurrentTopic,
+          rounds: rounds,
+          roundCount: topic.roundCount,
+          isLoaded: isLoaded,
+        ));
+      }
+
+      // 当前话题排在最前
+      topicNodes.sort((a, b) {
+        if (a.isCurrent && !b.isCurrent) return -1;
+        if (!a.isCurrent && b.isCurrent) return 1;
+        return 0;
+      });
+
+      _assistants.add(_AssistantNode(
+        id: assistantId,
+        name: assistantInfo?.name ?? '未知助手',
+        isCurrent: isCurrentAssistant,
+        topics: topicNodes,
+      ));
+    }
+
+    // 当前助手排在最前
+    _assistants.sort((a, b) {
+      if (a.isCurrent && !b.isCurrent) return -1;
+      if (!a.isCurrent && b.isCurrent) return 1;
+      return a.name.compareTo(b.name);
+    });
+
+    _initDefaultExpansion();
+    _initDefaultSelection();
+    _hasLoadedTopics = true;
+
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _notifyChange();
+    });
+  }
+
+  /// 备用：仅用当前话题数据初始化
+  void _initCurrentTopicOnly() {
+    final assistantId = widget.currentAssistantId ?? 'unknown';
+    final assistantName = widget.currentAssistantName ?? '当前助手';
+    final topicId = widget.currentTopicId!;
+    final topicName = widget.currentTopicName ?? '当前话题';
+
+    _assistants.clear();
+    _assistants.add(_AssistantNode(
+      id: assistantId,
+      name: assistantName,
+      isCurrent: true,
+      topics: [
+        _TopicNode(
+          id: topicId,
+          name: topicName,
+          isCurrent: true,
+          rounds: _currentTopicRounds,
+          roundCount: _currentTopicRounds.length,
+          isLoaded: true,
+        ),
+      ],
+    ));
+
+    _initDefaultExpansion();
+    _initDefaultSelection();
+
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _notifyChange();
     });
   }
 
@@ -98,6 +244,10 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
       _parseContextData();
       _initDefaultSelection();
       _initDefaultExpansion();
+      // 通知父组件更新显示
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _notifyChange();
+      });
     }
   }
 
@@ -230,6 +380,10 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     _selections.clear();
 
     final targetIndex = widget.currentRoundIndex;
+    // 检查是否跳过选中问题（单击进入只选回复）
+    final selectQuestion = widget.contextData?['selectQuestionByDefault'] ?? true;
+    // 检查是否只选中指定索引的回复（单击进入只选当前 tab 显示的回复）
+    final selectOnlyReplyIndex = widget.contextData?['selectOnlyReplyIndex'] as int?;
 
     for (final assistant in _assistants) {
       for (final topic in assistant.topics) {
@@ -239,11 +393,23 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
             final round = topic.rounds[roundIdx];
             final roundKey = _getRoundKey(assistant.id, topic.id, round.index);
 
-            if (round.question.isNotEmpty) {
+            // 根据 selectQuestion 标记决定是否选中问题
+            if (selectQuestion && round.question.isNotEmpty) {
               _selections['$roundKey:q'] = true;
             }
-            for (var reply in round.replies) {
-              _selections['$roundKey:${reply.id}'] = true;
+
+            // 根据 selectOnlyReplyIndex 决定选中哪些回复
+            if (selectOnlyReplyIndex != null) {
+              // 只选中指定索引的回复
+              if (selectOnlyReplyIndex < round.replies.length) {
+                final reply = round.replies[selectOnlyReplyIndex];
+                _selections['$roundKey:${reply.id}'] = true;
+              }
+            } else {
+              // 选中所有回复
+              for (var reply in round.replies) {
+                _selections['$roundKey:${reply.id}'] = true;
+              }
             }
           }
         }
@@ -518,7 +684,6 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     try {
       final topics = await widget.onLoadTopics!(null);
       setState(() {
-        _availableTopics = topics;
         _isLoadingTopics = false;
         _hasLoadedTopics = true;
       });
@@ -599,13 +764,48 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     setState(() {});
   }
 
+  /// 加载话题详情（优先使用索引服务）
   Future<void> _loadTopicDetail(String assistantId, _TopicNode topic) async {
-    if (topic.isLoaded || widget.onLoadTopicDetail == null) return;
+    if (topic.isLoaded) return;
     if (_loadingTopicIds.contains(topic.id)) return;
 
     setState(() => _loadingTopicIds.add(topic.id));
 
     try {
+      // 优先使用索引服务
+      if (_indexService.isInitialized) {
+        await _indexService.loadTopicRounds(topic.id);
+        final indexTopic = _indexService.getTopic(topic.id);
+
+        if (indexTopic != null && indexTopic.isRoundsLoaded && mounted) {
+          final rounds = indexTopic.rounds.map((r) => _RoundNode(
+            index: r.index,
+            question: r.questionPreview,
+            replies: r.replies.map((reply) => _ReplyNode(
+              id: reply.id,
+              modelName: reply.modelName,
+              content: reply.contentPreview,
+              isMainline: reply.isMainline,
+              charCount: reply.charCount,
+            )).toList(),
+          )).toList();
+
+          setState(() {
+            topic.rounds.clear();
+            topic.rounds.addAll(rounds);
+            topic.isLoaded = true;
+            _loadingTopicIds.remove(topic.id);
+          });
+          return;
+        }
+      }
+
+      // 回退到传统方式
+      if (widget.onLoadTopicDetail == null) {
+        setState(() => _loadingTopicIds.remove(topic.id));
+        return;
+      }
+
       final detail = await widget.onLoadTopicDetail!(topic.id);
       if (detail != null && mounted) {
         final rounds = _extractRoundsFromData(detail);
@@ -617,8 +817,19 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
         });
       }
     } catch (e) {
-      setState(() => _loadingTopicIds.remove(topic.id));
+      if (mounted) {
+        setState(() => _loadingTopicIds.remove(topic.id));
+      }
     }
+  }
+
+  /// 加载回复完整内容（按需）
+  Future<String> _loadReplyFullContent(String replyId) async {
+    if (_indexService.isInitialized) {
+      return _indexService.getReplyFullContent(replyId);
+    }
+    // 没有索引服务，返回空（UI 应该已经有预览数据）
+    return '';
   }
 
   @override
@@ -1143,8 +1354,12 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   }
 
   Widget _buildReplyContent(_ReplyNode reply, bool isExpanded, {VoidCallback? onCollapse}) {
+    // 优先使用缓存的完整内容，其次使用预览内容
+    final cachedContent = _fullContentCache[reply.id];
+    final displayContent = cachedContent ?? reply.content;
+
     // 清理内容：跳过开头的空行和标题行
-    final cleanedContent = _cleanReplyContent(reply.content);
+    final cleanedContent = _cleanReplyContent(displayContent);
     // 获取前2行有效内容（跳过空行）
     final previewContent = _getPreviewLines(cleanedContent, 2);
 
@@ -1154,14 +1369,36 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
         child: Text(previewContent, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: Colors.grey[500], height: 1.3)),
       );
     }
+
+    // 展开状态：显示完整内容或加载中
+    final isLoading = _loadingReplyIds.contains(reply.id);
+
     return GestureDetector(
       onDoubleTap: onCollapse,
       child: Container(
         constraints: const BoxConstraints(maxHeight: 200),
         padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-        child: SingleChildScrollView(
-          child: SelectableText(cleanedContent, style: TextStyle(fontSize: 11, color: Colors.grey[600], height: 1.5)),
-        ),
+        child: isLoading && cachedContent == null
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.grey[400]),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('加载中...', style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+                    ],
+                  ),
+                ),
+              )
+            : SingleChildScrollView(
+                child: SelectableText(cleanedContent, style: TextStyle(fontSize: 11, color: Colors.grey[600], height: 1.5)),
+              ),
       ),
     );
   }
@@ -1310,13 +1547,50 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   }
 
   void _toggleReplyExpand(String key) {
+    final isExpanding = !_expandedReplies.contains(key);
+
     setState(() {
-      if (_expandedReplies.contains(key)) {
-        _expandedReplies.remove(key);
-      } else {
+      if (isExpanding) {
         _expandedReplies.add(key);
+      } else {
+        _expandedReplies.remove(key);
       }
     });
+
+    // 展开时，按需加载完整内容
+    if (isExpanding) {
+      _loadFullContentIfNeeded(key);
+    }
+  }
+
+  /// 按需加载回复的完整内容
+  Future<void> _loadFullContentIfNeeded(String replyKey) async {
+    // 解析 key 获取 replyId（格式: assistantId:topicId:rN:replyId）
+    final parts = replyKey.split(':');
+    if (parts.length < 4) return;
+    final replyId = parts.last;
+
+    // 已缓存或正在加载，跳过
+    if (_fullContentCache.containsKey(replyId)) return;
+    if (_loadingReplyIds.contains(replyId)) return;
+
+    setState(() => _loadingReplyIds.add(replyId));
+
+    try {
+      final fullContent = await _loadReplyFullContent(replyId);
+      if (fullContent.isNotEmpty && mounted) {
+        setState(() {
+          _fullContentCache[replyId] = fullContent;
+          _loadingReplyIds.remove(replyId);
+        });
+      } else {
+        setState(() => _loadingReplyIds.remove(replyId));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loadingReplyIds.remove(replyId));
+      }
+    }
   }
 
   Widget _buildFooter(Map<String, int> stats, Color primary) {

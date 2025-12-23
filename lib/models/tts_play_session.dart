@@ -29,9 +29,9 @@ class TtsPlaySession {
     this.totalDuration,
   }) : createdAt = createdAt ?? DateTime.now();
 
-  /// 生成内容 hash
+  /// 生成内容 hash（16 位，用于快速判断内容是否变化）
   static String generateContentHash(String text) {
-    return md5.convert(utf8.encode(text)).toString().substring(0, 8);
+    return md5.convert(utf8.encode(text)).toString().substring(0, 16);
   }
 
   /// 从 JSON 创建

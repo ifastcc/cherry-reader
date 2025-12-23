@@ -28,6 +28,30 @@ class TtsSsmlConfig {
   // 换行
   final int lineBreakMs;
 
+  // ========== 句内标点停顿（毫秒，会乘以 rhythmScale）==========
+  /// 是否启用句内标点停顿（逗号、句号等处自动插入停顿）
+  final bool enablePunctuationBreaks;
+
+  // 中文标点停顿
+  final int commaBreakMs;      // 逗号 ，
+  final int enumBreakMs;       // 顿号 、
+  final int semicolonBreakMs;  // 分号 ；
+  final int colonBreakMs;      // 冒号 ：
+  final int periodBreakMs;     // 句号 。
+  final int questionBreakMs;   // 问号 ？
+  final int exclamationBreakMs; // 感叹号 ！
+  final int ellipsisBreakMs;   // 省略号 ……
+  final int dashBreakMs;       // 破折号 ——
+  final int quoteEndBreakMs;   // 引号结束 "』」
+
+  // 英文标点停顿（与中文对应）
+  final int enCommaBreakMs;
+  final int enSemicolonBreakMs;
+  final int enColonBreakMs;
+  final int enPeriodBreakMs;
+  final int enQuestionBreakMs;
+  final int enExclamationBreakMs;
+
   // ========== 语调控制 ==========
   final String h1Pitch;
   final String h2Pitch;
@@ -83,6 +107,24 @@ class TtsSsmlConfig {
     this.hrBreakMs = 1000,
     // 换行
     this.lineBreakMs = 200,
+    // 句内标点停顿（默认启用，模拟自然呼吸节奏）
+    this.enablePunctuationBreaks = true,
+    this.commaBreakMs = 180,       // 逗号：短停顿，喘息点
+    this.enumBreakMs = 120,        // 顿号：更短，并列词项
+    this.semicolonBreakMs = 280,   // 分号：中停顿，分句
+    this.colonBreakMs = 220,       // 冒号：中停顿，引出内容
+    this.periodBreakMs = 450,      // 句号：长停顿，句子结束
+    this.questionBreakMs = 500,    // 问号：略长，疑问语调需要缓冲
+    this.exclamationBreakMs = 450, // 感叹号：长停顿，情感表达
+    this.ellipsisBreakMs = 350,    // 省略号：意犹未尽
+    this.dashBreakMs = 250,        // 破折号：解释性停顿
+    this.quoteEndBreakMs = 120,    // 引号结束：短停顿
+    this.enCommaBreakMs = 180,
+    this.enSemicolonBreakMs = 280,
+    this.enColonBreakMs = 220,
+    this.enPeriodBreakMs = 450,
+    this.enQuestionBreakMs = 500,
+    this.enExclamationBreakMs = 450,
     // 语调
     this.h1Pitch = '+5%',
     this.h2Pitch = '+3%',
@@ -132,6 +174,25 @@ class TtsSsmlConfig {
       listItemBreakMs: listItemBreakMs,
       hrBreakMs: hrBreakMs,
       lineBreakMs: lineBreakMs,
+      // 句内标点停顿
+      enablePunctuationBreaks: enablePunctuationBreaks,
+      commaBreakMs: commaBreakMs,
+      enumBreakMs: enumBreakMs,
+      semicolonBreakMs: semicolonBreakMs,
+      colonBreakMs: colonBreakMs,
+      periodBreakMs: periodBreakMs,
+      questionBreakMs: questionBreakMs,
+      exclamationBreakMs: exclamationBreakMs,
+      ellipsisBreakMs: ellipsisBreakMs,
+      dashBreakMs: dashBreakMs,
+      quoteEndBreakMs: quoteEndBreakMs,
+      enCommaBreakMs: enCommaBreakMs,
+      enSemicolonBreakMs: enSemicolonBreakMs,
+      enColonBreakMs: enColonBreakMs,
+      enPeriodBreakMs: enPeriodBreakMs,
+      enQuestionBreakMs: enQuestionBreakMs,
+      enExclamationBreakMs: enExclamationBreakMs,
+      // 语调
       h1Pitch: h1Pitch,
       h2Pitch: h2Pitch,
       blockquoteRate: blockquoteRate,
@@ -158,17 +219,22 @@ class TtsSsmlConfig {
 
   static const TtsSsmlConfig defaultConfig = TtsSsmlConfig();
 
-  /// 快速朗读（节奏更快，停顿更短）
+  /// 快速朗读（节奏更快，停顿更短，关闭句内停顿）
   static const TtsSsmlConfig fastConfig = TtsSsmlConfig(
     rhythmScale: 0.6,
+    enablePunctuationBreaks: false, // 快速模式关闭句内停顿
   );
 
   /// 舒缓朗读（节奏更慢，停顿更长）
   static const TtsSsmlConfig relaxedConfig = TtsSsmlConfig(
     rhythmScale: 1.3,
+    commaBreakMs: 220,       // 更长的逗号停顿
+    periodBreakMs: 550,      // 更长的句号停顿
+    questionBreakMs: 600,
+    exclamationBreakMs: 550,
   );
 
-  /// 有声书风格（停顿更长，语调变化更大）
+  /// 有声书风格（停顿更长，语调变化更大，更有节奏感）
   static const TtsSsmlConfig audiobookConfig = TtsSsmlConfig(
     rhythmScale: 1.2,
     h1BreakBeforeMs: 1000,
@@ -180,6 +246,16 @@ class TtsSsmlConfig {
     paragraphBreakMs: 800,
     listItemBreakMs: 400,
     hrBreakMs: 1200,
+    // 有声书风格：更明显的句内停顿
+    commaBreakMs: 250,       // 更长的逗号停顿
+    enumBreakMs: 180,        // 更长的顿号停顿
+    semicolonBreakMs: 350,   // 更长的分号停顿
+    colonBreakMs: 300,       // 更长的冒号停顿
+    periodBreakMs: 600,      // 更长的句号停顿
+    questionBreakMs: 650,    // 更长的问号停顿
+    exclamationBreakMs: 600, // 更长的感叹号停顿
+    ellipsisBreakMs: 450,    // 更长的省略号停顿
+    dashBreakMs: 320,        // 更长的破折号停顿
     h1Pitch: '+8%',
     h2Pitch: '+5%',
     blockquoteRate: '-15%',
@@ -426,6 +502,11 @@ class AstBasedTtsConverter {
 
   /// 处理文本内容（英文、数字等）
   String _processText(String text, _ConversionContext context) {
+    // 如果启用句内标点停顿，先处理标点
+    if (config.enablePunctuationBreaks) {
+      return _processTextWithPunctuation(text, context);
+    }
+
     if (!config.wrapEnglishWithLang) {
       // 不包裹英文，直接转义返回
       return _escapeXml(text);
@@ -453,6 +534,130 @@ class AstBasedTtsConverter {
     }
 
     return buffer.toString();
+  }
+
+  /// 处理文本并在标点处插入停顿
+  ///
+  /// 这是控制朗读节奏的核心方法：
+  /// - 在逗号、顿号处插入短停顿（呼吸点）
+  /// - 在分号、冒号处插入中停顿（分句点）
+  /// - 在句号、问号、感叹号处插入长停顿（句末）
+  String _processTextWithPunctuation(String text, _ConversionContext context) {
+    final buffer = StringBuffer();
+
+    for (int i = 0; i < text.length; i++) {
+      final char = text[i];
+
+      // 先写入字符（转义）
+      buffer.write(_escapeXmlChar(char));
+
+      // 根据标点决定是否插入停顿
+      final breakMs = _getPunctuationBreakMs(char, text, i);
+      if (breakMs > 0) {
+        // 应用全局节奏倍率
+        final scaledMs = (breakMs * config.rhythmScale).round();
+        buffer.write('<break time="${scaledMs}ms"/>');
+      }
+    }
+
+    return buffer.toString();
+  }
+
+  /// 获取标点符号对应的停顿时间（毫秒）
+  ///
+  /// 返回 0 表示不需要停顿
+  int _getPunctuationBreakMs(String char, String fullText, int index) {
+    switch (char) {
+      // ========== 中文标点 ==========
+      case '，':
+        return config.commaBreakMs;
+      case '、':
+        return config.enumBreakMs;
+      case '；':
+        return config.semicolonBreakMs;
+      case '：':
+        return config.colonBreakMs;
+      case '。':
+        return config.periodBreakMs;
+      case '？':
+        return config.questionBreakMs;
+      case '！':
+        return config.exclamationBreakMs;
+      case '…':
+        // 省略号：只在最后一个 … 处停顿（避免 …… 两次停顿）
+        if (index + 1 < fullText.length && fullText[index + 1] == '…') {
+          return 0;
+        }
+        return config.ellipsisBreakMs;
+      case '—':
+        // 破折号：只在最后一个 — 处停顿（避免 —— 两次停顿）
+        if (index + 1 < fullText.length && fullText[index + 1] == '—') {
+          return 0;
+        }
+        return config.dashBreakMs;
+      // 中文引号结束（短停顿）
+      case '"':
+      case "'":  // 中文右单引号
+      case '」':
+      case '』':
+      case '）':
+      case '】':
+        return config.quoteEndBreakMs;
+
+      // ========== 英文标点 ==========
+      case ',':
+        return config.enCommaBreakMs;
+      case ';':
+        return config.enSemicolonBreakMs;
+      case ':':
+        return config.enColonBreakMs;
+      case '.':
+        // 判断是否是句末句号（而非缩写如 Mr. Dr. etc.）
+        // 简单规则：后面是空格、换行、结尾，或后面是大写字母
+        if (index + 1 >= fullText.length) {
+          return config.enPeriodBreakMs; // 文本结尾
+        }
+        final nextChar = fullText[index + 1];
+        if (nextChar == ' ' || nextChar == '\n' || nextChar == '\r') {
+          // 检查空格后是否是大写字母（新句子开始）
+          if (index + 2 < fullText.length) {
+            final afterSpace = fullText[index + 2];
+            if (afterSpace.toUpperCase() == afterSpace &&
+                afterSpace.toLowerCase() != afterSpace) {
+              return config.enPeriodBreakMs;
+            }
+          }
+          // 段落末尾
+          return config.enPeriodBreakMs;
+        }
+        // 可能是缩写，不停顿
+        return 0;
+      case '!':
+        return config.enExclamationBreakMs;
+      case '?':
+        return config.enQuestionBreakMs;
+
+      default:
+        return 0;
+    }
+  }
+
+  /// 单字符 XML 转义
+  String _escapeXmlChar(String char) {
+    switch (char) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case "'":
+        return '&apos;';
+      default:
+        return char;
+    }
   }
 
   /// 处理元素节点
@@ -625,10 +830,15 @@ class AstBasedTtsConverter {
         break;
 
       // ========== 分隔线 ==========
+      // 分隔线（---）用于标记内容边界，必须强制分段
+      // 这对于多模型回复的分离至关重要
       case 'hr':
+        // 分隔线前强制分段（保证当前内容独立）
+        context.forceFlush();
+        // 添加停顿
         context.ssmlBuffer.write('<break time="${config.hrBreak}"/>');
-        // 分隔线后强制分段
-        context.flushIfHasContent();
+        // 分隔线后也强制分段（保证后续内容独立）
+        context.forceFlush();
         break;
 
       // ========== 删除线 ==========
@@ -797,9 +1007,18 @@ class _ConversionContext {
     }
   }
 
-  /// 如果有内容就分段
+  /// 如果有内容就分段（用于自然分段点，如段落结束）
   void flushIfHasContent() {
     if (currentTextLength >= minLength) {
+      flush();
+    }
+  }
+
+  /// 强制分段（用于内容边界，如分隔线、回复切换）
+  /// 无论内容长短都会分段，确保不同内容块不会被合并
+  void forceFlush() {
+    if (currentTextLength > 0) {
+      debugPrint('🎯 强制分段: 当前 $currentTextLength 字符');
       flush();
     }
   }
@@ -813,8 +1032,15 @@ class _ConversionContext {
       // 清理 SSML
       final cleanedSsml = _cleanSsml(ssmlContent);
 
+      final segmentIndex = segments.length;
+      // 打印段落预览（前 50 字符）
+      final preview = plainText.length > 50
+          ? '${plainText.substring(0, 50)}...'
+          : plainText;
+      debugPrint('🎯 创建段落 $segmentIndex: ${plainText.length} 字符 - "$preview"');
+
       segments.add(TtsSegmentWithSsml(
-        index: segments.length,
+        index: segmentIndex,
         plainText: plainText,
         ssmlContent: cleanedSsml,
         startOffset: currentStartOffset,
@@ -834,8 +1060,23 @@ class _ConversionContext {
   String _cleanSsml(String ssml) {
     var result = ssml;
 
+    // 移除开头的闭合标签（如 </prosody>，这是分段导致的残留）
+    result = result.replaceFirst(RegExp(r'^(\s*</\w+>\s*)+'), '');
+
     // 移除开头的 break 标签
     result = result.replaceFirst(RegExp(r'^(<break[^>]*/>[\s]*)+'), '');
+
+    // 移除末尾未闭合的开始标签（如 <prosody ...> 没有对应的 </prosody>）
+    // 检测模式：<tag ...> 在末尾，且没有对应的闭合标签
+    final openTagMatch = RegExp(r'<(\w+)[^>]*>\s*$').firstMatch(result);
+    if (openTagMatch != null) {
+      final tagName = openTagMatch.group(1);
+      final closeTag = '</$tagName>';
+      // 如果没有对应的闭合标签，移除这个开始标签
+      if (!result.contains(closeTag)) {
+        result = result.replaceFirst(RegExp(r'<\w+[^>]*>\s*$'), '');
+      }
+    }
 
     // 合并连续的 break 标签（保留时间较长的）
     result = result.replaceAllMapped(

@@ -635,6 +635,137 @@ class UnifiedConversationService {
     return messageId;
   }
 
+  /// 追加模型回复到已有问题
+  ///
+  /// 对已有的用户问题（askId）追加一个新模型的回复。
+  /// 新回复使用相同的 askId，但 isMainline=false（不改变主线）。
+  ///
+  /// [conversationId] 对话 ID
+  /// [askId] 用户问题的消息 ID
+  /// [providerId] 要使用的 Provider ID
+  /// [modelId] 要使用的模型 ID
+  ///
+  /// 返回 Stream<String>，流式输出 AI 回复内容
+  Stream<String> addReplyToExistingQuestion({
+    required String conversationId,
+    required String askId,
+    required String providerId,
+    required String modelId,
+  }) async* {
+    // 1. 获取 Provider 配置
+    final providerService = AIProviderService.instance;
+    final provider = providerService.providers.firstWhere(
+      (p) => p.id == providerId,
+      orElse: () => throw Exception('找不到 Provider: $providerId'),
+    );
+
+    final model = provider.models.firstWhere(
+      (m) => m.id == modelId,
+      orElse: () => throw Exception('找不到模型: $modelId'),
+    );
+
+    // 2. 构建发送给 API 的消息列表（只取到 askId 对应的用户消息为止）
+    final allMessages = await getMessages(conversationId);
+    final apiMessages = <Map<String, String>>[];
+
+    // 按 askId 分组找出主线消息
+    final assistantsByAskId = <String, List<UnifiedMessageEntity>>{};
+    for (final m in allMessages) {
+      if (m.role == 'assistant' && m.askId != null) {
+        assistantsByAskId.putIfAbsent(m.askId!, () => []).add(m);
+      }
+    }
+
+    // 每个 askId 组选择主线消息
+    final mainlineAssistantIds = <String>{};
+    for (final group in assistantsByAskId.values) {
+      final mainline = group.firstWhere(
+        (m) => m.isMainline == true,
+        orElse: () => group.first,
+      );
+      mainlineAssistantIds.add(mainline.messageId);
+    }
+
+    // 构建消息列表（只到 askId 对应的用户消息为止）
+    for (final m in allMessages) {
+      // 到达目标用户消息时停止（包含这条用户消息）
+      if (m.messageId == askId) {
+        apiMessages.add({'role': m.role, 'content': m.content});
+        break;
+      }
+
+      // 用户消息直接添加
+      if (m.role == 'user') {
+        apiMessages.add({'role': m.role, 'content': m.content});
+      }
+      // assistant 消息只取主线的
+      else if (m.role == 'assistant') {
+        if (m.askId == null || mainlineAssistantIds.contains(m.messageId)) {
+          apiMessages.add({'role': m.role, 'content': m.content});
+        }
+      }
+    }
+
+    if (apiMessages.isEmpty) {
+      throw Exception('找不到用户消息: $askId');
+    }
+
+    // 3. 创建助手消息占位
+    final assistantMessageId = _uuid.v4();
+    final assistantMessage = UnifiedMessageEntity.createAssistantMessage(
+      messageId: assistantMessageId,
+      conversationId: conversationId,
+      modelId: modelId,
+      modelName: model.name,
+      askId: askId,
+      isMainline: false,  // 追加的回复不是主线
+      status: 'streaming',
+    );
+    await _db.saveUnifiedMessage(assistantMessage);
+
+    // 4. 调用 API 并流式更新
+    final service = OpenAIService(
+      apiKey: provider.apiKey,
+      baseUrl: provider.apiHost,
+    );
+
+    var fullContent = '';
+    try {
+      await for (final chunk in service.streamChatCompletion(
+        model: modelId,
+        messages: apiMessages,
+      )) {
+        fullContent += chunk;
+        yield chunk;
+
+        // 每次收到内容都更新数据库
+        await updateMessageContent(
+          assistantMessageId,
+          fullContent,
+          status: 'streaming',
+        );
+      }
+
+      // 完成
+      await updateMessageContent(
+        assistantMessageId,
+        fullContent,
+        status: 'completed',
+      );
+      await _updateMessageCount(conversationId);
+    } catch (e) {
+      // 错误处理
+      final message = await _db.getUnifiedMessage(assistantMessageId);
+      if (message != null) {
+        message.status = 'error';
+        message.errorMessage = e.toString();
+        message.content = fullContent.isEmpty ? '请求失败: $e' : fullContent;
+        await _db.saveUnifiedMessage(message);
+      }
+      rethrow;
+    }
+  }
+
   /// 更新消息内容（用于流式更新）
   Future<void> updateMessageContent(
     String messageId,

@@ -19,6 +19,10 @@ import '../widgets/provider_chip.dart';
 import '../widgets/ai_chat_drawer.dart';
 import '../widgets/model_selector.dart';
 import '../widgets/multi_model_response_view.dart';
+import '../providers/tts_provider.dart';
+import '../models/tts_item.dart';
+import '../widgets/tts_mini_player.dart';
+import 'package:provider/provider.dart';
 
 /// AI 对话界面 (重构版)
 ///
@@ -290,9 +294,18 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
       // 设置初始上下文
       if (widget.initialContextSnapshot != null) {
-        _currentContextContent = widget.initialContextSnapshot;
+        // 【修复】如果设置了 selectOnlyReplyIndex，用占位内容初始化
+        // 等待 context selector 回调更新为正确的选中内容
+        final selectOnlyReplyIndex = widget.initialContextData?['selectOnlyReplyIndex'] as int?;
+        if (selectOnlyReplyIndex != null) {
+          // 尝试从 contextData 中提取指定回复的内容作为初始值
+          _currentContextContent = _extractReplyContent(selectOnlyReplyIndex);
+        } else {
+          _currentContextContent = widget.initialContextSnapshot;
+        }
+
         _currentContextSummary = _generateContextSummary(
-          widget.initialContextSnapshot!,
+          _currentContextContent ?? '',
         );
         // 解析为结构化上下文
         _structuredContext = StructuredContext.parse(
@@ -303,6 +316,47 @@ class _AIChatScreenState extends State<AIChatScreen> {
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  /// 从 contextData 中提取指定索引的回复内容
+  String? _extractReplyContent(int replyIndex) {
+    final contextData = widget.initialContextData;
+    if (contextData == null) return null;
+
+    final rounds = contextData['rounds'] as List<dynamic>?;
+    if (rounds == null || rounds.isEmpty) return null;
+
+    // 获取当前轮次
+    final currentRoundIndex = contextData['currentRoundIndex'] as int? ?? 0;
+    if (currentRoundIndex >= rounds.length) return null;
+
+    final round = rounds[currentRoundIndex] as Map<String, dynamic>?;
+    if (round == null) return null;
+
+    final replies = round['replies'] as List<dynamic>?;
+    if (replies == null || replyIndex >= replies.length) return null;
+
+    final reply = replies[replyIndex] as Map<String, dynamic>?;
+    if (reply == null) return null;
+
+    // 提取回复内容
+    final blocks = reply['blocks'] as List<dynamic>?;
+    if (blocks == null) return null;
+
+    final buffer = StringBuffer();
+    for (final block in blocks) {
+      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+        buffer.write(block['content'] as String? ?? '');
+      }
+    }
+
+    final content = buffer.toString();
+    if (content.isEmpty) return null;
+
+    // 格式化为 markdown
+    final model = reply['model'] as Map<String, dynamic>?;
+    final modelName = model?['name'] as String? ?? 'AI';
+    return '## 模型回复\n\n### $modelName\n\n$content';
   }
 
   Future<void> _loadConversations() async {
@@ -967,7 +1021,18 @@ class _AIChatScreenState extends State<AIChatScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _buildBody(),
+          : Stack(
+              children: [
+                _buildBody(),
+                // TTS 播放控制条（浮动在底部）
+                const Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: TtsMiniPlayer(),
+                ),
+              ],
+            ),
     );
   }
 
@@ -1002,14 +1067,23 @@ class _AIChatScreenState extends State<AIChatScreen> {
   }
 
   Widget _buildBody() {
-    return Column(
-      children: [
-        // 消息区域
-        Expanded(child: _buildMessageArea()),
+    return Selector<TtsProvider, bool>(
+      selector: (_, tts) => tts.playerState != TtsState.stopped || tts.playlist.isNotEmpty,
+      builder: (context, isPlayerVisible, child) {
+        return Padding(
+          // 为 TtsMiniPlayer 预留空间（只在播放时）
+          padding: EdgeInsets.only(bottom: isPlayerVisible ? 80 : 0),
+          child: Column(
+            children: [
+              // 消息区域
+              Expanded(child: _buildMessageArea()),
 
-        // 输入区域（包含 Context 按钮）
-        _buildInputArea(),
-      ],
+              // 输入区域（包含 Context 按钮）
+              _buildInputArea(),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1063,6 +1137,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
               content: item.message.content,
               modelName: item.message.modelName,
               messageId: item.message.messageId,
+              askId: item.message.askId,
               isStreaming: false,
             );
           }
@@ -1130,34 +1205,321 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
   /// 已保存的多模型回复横向展示（从数据库加载的）
   Widget _buildSavedMultiModelResponses(List<UnifiedMessageEntity> messages) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: SizedBox(
-        height: MediaQuery.of(context).size.height * 0.55,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: messages.map((msg) {
-                return Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: _SavedModelResponseCard(
-                    message: msg,
-                    onRetry: () => _regenerateMessage(msg.messageId),
-                    onCopy: () => _copyToClipboard(msg.content),
-                    onQuote: () => _quoteToInput(msg.content),
-                    onSetMainline: () => _setAsMainline(msg.messageId),
-                    onDelete: () => _deleteAssistantMessage(msg.messageId),
+    // 获取 askId（用于追加回复）
+    final askId = messages.isNotEmpty ? messages.first.askId : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 朗读全部按钮（仅多个回复时显示）
+        if (messages.length > 1)
+          Selector<TtsProvider, bool>(
+            selector: (_, tts) => tts.hasValidConfig,
+            builder: (context, hasValidConfig, _) {
+              if (!hasValidConfig) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(left: 12, top: 8, bottom: 4),
+                child: TextButton.icon(
+                  onPressed: () => _speakMultipleResponses(messages),
+                  icon: const Icon(Icons.headphones, size: 18),
+                  label: Text('朗读全部 ${messages.length} 个回复'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF8B5CF6),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    textStyle: const TextStyle(fontSize: 13),
                   ),
-                );
-              }).toList(),
+                ),
+              );
+            },
+          ),
+        // 卡片列表
+        SizedBox(
+          height: MediaQuery.of(context).size.height * 0.55,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 已有的回复卡片
+                  ...messages.map((msg) {
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: _SavedModelResponseCard(
+                        message: msg,
+                        onRetry: () => _regenerateMessage(msg.messageId),
+                        onCopy: () => _copyToClipboard(msg.content),
+                        onQuote: () => _quoteToInput(msg.content),
+                        onSetMainline: () => _setAsMainline(msg.messageId),
+                        onDelete: () => _deleteAssistantMessage(msg.messageId),
+                        onSpeak: () => _speakContent(msg.content, msg.modelName ?? 'AI'),
+                      ),
+                    );
+                  }),
+                  // 追加回复按钮
+                  if (askId != null)
+                    _buildAddReplyCard(askId),
+                ],
+              ),
             ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 构建追加回复卡片（显示在多模型回复列表末尾）
+  Widget _buildAddReplyCard(String askId) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      width: 120,
+      decoration: BoxDecoration(
+        color: isDark ? Colors.grey[850] : Colors.grey[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark ? Colors.grey[700]! : Colors.grey[300]!,
+          style: BorderStyle.solid,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => _showAddReplyDialog(askId),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.add_rounded,
+                  color: Color(0xFF8B5CF6),
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '追加回复',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: isDark ? Colors.grey[300] : Colors.grey[700],
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '使用其他模型',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isDark ? Colors.grey[500] : Colors.grey[500],
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
+  }
+
+  /// 显示追加回复的模型选择对话框
+  Future<void> _showAddReplyDialog(String askId) async {
+    final multiModelService = multi_model.MultiModelService.instance;
+    final allModels = multiModelService.getAvailableModels();
+
+    if (allModels.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有可用的模型，请先配置 AI Provider')),
+      );
+      return;
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        decoration: BoxDecoration(
+          color: isDark ? Colors.grey[900] : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 拖拽指示条
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[400],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // 标题
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(Icons.add_circle_outline, color: Color(0xFF8B5CF6)),
+                  const SizedBox(width: 8),
+                  Text(
+                    '追加模型回复',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            // 模型列表
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: allModels.length,
+                itemBuilder: (context, index) {
+                  final model = allModels[index];
+                  final providerId = model['providerId'] as String;
+                  final modelId = model['modelId'] as String;
+                  final modelName = model['displayName'] as String? ?? modelId;
+                  final providerName = model['providerName'] as String? ?? '';
+
+                  return ListTile(
+                    leading: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: _getModelColorByName(modelName).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.smart_toy_outlined,
+                        size: 20,
+                        color: _getModelColorByName(modelName),
+                      ),
+                    ),
+                    title: Text(
+                      modelName,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    subtitle: Text(
+                      providerName,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.grey[500] : Colors.grey[600],
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _addReplyWithModel(askId, providerId, modelId, modelName);
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 使用指定模型追加回复
+  Future<void> _addReplyWithModel(
+    String askId,
+    String providerId,
+    String modelId,
+    String modelName,
+  ) async {
+    if (_activeConversationId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有活跃的对话')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSending = true;
+      _streamingContent = '';
+    });
+
+    try {
+      await for (final chunk in _service.addReplyToExistingQuestion(
+        conversationId: _activeConversationId!,
+        askId: askId,
+        providerId: providerId,
+        modelId: modelId,
+      )) {
+        if (!mounted) break;
+        setState(() {
+          _streamingContent += chunk;
+        });
+        _scrollToBottom();
+      }
+
+      // 完成后重新加载消息
+      await _loadMessages();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已追加 $modelName 的回复'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('追加回复失败: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+          _streamingContent = '';
+        });
+      }
+    }
+  }
+
+  /// 根据模型名称获取颜色
+  Color _getModelColorByName(String modelName) {
+    final name = modelName.toLowerCase();
+    if (name.contains('claude')) {
+      return const Color(0xFFD4A574);
+    } else if (name.contains('gpt') || name.contains('openai')) {
+      return const Color(0xFF10A37F);
+    } else if (name.contains('gemini') || name.contains('google')) {
+      return const Color(0xFF4285F4);
+    } else if (name.contains('qwen') || name.contains('通义')) {
+      return const Color(0xFF6366F1);
+    } else if (name.contains('deepseek')) {
+      return const Color(0xFF06B6D4);
+    } else {
+      return const Color(0xFF8B5CF6);
+    }
   }
 
   /// 多模型回复展示区域 - Cherry Studio 风格横向布局
@@ -1475,6 +1837,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
     required String content,
     String? modelName,
     String? messageId,
+    String? askId,
     bool isStreaming = false,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1632,6 +1995,14 @@ class _AIChatScreenState extends State<AIChatScreen> {
                     tooltip: '删除',
                     onTap: () => _deleteMessage(messageId),
                   ),
+                  // 追加回复（使用其他模型）
+                  if (askId != null && !isStreaming)
+                    _buildActionIconButton(
+                      icon: Icons.add_circle_outline,
+                      tooltip: '追加回复',
+                      color: const Color(0xFF8B5CF6),
+                      onTap: () => _showAddReplyDialog(askId),
+                    ),
 
                   const Spacer(),
 
@@ -1666,6 +2037,89 @@ class _AIChatScreenState extends State<AIChatScreen> {
       const SnackBar(
         content: Text('已复制到剪贴板'),
         duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  /// 朗读单条内容
+  void _speakContent(String content, String modelName) {
+    final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+    if (!ttsProvider.hasValidConfig) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在设置中配置 TTS API')),
+      );
+      return;
+    }
+
+    final item = TtsItem(
+      id: 'ai_chat_${content.hashCode}',
+      text: content,
+      title: modelName,
+      author: modelName,
+    );
+    ttsProvider.setPlaylist([item]);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('开始朗读 $modelName 的回复...'),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  /// 朗读多个模型的回复（合并成一个文本）
+  void _speakMultipleResponses(List<UnifiedMessageEntity> messages) {
+    final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+    if (!ttsProvider.hasValidConfig) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在设置中配置 TTS API')),
+      );
+      return;
+    }
+
+    if (messages.isEmpty) return;
+
+    final buffer = StringBuffer();
+    for (var i = 0; i < messages.length; i++) {
+      final msg = messages[i];
+      final modelName = msg.modelName ?? 'AI';
+      final isMainline = msg.isMainline == true;
+
+      // 多回复时加提示语
+      if (messages.length > 1) {
+        if (isMainline) {
+          buffer.writeln('$modelName 的主要回复：');
+        } else {
+          buffer.writeln('$modelName 回复：');
+        }
+        buffer.writeln();
+      }
+
+      buffer.writeln(msg.content);
+      buffer.writeln();
+
+      // 回复之间加分隔
+      if (i < messages.length - 1) {
+        buffer.writeln('---');
+        buffer.writeln();
+      }
+    }
+
+    final combinedContent = buffer.toString().trim();
+    final title = messages.length > 1
+        ? '${messages.length} 个模型回复'
+        : (messages.first.modelName ?? 'AI');
+
+    final item = TtsItem(
+      id: 'ai_chat_multi_${combinedContent.hashCode}',
+      text: combinedContent,
+      title: title,
+      author: 'AI 分析',
+    );
+    ttsProvider.setPlaylist([item]);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('开始朗读 $title...'),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -2048,6 +2502,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
     required IconData icon,
     required String tooltip,
     required VoidCallback onTap,
+    Color? color,
   }) {
     return Tooltip(
       message: tooltip,
@@ -2059,7 +2514,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
           child: Icon(
             icon,
             size: 18,
-            color: Colors.grey[600],
+            color: color ?? Colors.grey[600],
           ),
         ),
       ),
@@ -2067,19 +2522,26 @@ class _AIChatScreenState extends State<AIChatScreen> {
   }
 
   /// 更多操作菜单
-  void _showMessageMoreActions(String content) {
+  void _showMessageMoreActions(String content, {String modelName = 'AI'}) {
     showModalBottomSheet(
       context: context,
-      builder: (context) => SafeArea(
+      builder: (sheetContext) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.volume_up_outlined),
-              title: const Text('朗读'),
-              onTap: () {
-                Navigator.pop(context);
-                // TODO: 朗读功能
+            // 朗读（仅在配置有效时显示）
+            Selector<TtsProvider, bool>(
+              selector: (_, tts) => tts.hasValidConfig,
+              builder: (context, hasValidConfig, _) {
+                if (!hasValidConfig) return const SizedBox.shrink();
+                return ListTile(
+                  leading: const Icon(Icons.volume_up_outlined),
+                  title: const Text('朗读'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _speakContent(content, modelName);
+                  },
+                );
               },
             ),
             ListTile(
@@ -2943,6 +3405,7 @@ class _SavedModelResponseCard extends StatelessWidget {
   final VoidCallback? onQuote;
   final VoidCallback? onSetMainline;
   final VoidCallback? onDelete;
+  final VoidCallback? onSpeak;
 
   const _SavedModelResponseCard({
     required this.message,
@@ -2951,6 +3414,7 @@ class _SavedModelResponseCard extends StatelessWidget {
     this.onQuote,
     this.onSetMainline,
     this.onDelete,
+    this.onSpeak,
   });
 
   @override
@@ -3125,6 +3589,13 @@ class _SavedModelResponseCard extends StatelessWidget {
               tooltip: '删除',
               onTap: onDelete,
               color: Colors.red[400],
+            ),
+          // 朗读
+          if (onSpeak != null)
+            _buildActionButton(
+              icon: Icons.volume_up_outlined,
+              tooltip: '朗读',
+              onTap: onSpeak,
             ),
 
           const Spacer(),

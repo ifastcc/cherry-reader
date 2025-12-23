@@ -28,12 +28,15 @@ class SearchService {
     debugPrint('✅ SearchService 初始化完成');
   }
 
-  /// 获取 Isar 实例
+  /// 获取 Isar 实例（导入数据库，存储 Cherry Studio 导入的数据）
   Future<Isar> get _isar async {
     if (!_initialized) {
       throw StateError('SearchService not initialized. Call init() first.');
     }
-    return RepositoryProvider.instance.database.instance;
+    // 使用 importInstance 而不是 instance
+    // - instance: 主数据库（用户数据：标注、分析、讨论）
+    // - importInstance: 版本数据库（导入的 Cherry Studio 数据）
+    return RepositoryProvider.instance.database.importInstance;
   }
 
   /// 执行综合搜索
@@ -107,7 +110,11 @@ class SearchService {
 
     final assistantMap = {for (final a in assistants) a.assistantId: a};
 
-    // 3. 构建结果
+    // 3. 批量获取每个话题的第一条消息内容作为预览
+    final topicIds = topics.map((t) => t.topicId).toList();
+    final contentPreviews = await _getTopicContentPreviews(isar, topicIds);
+
+    // 4. 构建结果
     return topics.map((topic) {
       final assistant = assistantMap[topic.assistantId];
       final lowerName = topic.name.toLowerCase();
@@ -122,11 +129,53 @@ class SearchService {
         matchEnd: matchIndex >= 0 ? matchIndex + keyword.length : 0,
         topicId: topic.topicId,
         topicName: topic.name,
+        contentPreview: contentPreviews[topic.topicId],
         assistantId: topic.assistantId,
         assistantName: assistant?.name ?? '未知助手',
         createdAt: topic.createdAt,
       );
     }).toList();
+  }
+
+  /// 获取话题的内容预览（第一条用户消息或助手消息的内容）
+  Future<Map<String, String>> _getTopicContentPreviews(
+    Isar isar,
+    List<String> topicIds,
+  ) async {
+    if (topicIds.isEmpty) return {};
+
+    final previews = <String, String>{};
+
+    // 批量获取每个话题的第一条消息
+    for (final topicId in topicIds) {
+      // 获取该话题的第一条消息
+      final firstMessage = await isar.messageEntitys
+          .filter()
+          .topicIdEqualTo(topicId)
+          .sortByRoundIndex()
+          .findFirst();
+
+      if (firstMessage == null) continue;
+
+      // 获取该消息的 main_text 内容
+      final blocks = await isar.messageBlockEntitys
+          .filter()
+          .messageIdEqualTo(firstMessage.messageId)
+          .typeEqualTo('main_text')
+          .findAll();
+
+      if (blocks.isNotEmpty) {
+        // 合并所有 main_text 块的内容，截取前 100 字符作为预览
+        final content = blocks.map((b) => b.content ?? '').join().trim();
+        if (content.isNotEmpty) {
+          previews[topicId] = content.length > 100
+              ? '${content.substring(0, 100)}...'
+              : content;
+        }
+      }
+    }
+
+    return previews;
   }
 
   /// 搜索消息内容
@@ -137,13 +186,27 @@ class SearchService {
   }) async {
     final isar = await _isar;
 
-    // 1. 搜索消息块内容（仅 main_text 类型）
+    // 【调试】打印数据库信息
+    final hasVersion = RepositoryProvider.instance.database.hasVersionedImport;
+    debugPrint('🔍 [搜索调试] 使用版本数据库: $hasVersion');
+
+    // 1. 先检查 messageBlockEntitys 表中有多少数据
+    final totalBlocks = await isar.messageBlockEntitys.count();
+    final mainTextBlocks = await isar.messageBlockEntitys
+        .filter()
+        .typeEqualTo('main_text')
+        .count();
+    debugPrint('🔍 [搜索调试] 总消息块数: $totalBlocks, main_text 类型: $mainTextBlocks');
+
+    // 2. 搜索消息块内容（仅 main_text 类型）
     final blocks = await isar.messageBlockEntitys
         .filter()
         .typeEqualTo('main_text')
         .contentContains(keyword, caseSensitive: false)
         .limit(limit)
         .findAll();
+
+    debugPrint('🔍 [搜索调试] 关键词 "$keyword" 匹配到 ${blocks.length} 个消息块');
 
     if (blocks.isEmpty) return [];
 

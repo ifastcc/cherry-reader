@@ -25,6 +25,9 @@ class SearchResultModel {
   final String topicId;
   final String topicName;
 
+  /// 内容预览（话题搜索结果用于显示第一条消息预览）
+  final String? contentPreview;
+
   /// 所属助手信息
   final String assistantId;
   final String assistantName;
@@ -46,6 +49,7 @@ class SearchResultModel {
     required this.matchEnd,
     required this.topicId,
     required this.topicName,
+    this.contentPreview,
     required this.assistantId,
     required this.assistantName,
     this.messageId,

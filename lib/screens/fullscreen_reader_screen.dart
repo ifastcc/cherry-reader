@@ -52,9 +52,6 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
   bool _showColorPicker = false;
   int _currentStyleIndex = 0;
 
-  // 悬浮工具栏展开状态
-  bool _fabExpanded = false;
-
   Color get _currentHighlightColor =>
       kHighlightStyles[_currentStyleIndex].color;
   String get _currentHighlightType => kHighlightStyles[_currentStyleIndex].type;
@@ -410,11 +407,8 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
             if (_showColorPicker && _toolbarPosition != null)
               _buildStylePicker(),
 
-            // 悬浮操作工具栏
-            _buildFloatingToolbar(),
-
-            // 独立的讨论浮动按钮
-            _buildDiscussionFab(),
+            // 统一的 FAB 布局
+            _buildFabLayout(),
 
             // Mini Player
             const Positioned(
@@ -586,128 +580,55 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
     );
   }
 
-  /// 构建独立的讨论浮动按钮
-  Widget _buildDiscussionFab() {
-    return Positioned(
-      left: 16,
-      bottom: 80, // 与右边的工具栏对称
-      child: GestureDetector(
-        onTap: _openDiscussion,
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            color: const Color(0xFF8B5CF6), // 紫色
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF8B5CF6).withAlpha(100),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: const Icon(
-            Icons.chat_bubble_outline,
-            color: Colors.white,
-            size: 26,
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 构建悬浮操作工具栏
-  Widget _buildFloatingToolbar() {
+  /// 构建侧边栏 FAB
+  Widget _buildFabLayout() {
     return Consumer<TtsProvider>(
       builder: (context, tts, _) {
         final hasValidTts = tts.hasValidConfig;
+        final isPlaying = tts.isPlaying;
 
         return Positioned(
-          right: 16,
-          bottom: 80, // 在 TtsMiniPlayer 上方
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              // 展开的操作按钮
-              AnimatedOpacity(
-                opacity: _fabExpanded ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 200),
-                child: AnimatedSlide(
-                  offset: _fabExpanded ? Offset.zero : const Offset(0, 0.5),
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOutCubic,
-                  child: IgnorePointer(
-                    ignoring: !_fabExpanded,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // 朗读按钮（仅在配置有效时显示）
-                        if (hasValidTts) ...[
-                          _FloatingActionItem(
-                            icon: Icons.volume_up_rounded,
-                            label: '朗读',
-                            color: const Color(0xFF8B5CF6),
-                            onTap: () {
-                              setState(() => _fabExpanded = false);
-                              _playContent();
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                        ],
-                        // 复制按钮
-                        _FloatingActionItem(
-                          icon: Icons.copy_rounded,
-                          label: '复制',
-                          color: const Color(0xFF10B981),
-                          onTap: () {
-                            setState(() => _fabExpanded = false);
-                            _copyContent();
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                      ],
-                    ),
-                  ),
-                ),
+          right: 8,
+          bottom: 120,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: Colors.black.withValues(alpha: 0.08),
               ),
-              // 主按钮
-              GestureDetector(
-                onTap: () {
-                  setState(() => _fabExpanded = !_fabExpanded);
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: _fabExpanded
-                        ? Colors.grey[800]
-                        : const Color(0xFF8B5CF6),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: (_fabExpanded
-                            ? Colors.grey[800]!
-                            : const Color(0xFF8B5CF6)).withValues(alpha: 0.4),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 朗读
+                if (hasValidTts) ...[
+                  _SidebarButton(
+                    icon: isPlaying ? Icons.pause_rounded : Icons.headphones_rounded,
+                    color: const Color(0xFF8B5CF6),
+                    tooltip: isPlaying ? '暂停' : '朗读',
+                    onTap: _playContent,
                   ),
-                  child: AnimatedRotation(
-                    turns: _fabExpanded ? 0.125 : 0, // 45度旋转
-                    duration: const Duration(milliseconds: 200),
-                    child: const Icon(
-                      Icons.add,
-                      color: Colors.white,
-                      size: 28,
-                    ),
-                  ),
+                  const SizedBox(height: 4),
+                ],
+                // 讨论
+                _SidebarButton(
+                  icon: Icons.chat_bubble_outline,
+                  color: const Color(0xFFEC4899),
+                  tooltip: '讨论',
+                  onTap: _openDiscussion,
                 ),
-              ),
-            ],
+                const SizedBox(height: 4),
+                // 复制
+                _SidebarButton(
+                  icon: Icons.copy_rounded,
+                  color: const Color(0xFF10B981),
+                  tooltip: '复制',
+                  onTap: _copyContent,
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -715,73 +636,39 @@ class _FullscreenReaderScreenState extends State<FullscreenReaderScreen> {
   }
 }
 
-/// 悬浮操作按钮项
-class _FloatingActionItem extends StatelessWidget {
+/// 侧边栏按钮
+class _SidebarButton extends StatelessWidget {
   final IconData icon;
-  final String label;
   final Color color;
+  final String tooltip;
   final VoidCallback onTap;
 
-  const _FloatingActionItem({
+  const _SidebarButton({
     required this.icon,
-    required this.label,
     required this.color,
+    required this.tooltip,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 标签
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Colors.grey[800],
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // 图标按钮
-          Container(
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: color.withValues(alpha: 0.4),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: 22,
-            ),
+            child: Icon(icon, color: color, size: 20),
           ),
-        ],
+        ),
       ),
     );
   }

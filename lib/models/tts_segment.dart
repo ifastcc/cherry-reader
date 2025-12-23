@@ -19,6 +19,13 @@ class TtsSegment {
   SegmentStatus status;   // 状态
   String? errorMessage;   // 错误信息
 
+  // 新增：全局缓存 Key（32 位 MD5）
+  String? audioCacheKey;  // 音频缓存 Key（基于 ssml+voice+rate+style）
+
+  // 新增：重试信息
+  int retryCount;         // 已重试次数
+  DateTime? lastErrorTime; // 最后一次错误时间
+
   TtsSegment({
     required this.index,
     required this.text,
@@ -29,6 +36,9 @@ class TtsSegment {
     this.cachePath,
     this.status = SegmentStatus.pending,
     this.errorMessage,
+    this.audioCacheKey,
+    this.retryCount = 0,
+    this.lastErrorTime,
   });
 
   /// 是否有 SSML 内容
@@ -92,6 +102,11 @@ $content
         orElse: () => SegmentStatus.pending,
       ),
       errorMessage: json['errorMessage'] as String?,
+      audioCacheKey: json['audioCacheKey'] as String?,
+      retryCount: json['retryCount'] as int? ?? 0,
+      lastErrorTime: json['lastErrorTime'] != null
+          ? DateTime.parse(json['lastErrorTime'] as String)
+          : null,
     );
   }
 
@@ -107,6 +122,9 @@ $content
       'cachePath': cachePath,
       'status': status.name,
       'errorMessage': errorMessage,
+      'audioCacheKey': audioCacheKey,
+      'retryCount': retryCount,
+      'lastErrorTime': lastErrorTime?.toIso8601String(),
     };
   }
 
@@ -117,6 +135,9 @@ $content
     String? cachePath,
     SegmentStatus? status,
     String? errorMessage,
+    String? audioCacheKey,
+    int? retryCount,
+    DateTime? lastErrorTime,
   }) {
     return TtsSegment(
       index: index,
@@ -128,6 +149,9 @@ $content
       cachePath: cachePath ?? this.cachePath,
       status: status ?? this.status,
       errorMessage: errorMessage ?? this.errorMessage,
+      audioCacheKey: audioCacheKey ?? this.audioCacheKey,
+      retryCount: retryCount ?? this.retryCount,
+      lastErrorTime: lastErrorTime ?? this.lastErrorTime,
     );
   }
 

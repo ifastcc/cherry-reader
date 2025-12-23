@@ -418,6 +418,17 @@ class _SearchScreenState extends State<SearchScreen> {
 
   /// 构建助手分组区块（可折叠展开）
   Widget _buildAssistantGroupSection(SearchResultGroup group, bool isDark, int index) {
+    // 每个结果卡片的估算高度（包含 margin、padding、内容）
+    // margin: 8, padding: 24, topRow: 20, matchContent: 84 (最多3行), bottomRow: 16, 间距: 16
+    const double estimatedCardHeight = 160.0;
+    // 最大显示数量（超过则需要滚动）
+    const int maxVisibleItems = 4;
+
+    final needsScroll = group.results.length > maxVisibleItems;
+    final maxHeight = needsScroll
+        ? estimatedCardHeight * maxVisibleItems
+        : estimatedCardHeight * group.results.length;
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: ExpansionTile(
@@ -439,12 +450,12 @@ class _SearchScreenState extends State<SearchScreen> {
         children: [
           // 使用 ConstrainedBox 限制最大高度，超出可滚动
           ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: group.results.length > 5 ? 360 : group.results.length * 72.0,
-            ),
+            constraints: BoxConstraints(maxHeight: maxHeight),
             child: ListView.builder(
               shrinkWrap: true,
-              physics: group.results.length > 5
+              padding: EdgeInsets.zero,
+              // 始终使用 ClampingScrollPhysics，让嵌套滚动正常工作
+              physics: needsScroll
                   ? const ClampingScrollPhysics()
                   : const NeverScrollableScrollPhysics(),
               itemCount: group.results.length,

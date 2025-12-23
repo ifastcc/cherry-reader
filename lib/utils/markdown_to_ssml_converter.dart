@@ -34,6 +34,33 @@ class SsmlConfig {
   final String strongEmphasis;
   final String emEmphasis;
 
+  // ========== 句内标点停顿配置 ==========
+  /// 是否启用句内标点停顿（逗号、句号等处自动插入停顿）
+  final bool enablePunctuationBreaks;
+
+  /// 全局节奏倍率 (1.0 = 正常, 1.5 = 慢 50%, 0.7 = 快 30%)
+  final double rhythmScale;
+
+  // 中文标点停顿（毫秒）
+  final int commaBreakMs;      // 逗号 ，
+  final int enumBreakMs;       // 顿号 、
+  final int semicolonBreakMs;  // 分号 ；
+  final int colonBreakMs;      // 冒号 ：
+  final int periodBreakMs;     // 句号 。
+  final int questionBreakMs;   // 问号 ？
+  final int exclamationBreakMs; // 感叹号 ！
+  final int ellipsisBreakMs;   // 省略号 ……
+  final int dashBreakMs;       // 破折号 ——
+  final int quoteEndBreakMs;   // 引号结束 "』」
+
+  // 英文标点停顿
+  final int enCommaBreakMs;
+  final int enSemicolonBreakMs;
+  final int enColonBreakMs;
+  final int enPeriodBreakMs;
+  final int enQuestionBreakMs;
+  final int enExclamationBreakMs;
+
   const SsmlConfig({
     // 标题
     this.h1BreakBefore = '600ms',
@@ -61,6 +88,25 @@ class SsmlConfig {
     // 强调
     this.strongEmphasis = 'strong',
     this.emEmphasis = 'moderate',
+    // 句内标点停顿（默认启用，模拟自然呼吸节奏）
+    this.enablePunctuationBreaks = true,
+    this.rhythmScale = 1.0,
+    this.commaBreakMs = 180,       // 逗号：短停顿，喘息点
+    this.enumBreakMs = 120,        // 顿号：更短，并列词项
+    this.semicolonBreakMs = 280,   // 分号：中停顿，分句
+    this.colonBreakMs = 220,       // 冒号：中停顿，引出内容
+    this.periodBreakMs = 450,      // 句号：长停顿，句子结束
+    this.questionBreakMs = 500,    // 问号：略长，疑问语调需要缓冲
+    this.exclamationBreakMs = 450, // 感叹号：长停顿，情感表达
+    this.ellipsisBreakMs = 350,    // 省略号：意犹未尽
+    this.dashBreakMs = 250,        // 破折号：解释性停顿
+    this.quoteEndBreakMs = 120,    // 引号结束：短停顿
+    this.enCommaBreakMs = 180,
+    this.enSemicolonBreakMs = 280,
+    this.enColonBreakMs = 220,
+    this.enPeriodBreakMs = 450,
+    this.enQuestionBreakMs = 500,
+    this.enExclamationBreakMs = 450,
   });
 
   /// 默认配置
@@ -94,6 +140,17 @@ class SsmlConfig {
     blockquoteRate: '-15%',
     blockquotePitch: '-5%',
     hrBreak: '900ms',
+    // 有声书风格：更明显的句内停顿
+    rhythmScale: 1.2,
+    commaBreakMs: 250,
+    enumBreakMs: 180,
+    semicolonBreakMs: 350,
+    colonBreakMs: 300,
+    periodBreakMs: 600,
+    questionBreakMs: 650,
+    exclamationBreakMs: 600,
+    ellipsisBreakMs: 450,
+    dashBreakMs: 320,
   );
 }
 
@@ -202,10 +259,126 @@ $content
     for (int i = 0; i < nodes.length; i++) {
       final node = nodes[i];
       if (node is md.Text) {
-        buffer.write(_escapeXml(node.text));
+        // 处理文本节点，可选添加标点停顿
+        if (config.enablePunctuationBreaks) {
+          buffer.write(_processTextWithPunctuation(node.text));
+        } else {
+          buffer.write(_escapeXml(node.text));
+        }
       } else if (node is md.Element) {
         _visitElement(node, buffer);
       }
+    }
+  }
+
+  /// 处理文本并在标点处插入停顿
+  ///
+  /// 这是控制朗读节奏的核心方法：
+  /// - 在逗号、顿号处插入短停顿（呼吸点）
+  /// - 在分号、冒号处插入中停顿（分句点）
+  /// - 在句号、问号、感叹号处插入长停顿（句末）
+  String _processTextWithPunctuation(String text) {
+    final buffer = StringBuffer();
+
+    for (int i = 0; i < text.length; i++) {
+      final char = text[i];
+
+      // 先写入字符（转义）
+      buffer.write(_escapeXmlChar(char));
+
+      // 根据标点决定是否插入停顿
+      final breakMs = _getPunctuationBreakMs(char, text, i);
+      if (breakMs > 0) {
+        // 应用全局节奏倍率
+        final scaledMs = (breakMs * config.rhythmScale).round();
+        buffer.write('<break time="${scaledMs}ms"/>');
+      }
+    }
+
+    return buffer.toString();
+  }
+
+  /// 获取标点符号对应的停顿时间（毫秒）
+  int _getPunctuationBreakMs(String char, String fullText, int index) {
+    switch (char) {
+      // ========== 中文标点 ==========
+      case '，':
+        return config.commaBreakMs;
+      case '、':
+        return config.enumBreakMs;
+      case '；':
+        return config.semicolonBreakMs;
+      case '：':
+        return config.colonBreakMs;
+      case '。':
+        return config.periodBreakMs;
+      case '？':
+        return config.questionBreakMs;
+      case '！':
+        return config.exclamationBreakMs;
+      case '…':
+        // 省略号：只在最后一个 … 处停顿
+        if (index + 1 < fullText.length && fullText[index + 1] == '…') {
+          return 0;
+        }
+        return config.ellipsisBreakMs;
+      case '—':
+        // 破折号：只在最后一个 — 处停顿
+        if (index + 1 < fullText.length && fullText[index + 1] == '—') {
+          return 0;
+        }
+        return config.dashBreakMs;
+      // 中文引号结束（短停顿）
+      case '"':
+      case "'":  // 中文右单引号
+      case '」':
+      case '』':
+      case '）':
+      case '】':
+        return config.quoteEndBreakMs;
+
+      // ========== 英文标点 ==========
+      case ',':
+        return config.enCommaBreakMs;
+      case ';':
+        return config.enSemicolonBreakMs;
+      case ':':
+        return config.enColonBreakMs;
+      case '.':
+        // 判断是否是句末句号（而非缩写）
+        if (index + 1 >= fullText.length) {
+          return config.enPeriodBreakMs;
+        }
+        final nextChar = fullText[index + 1];
+        if (nextChar == ' ' || nextChar == '\n' || nextChar == '\r') {
+          return config.enPeriodBreakMs;
+        }
+        return 0;
+      case '!':
+        return config.enExclamationBreakMs;
+      case '?':
+        return config.enQuestionBreakMs;
+
+      default:
+        return 0;
+    }
+  }
+
+  /// 单字符 XML 转义
+  String _escapeXmlChar(String char) {
+    switch (char) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case "'":
+        return '&apos;';
+      default:
+        return char;
     }
   }
 
