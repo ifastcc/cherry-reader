@@ -8,10 +8,6 @@
 
 Cherry Studio 对话的阅读、标注、洞察与知识管理工具
 
-<a href="https://apps.apple.com/cn/app/cherry-reader/id6755708214">
-  <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="App Store" height="40">
-</a>
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Flutter](https://img.shields.io/badge/Flutter-3.0%2B-02569B?logo=flutter)](https://flutter.dev/)
 
@@ -86,37 +82,17 @@ claude mcp add --transport http cherry-reader http://localhost:9527/mcp
 <div align="center">
 <table>
   <tr>
-    <td><img src="assets/screenshots/home.png" width="280" alt="话题列表" /></td>
+    <td><img src="assets/screenshots/insight.png" width="280" alt="AI 洞察" /></td>
     <td><img src="assets/screenshots/conversation.png" width="280" alt="对话阅读" /></td>
-    <td><img src="assets/screenshots/multi-model.png" width="280" alt="多模型对比" /></td>
     <td><img src="assets/screenshots/highlight.png" width="280" alt="高亮标注" /></td>
   </tr>
   <tr>
-    <td align="center">话题列表</td>
+    <td align="center">AI 洞察</td>
     <td align="center">对话阅读</td>
-    <td align="center">多模型对比</td>
     <td align="center">高亮标注</td>
   </tr>
 </table>
 </div>
-
----
-
-## 安装
-
-| 平台 | 下载 |
-|------|------|
-| **iOS / iPadOS** | [App Store](https://apps.apple.com/cn/app/cherry-reader/id6755708214) |
-| **macOS / Windows / Linux** | [GitHub Releases](https://github.com/ifastcc/cherry-reader/releases) |
-
-### 源码运行
-
-```bash
-git clone https://github.com/ifastcc/cherry-reader.git
-cd cherry-reader/flutter_viewer
-./run.sh          # macOS
-./run.sh ios      # iOS 模拟器
-```
 
 ---
 
@@ -133,6 +109,6 @@ cd cherry-reader/flutter_viewer
 
 **Cherry Reader** — 你的 AI 对话值得被记住
 
-[App Store](https://apps.apple.com/cn/app/cherry-reader/id6755708214) · [GitHub Releases](https://github.com/ifastcc/cherry-reader/releases) · [Issues](https://github.com/ifastcc/cherry-reader/issues)
+[GitHub](https://github.com/ifastcc/cherry-reader) · [Releases](https://github.com/ifastcc/cherry-reader/releases) · [Issues](https://github.com/ifastcc/cherry-reader/issues)
 
 </div>
