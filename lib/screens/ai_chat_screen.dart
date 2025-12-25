@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/isar/unified_conversation_entity.dart';
@@ -14,7 +15,6 @@ import '../utils/mention_parser.dart';
 import '../widgets/unified_markdown_renderer.dart';
 import '../widgets/context_selector.dart' show TopicSummary;
 import '../widgets/context_selector_with_styles.dart' show ContextSelectorWithStyles;
-import '../widgets/context_structure_view.dart';
 import '../widgets/provider_chip.dart';
 import '../widgets/ai_chat_drawer.dart';
 import '../widgets/model_selector.dart';
@@ -183,14 +183,45 @@ class _AIChatScreenState extends State<AIChatScreen> {
               _isSending = false;
               _streamingContent = '';
             });
-            // 刷新消息列表
-            _loadMessages();
+            // 刷新消息列表（不递归检查 session，避免无限循环）
+            _loadMessagesWithoutSessionCheck();
           }
         },
       );
-    } else if (session.status == StreamingSessionStatus.completed) {
-      // Session 已完成，刷新消息列表即可
-      _loadMessages();
+    }
+    // 注意：如果 session 已完成，不再调用 _loadMessages()
+    // 因为本方法是从 _loadMessages() 调用的，重复调用会导致无限循环
+  }
+
+  /// 只加载消息，不检查 session（用于避免递归）
+  Future<void> _loadMessagesWithoutSessionCheck() async {
+    if (_activeConversationId == null) return;
+
+    final messages = await _service.getMessages(_activeConversationId!);
+
+    // 从对话中加载上下文
+    final conversation = await _service.getConversation(_activeConversationId!);
+    StructuredContext? structuredContext;
+    String? contextContent;
+    String? contextSummary;
+
+    if (conversation?.contextSnapshot != null) {
+      contextContent = conversation!.contextSnapshot;
+      contextSummary = _generateContextSummary(conversation.contextSnapshot!);
+      structuredContext = StructuredContext.parse(
+        conversation.contextSnapshot!,
+        conversation.contextType,
+      );
+    }
+
+    if (mounted) {
+      setState(() {
+        _messages = messages;
+        _currentContextContent = contextContent;
+        _currentContextSummary = contextSummary;
+        _structuredContext = structuredContext;
+      });
+      _scrollToBottom();
     }
   }
 
@@ -339,14 +370,18 @@ class _AIChatScreenState extends State<AIChatScreen> {
     final reply = replies[replyIndex] as Map<String, dynamic>?;
     if (reply == null) return null;
 
-    // 提取回复内容
+    // 提取回复内容（包含多种可显示的块类型）
     final blocks = reply['blocks'] as List<dynamic>?;
     if (blocks == null) return null;
 
     final buffer = StringBuffer();
-    for (final block in blocks) {
-      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-        buffer.write(block['content'] as String? ?? '');
+    // 优先顺序：main_text > thinking > translation > code > error
+    final contentTypes = ['main_text', 'thinking', 'translation', 'code', 'error'];
+    for (final type in contentTypes) {
+      for (final block in blocks) {
+        if (block is Map<String, dynamic> && block['type'] == type) {
+          buffer.write(block['content'] as String? ?? '');
+        }
       }
     }
 
@@ -471,6 +506,30 @@ class _AIChatScreenState extends State<AIChatScreen> {
     final contextType = widget.contextTypeFilter ?? ConversationContextType.topic;
     final charCount = _currentContextContent?.length ?? 0;
 
+    // 单回复模式：即使内容为空也生成 JSON（便于显示原文标识）
+    if (contextType == ConversationContextType.singleMessage) {
+      String? modelName;
+      int replyCharCount = 0;
+      final rounds = contextData['rounds'] as List?;
+      if (rounds != null && rounds.isNotEmpty) {
+        final replies = rounds[0]['replies'] as List?;
+        if (replies != null && replies.isNotEmpty) {
+          modelName = replies[0]['model']?['name'] as String?;
+          // 计算回复字数（包含多种可显示的块类型）
+          final blocks = replies[0]['blocks'] as List? ?? [];
+          final contentTypes = ['main_text', 'thinking', 'translation', 'code', 'error'];
+          for (final type in contentTypes) {
+            for (final block in blocks) {
+              if (block is Map && block['type'] == type) {
+                replyCharCount += (block['content'] as String?)?.length ?? 0;
+              }
+            }
+          }
+        }
+      }
+      return '{"type":"single","modelName":"${_escapeJson(modelName ?? "AI")}","charCount":${replyCharCount > 0 ? replyCharCount : charCount}}';
+    }
+
     // 【修复】如果用户已清空选择（_currentContextContent 为空），返回 null
     // 避免回退到原始数据导致显示全部内容
     if (_currentContextContent == null || _currentContextContent!.isEmpty) {
@@ -481,27 +540,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
     // 如果 _selectedContextDataJson 为 null，说明用户没有选择任何内容，返回 null
     if (contextType == ConversationContextType.messageGroup) {
       return _selectedContextDataJson;  // 可能为 null，这是预期行为
-    }
-
-    if (contextType == ConversationContextType.singleMessage) {
-      // 单回复模式
-      String? modelName;
-      int replyCharCount = 0;
-      final rounds = contextData['rounds'] as List?;
-      if (rounds != null && rounds.isNotEmpty) {
-        final replies = rounds[0]['replies'] as List?;
-        if (replies != null && replies.isNotEmpty) {
-          modelName = replies[0]['model']?['name'] as String?;
-          // 计算回复字数
-          final blocks = replies[0]['blocks'] as List? ?? [];
-          for (final block in blocks) {
-            if (block is Map && block['type'] == 'main_text') {
-              replyCharCount += (block['content'] as String?)?.length ?? 0;
-            }
-          }
-        }
-      }
-      return '{"type":"single","modelName":"${_escapeJson(modelName ?? "AI")}","charCount":${replyCharCount > 0 ? replyCharCount : charCount}}';
     }
 
     return null;
@@ -995,6 +1033,56 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWideScreen = screenWidth >= 800;
+
+    // 宽屏分屏模式：左侧对话列表常驻，右侧对话内容
+    if (isWideScreen) {
+      return Scaffold(
+        key: _scaffoldKey,
+        appBar: _buildAppBar(),
+        body: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : Row(
+                children: [
+                  // 左侧：对话列表（嵌入式，不是 Drawer）
+                  SizedBox(
+                    width: 280,
+                    child: _EmbeddedConversationList(
+                      activeConversationId: _activeConversationId,
+                      contextId: widget.initialContextId,
+                      onSelectConversation: _selectConversation,
+                      onNewConversation: () {
+                        setState(() {
+                          _activeConversationId = null;
+                          _messages = [];
+                        });
+                      },
+                      onDeleteConversation: _deleteConversation,
+                    ),
+                  ),
+                  // 分隔线
+                  VerticalDivider(width: 1, thickness: 1, color: Colors.grey[300]),
+                  // 右侧：对话内容
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        _buildBody(),
+                        const Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: TtsMiniPlayer(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+      );
+    }
+
+    // 窄屏模式：使用 Drawer
     return Scaffold(
       key: _scaffoldKey,
       appBar: _buildAppBar(),
@@ -1013,7 +1101,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
           Navigator.pushNamed(context, '/settings');
         },
         onExport: () {
-          // TODO: 实现导出功能
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('导出功能开发中...')),
           );
@@ -1024,7 +1111,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
           : Stack(
               children: [
                 _buildBody(),
-                // TTS 播放控制条（浮动在底部）
                 const Positioned(
                   left: 0,
                   right: 0,
@@ -1056,11 +1142,17 @@ class _AIChatScreenState extends State<AIChatScreen> {
         ),
         const SizedBox(width: 8),
 
-        // 菜单按钮
-        IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
-          tooltip: '菜单',
+        // 菜单按钮（窄屏时显示，宽屏时隐藏因为列表常驻）
+        Builder(
+          builder: (context) {
+            final isWideScreen = MediaQuery.of(context).size.width >= 800;
+            if (isWideScreen) return const SizedBox.shrink();
+            return IconButton(
+              icon: const Icon(Icons.menu),
+              onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+              tooltip: '菜单',
+            );
+          },
         ),
       ],
     );
@@ -1637,7 +1729,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
       contextContent = conversation!.contextSnapshot;
     }
 
-    final hasContext = contextContent != null && contextContent.isNotEmpty;
+    // 检查是否有 context：内容非空 或 有结构化数据（单回复讨论等）
+    final hasContextData = message.contextDataJson != null && message.contextDataJson!.isNotEmpty;
+    final hasContext = (contextContent != null && contextContent.isNotEmpty) || hasContextData;
 
     // 如果没有结构化信息，回退到普通显示
     if (!hasTemplate && !hasContext && !hasQuery) {
@@ -1665,9 +1759,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
                       child: _buildTemplateButton(message.templateName!),
                     ),
 
-                  // 2. 要讨论的内容（原地展开树形结构）
+                  // 2. 要讨论的内容（点击弹出只读 context 编辑器）
                   if (hasContext)
-                    ContextStructureView(
+                    _buildContextSummaryCard(
                       contextDataJson: message.contextDataJson,
                       contextSnapshot: contextContent,
                     ),
@@ -1797,6 +1891,176 @@ class _AIChatScreenState extends State<AIChatScreen> {
             child: const Text('关闭'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 讨论内容摘要卡片（点击弹出只读 context 编辑器）
+  Widget _buildContextSummaryCard({
+    String? contextDataJson,
+    String? contextSnapshot,
+  }) {
+    // 计算摘要信息
+    final charCount = contextSnapshot?.length ?? 0;
+    String summary = '讨论内容';
+
+    // 尝试从 contextDataJson 解析更详细的摘要
+    if (contextDataJson != null && contextDataJson.isNotEmpty) {
+      try {
+        final data = Map<String, dynamic>.from(
+          const JsonDecoder().convert(contextDataJson) as Map,
+        );
+        final type = data['type'] as String?;
+        if (type == 'multi') {
+          final rounds = data['rounds'] as List<dynamic>? ?? [];
+          final replyCount = rounds.fold<int>(
+            0,
+            (sum, r) => sum + (((r as Map)['replies'] as List?)?.length ?? 0),
+          );
+          if (rounds.length > 1) {
+            summary = '${rounds.length}轮对话';
+          } else if (replyCount > 1) {
+            summary = '$replyCount条回复';
+          }
+        } else if (type == 'single') {
+          final modelName = data['modelName'] as String?;
+          if (modelName != null) {
+            summary = modelName;
+          }
+        }
+      } catch (_) {}
+    }
+
+    String formatChars(int count) {
+      if (count < 1000) return '$count';
+      if (count < 10000) return '${(count / 1000).toStringAsFixed(1)}k';
+      return '${(count / 10000).toStringAsFixed(1)}w';
+    }
+
+    return InkWell(
+      onTap: () => _showContextSelectorSheet(
+        contextDataJson: contextDataJson,
+        contextSnapshot: contextSnapshot,
+      ),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.04),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.withOpacity(0.2)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.format_quote_rounded, size: 16, color: Colors.orange[700]),
+            const SizedBox(width: 8),
+            Text(
+              '讨论内容',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.orange[800],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              summary,
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            const Spacer(),
+            if (charCount > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  formatChars(charCount),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.orange[700],
+                  ),
+                ),
+              ),
+            const SizedBox(width: 4),
+            Icon(Icons.open_in_new, size: 14, color: Colors.orange[400]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 弹出只读 context 编辑器的 bottom sheet
+  void _showContextSelectorSheet({
+    String? contextDataJson,
+    String? contextSnapshot,
+  }) {
+    final screenHeight = MediaQuery.of(context).size.height;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        constraints: BoxConstraints(maxHeight: screenHeight * 0.75),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 拖动指示器
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            // 标题栏
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Icon(Icons.format_quote_rounded, size: 20, color: Colors.orange[700]),
+                  const SizedBox(width: 8),
+                  Text(
+                    '讨论内容',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[900],
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    iconSize: 20,
+                    color: Colors.grey[600],
+                  ),
+                ],
+              ),
+            ),
+
+            Divider(height: 1, color: Colors.grey[200]),
+
+            // 内容区：使用 ContextSelectorWithStyles 只读模式
+            Flexible(
+              child: ContextSelectorWithStyles(
+                readOnly: true,
+                contextSnapshot: contextSnapshot ?? '',
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -3668,5 +3932,289 @@ class _SavedModelResponseCard extends StatelessWidget {
     } else {
       return Icons.memory;
     }
+  }
+}
+
+/// 嵌入式对话列表（用于宽屏分屏模式）
+///
+/// 复用 AIChatDrawer 的对话列表逻辑，但作为常驻侧边栏
+class _EmbeddedConversationList extends StatefulWidget {
+  final String? activeConversationId;
+  final String? contextId;
+  final void Function(String conversationId)? onSelectConversation;
+  final VoidCallback? onNewConversation;
+  final void Function(String conversationId)? onDeleteConversation;
+
+  const _EmbeddedConversationList({
+    this.activeConversationId,
+    this.contextId,
+    this.onSelectConversation,
+    this.onNewConversation,
+    this.onDeleteConversation,
+  });
+
+  @override
+  State<_EmbeddedConversationList> createState() => _EmbeddedConversationListState();
+}
+
+class _EmbeddedConversationListState extends State<_EmbeddedConversationList> {
+  final _conversationService = UnifiedConversationService.instance;
+  List<UnifiedConversationEntity> _conversations = [];
+  bool _loading = true;
+
+  String? get _topicId {
+    final contextId = widget.contextId;
+    if (contextId == null) return null;
+    final colonIndex = contextId.indexOf(':');
+    if (colonIndex > 0) {
+      return contextId.substring(0, colonIndex);
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  @override
+  void didUpdateWidget(_EmbeddedConversationList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activeConversationId != widget.activeConversationId) {
+      _loadData();
+    }
+  }
+
+  Future<void> _loadData() async {
+    setState(() => _loading = true);
+
+    try {
+      List<UnifiedConversationEntity> conversations;
+
+      // 直接按话题显示所有讨论
+      if (_topicId != null) {
+        conversations = await _conversationService.getConversationsByTopicPrefix(_topicId!);
+      } else {
+        conversations = await _conversationService.getConversations();
+      }
+
+      if (mounted) {
+        setState(() {
+          _conversations = conversations;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      color: isDark ? Colors.grey[900] : Colors.grey[50],
+      child: Column(
+        children: [
+          // 头部
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.grey[850] : Colors.white,
+              border: Border(
+                bottom: BorderSide(color: isDark ? Colors.grey[800]! : Colors.grey[200]!),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.history, size: 20, color: Colors.grey[600]),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    '讨论历史',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add, size: 20),
+                  onPressed: widget.onNewConversation,
+                  tooltip: '新建对话',
+                  visualDensity: VisualDensity.compact,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh, size: 20),
+                  onPressed: _loadData,
+                  tooltip: '刷新',
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+          ),
+
+          // 对话列表
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : _conversations.isEmpty
+                    ? _buildEmptyState()
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        itemCount: _conversations.length,
+                        itemBuilder: (context, index) {
+                          final conv = _conversations[index];
+                          final isActive = conv.conversationId == widget.activeConversationId;
+
+                          return _EmbeddedConversationTile(
+                            conversation: conv,
+                            isActive: isActive,
+                            onTap: () => widget.onSelectConversation?.call(conv.conversationId),
+                            onDelete: () => _confirmDelete(conv),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.chat_bubble_outline, size: 40, color: Colors.grey[400]),
+          const SizedBox(height: 12),
+          Text(
+            '暂无讨论',
+            style: TextStyle(color: Colors.grey[500], fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: widget.onNewConversation,
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('开始新对话'),
+            style: TextButton.styleFrom(
+              textStyle: const TextStyle(fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDelete(UnifiedConversationEntity conv) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除对话'),
+        content: Text('确定要删除"${conv.title}"吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.onDeleteConversation?.call(conv.conversationId);
+              _loadData();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 嵌入式对话列表项
+class _EmbeddedConversationTile extends StatelessWidget {
+  final UnifiedConversationEntity conversation;
+  final bool isActive;
+  final VoidCallback? onTap;
+  final VoidCallback? onDelete;
+
+  const _EmbeddedConversationTile({
+    required this.conversation,
+    this.isActive = false,
+    this.onTap,
+    this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final date = DateTime.fromMillisecondsSinceEpoch(conversation.updatedAt);
+    final now = DateTime.now();
+    final isToday = date.year == now.year && date.month == now.month && date.day == now.day;
+
+    String timeStr;
+    if (isToday) {
+      timeStr = '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    } else {
+      timeStr = '${date.month}/${date.day}';
+    }
+
+    return Material(
+      color: isActive
+          ? (isDark ? const Color(0xFF8B5CF6).withValues(alpha: 0.2) : const Color(0xFF8B5CF6).withValues(alpha: 0.1))
+          : Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onDelete,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                width: 3,
+                color: isActive ? const Color(0xFF8B5CF6) : Colors.transparent,
+              ),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      conversation.title,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text(
+                    timeStr,
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(Icons.chat_outlined, size: 12, color: Colors.grey[500]),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${conversation.roundCount} 轮对话',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -8,6 +8,9 @@ import '../models/isar/discussion_message_entity.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../models/isar/prompt_template_entity.dart';
 import '../models/isar/version_entity.dart';
+import '../models/isar/insight_entity.dart';
+import '../models/isar/perspective_entity.dart';
+import 'perspective_storage.dart';
 // 新架构：消息级存储
 import '../models/isar/assistant_entity.dart';
 import '../models/isar/topic_entity.dart';
@@ -97,6 +100,9 @@ class IsarDatabase {
           UnifiedMessageEntitySchema,
           UserPreferenceEntitySchema,
           TaskTemplateEntitySchema,
+          // 洞察功能
+          InsightEntitySchema,
+          PerspectiveEntitySchema,
           // 版本管理
           VersionEntitySchema,
           // 消息级存储
@@ -612,5 +618,40 @@ class IsarDatabase {
   /// 获取所有独立对话（topic 类型）
   Future<List<UnifiedConversationEntity>> getTopicConversations() async {
     return getUnifiedConversations(contextType: ConversationContextType.topic);
+  }
+
+  // ============ 洞察相关操作 ============
+
+  /// 初始化内置视角（确保每个内置视角都存在）
+  Future<void> initBuiltinPerspectives() async {
+    final isar = await instance;
+    final builtins = BuiltinPerspectives.getAll();
+
+    // 获取已存在的内置视角 ID
+    final existingIds = <String>{};
+    final existingPerspectives = await isar.perspectiveEntitys
+        .filter()
+        .isBuiltinEqualTo(true)
+        .findAll();
+    for (final p in existingPerspectives) {
+      existingIds.add(p.perspectiveId);
+    }
+
+    // 找出缺失的内置视角
+    final missing = builtins
+        .where((p) => !existingIds.contains(p.perspectiveId))
+        .toList();
+
+    if (missing.isNotEmpty) {
+      await isar.writeTxn(() async {
+        await isar.perspectiveEntitys.putAll(missing);
+      });
+      print('✅ 已补充 ${missing.length} 个缺失的内置视角');
+    }
+
+    // 如果完全没有视角数据，说明是全新安装
+    if (existingPerspectives.isEmpty && missing.length == builtins.length) {
+      print('✅ 已初始化 ${builtins.length} 个内置视角（全新安装）');
+    }
   }
 }

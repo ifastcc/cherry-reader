@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 /// 上下文结构视图（只读）
@@ -60,12 +61,17 @@ class _ContextStructureViewState extends State<ContextStructureView>
     _rounds = [];
     _summary = _ContextSummary();
 
-    // 优先从 contextDataJson 解析
-    if (widget.contextDataJson != null) {
+    // 优先从 contextDataJson 解析（必须非空且有内容）
+    if (widget.contextDataJson != null && widget.contextDataJson!.isNotEmpty) {
       _parseFromJson(widget.contextDataJson!);
+
+      // 【补充预览】如果同时有 contextSnapshot，从中提取预览内容
+      if (widget.contextSnapshot != null && widget.contextSnapshot!.isNotEmpty) {
+        _supplementPreviewFromSnapshot(widget.contextSnapshot!);
+      }
     }
-    // 否则从 contextSnapshot 解析
-    else if (widget.contextSnapshot != null) {
+    // 否则从 contextSnapshot 解析（必须非空且有内容）
+    else if (widget.contextSnapshot != null && widget.contextSnapshot!.isNotEmpty) {
       _parseFromSnapshot(widget.contextSnapshot!);
     }
 
@@ -73,12 +79,166 @@ class _ContextStructureViewState extends State<ContextStructureView>
     _calculateSummary();
   }
 
+  /// 从 contextSnapshot 中补充预览内容到已解析的 rounds
+  void _supplementPreviewFromSnapshot(String snapshot) {
+    if (_rounds.isEmpty) return;
+
+    // 单回复模式（只有一个回复）：直接用整个 snapshot 作为预览源
+    if (_rounds.length == 1 && _rounds[0].replies.length == 1) {
+      final preview = _extractPreview(snapshot, 150);
+      final oldReply = _rounds[0].replies[0];
+      _rounds[0] = _RoundInfo(
+        index: 0,
+        questionSelected: _rounds[0].questionSelected,
+        questionPreview: _rounds[0].questionPreview,
+        replies: [
+          _ReplyInfo(
+            model: oldReply.model,
+            charCount: oldReply.charCount,
+            selected: oldReply.selected,
+            preview: preview,
+          ),
+        ],
+      );
+      return;
+    }
+
+    // 多轮模式：尝试从 Markdown 格式中提取每个模型的内容
+    // 如果不是 Markdown 格式，就无法精确匹配，跳过
+    if (!snapshot.contains('##')) return;
+
+    // 解析 Markdown 获取每个模型的内容
+    final modelContents = <String, String>{};
+    final sections = snapshot.split('##').where((s) => s.trim().isNotEmpty);
+
+    for (final section in sections) {
+      if (section.trim().startsWith('模型回复')) {
+        final replyBlocks = section.split('###').where((s) => s.trim().isNotEmpty).skip(1);
+        for (final block in replyBlocks) {
+          final lines = block.trim().split('\n');
+          if (lines.isEmpty) continue;
+
+          final modelLine = lines.first.trim();
+          final content = lines.skip(1).join('\n').trim();
+          String modelName = modelLine.contains(':')
+              ? modelLine.split(':').last.trim()
+              : modelLine;
+
+          modelContents[modelName] = content;
+        }
+      }
+    }
+
+    // 补充预览到现有 rounds
+    for (var i = 0; i < _rounds.length; i++) {
+      final round = _rounds[i];
+      final updatedReplies = <_ReplyInfo>[];
+
+      for (final reply in round.replies) {
+        final content = modelContents[reply.model];
+        final preview = content != null ? _extractPreview(content, 60) : null;
+
+        updatedReplies.add(_ReplyInfo(
+          model: reply.model,
+          charCount: reply.charCount,
+          selected: reply.selected,
+          preview: preview ?? reply.preview,
+        ));
+      }
+
+      _rounds[i] = _RoundInfo(
+        index: round.index,
+        questionSelected: round.questionSelected,
+        questionPreview: round.questionPreview,
+        replies: updatedReplies,
+      );
+    }
+  }
+
   void _parseFromJson(String json) {
-    // 解析 type
+    // 使用 Dart JSON 解析器（更可靠）
+    try {
+      final data = _parseJsonSafe(json);
+      if (data == null) return;
+
+      final type = data['type'] as String?;
+
+      if (type == 'single') {
+        // 单回复模式
+        final modelName = data['modelName'] as String? ?? 'AI';
+        final charCount = data['charCount'] as int? ?? 0;
+
+        _rounds = [
+          _RoundInfo(
+            index: 0,
+            questionSelected: false,
+            questionPreview: null,
+            replies: [
+              _ReplyInfo(
+                model: modelName,
+                charCount: charCount,
+                selected: true,
+              ),
+            ],
+          ),
+        ];
+      } else if (type == 'multi') {
+        // 多轮模式
+        final rounds = data['rounds'] as List<dynamic>?;
+        if (rounds == null) return;
+
+        for (final roundData in rounds) {
+          if (roundData is! Map<String, dynamic>) continue;
+
+          final index = roundData['index'] as int? ?? 0;
+          final questionPreview = roundData['questionPreview'] as String?;
+          final repliesData = roundData['replies'] as List<dynamic>? ?? [];
+
+          final replies = <_ReplyInfo>[];
+          for (final replyData in repliesData) {
+            if (replyData is! Map<String, dynamic>) continue;
+
+            final model = replyData['model'] as String? ?? 'Unknown';
+            final charCount = replyData['charCount'] as int? ?? 0;
+
+            replies.add(_ReplyInfo(
+              model: model,
+              charCount: charCount,
+              selected: true,
+            ));
+          }
+
+          _rounds.add(_RoundInfo(
+            index: index,
+            questionSelected: questionPreview != null,
+            questionPreview: questionPreview,
+            replies: replies,
+          ));
+        }
+      }
+    } catch (e) {
+      // JSON 解析失败，回退到旧的正则解析
+      _parseFromJsonLegacy(json);
+    }
+  }
+
+  /// 安全解析 JSON
+  Map<String, dynamic>? _parseJsonSafe(String json) {
+    try {
+      // 使用 dart:convert 的 jsonDecode
+      final dynamic result = jsonDecode(json);
+      if (result is Map<String, dynamic>) {
+        return result;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// 旧的正则解析（备用）
+  void _parseFromJsonLegacy(String json) {
     final isSingle = json.contains('"type":"single"');
 
     if (isSingle) {
-      // 单回复模式
       final modelMatch = RegExp(r'"modelName":"([^"]*)"').firstMatch(json);
       final charMatch = RegExp(r'"charCount":(\d+)').firstMatch(json);
 
@@ -96,103 +256,6 @@ class _ContextStructureViewState extends State<ContextStructureView>
           ],
         ),
       ];
-    } else {
-      // 多轮模式 - 解析新格式的 rounds
-      // 新格式: {"index":0,"questionPreview":"...","replies":[{"model":"GPT-4","charCount":1234},...]}
-
-      // 使用正则提取每个 round 的完整 JSON
-      final roundPattern = RegExp(r'\{"index":(\d+)(?:,"questionPreview":"([^"]*)")?,"replies":\[(.*?)\]\}');
-      final matches = roundPattern.allMatches(json);
-
-      for (final match in matches) {
-        final index = int.tryParse(match.group(1) ?? '0') ?? 0;
-        final questionPreview = match.group(2)?.replaceAll('\\n', '\n');
-        final repliesStr = match.group(3) ?? '';
-
-        // 解析回复列表
-        final replies = <_ReplyInfo>[];
-        final replyPattern = RegExp(r'\{"model":"([^"]*)","charCount":(\d+)\}');
-        final replyMatches = replyPattern.allMatches(repliesStr);
-
-        for (final replyMatch in replyMatches) {
-          replies.add(_ReplyInfo(
-            model: replyMatch.group(1) ?? 'Unknown',
-            charCount: int.tryParse(replyMatch.group(2) ?? '0') ?? 0,
-            selected: true,
-          ));
-        }
-
-        // 如果没有解析到回复，尝试旧格式兼容
-        if (replies.isEmpty) {
-          // 旧格式: "models":["GPT-4","Claude"]
-          final oldModelsPattern = RegExp(r'"models":\[([^\]]*)\]');
-          final oldMatch = oldModelsPattern.firstMatch(json);
-          if (oldMatch != null) {
-            final modelsStr = oldMatch.group(1) ?? '';
-            final modelNames = RegExp(r'"([^"]*)"')
-                .allMatches(modelsStr)
-                .map((m) => m.group(1) ?? '')
-                .where((s) => s.isNotEmpty)
-                .toList();
-            for (final modelName in modelNames) {
-              replies.add(_ReplyInfo(
-                model: modelName,
-                charCount: 0,
-                selected: true,
-              ));
-            }
-          }
-        }
-
-        _rounds.add(_RoundInfo(
-          index: index,
-          questionSelected: questionPreview != null,
-          questionPreview: questionPreview,
-          replies: replies,
-        ));
-      }
-
-      // 如果新格式没有解析到，尝试完全旧格式兼容
-      if (_rounds.isEmpty) {
-        final oldRoundsPattern = RegExp(r'"index":(\d+),"replyCount":(\d+),"models":\[([^\]]*)\]');
-        final oldMatches = oldRoundsPattern.allMatches(json);
-
-        for (final match in oldMatches) {
-          final index = int.tryParse(match.group(1) ?? '0') ?? 0;
-          final replyCount = int.tryParse(match.group(2) ?? '0') ?? 0;
-          final modelsStr = match.group(3) ?? '';
-
-          final modelNames = RegExp(r'"([^"]*)"')
-              .allMatches(modelsStr)
-              .map((m) => m.group(1) ?? '')
-              .where((s) => s.isNotEmpty)
-              .toList();
-
-          final replies = <_ReplyInfo>[];
-          for (int i = 0; i < replyCount && i < modelNames.length; i++) {
-            replies.add(_ReplyInfo(
-              model: modelNames[i],
-              charCount: 0,
-              selected: true,
-            ));
-          }
-
-          while (replies.length < replyCount) {
-            replies.add(_ReplyInfo(
-              model: '回复 ${replies.length + 1}',
-              charCount: 0,
-              selected: true,
-            ));
-          }
-
-          _rounds.add(_RoundInfo(
-            index: index,
-            questionSelected: true,
-            questionPreview: null,
-            replies: replies,
-          ));
-        }
-      }
     }
   }
 
@@ -203,6 +266,28 @@ class _ContextStructureViewState extends State<ContextStructureView>
     // ## 模型回复
     // ### Model1
     // ...
+
+    // 【修复】如果不是 markdown 格式（没有 ## 分隔符），将整个内容作为单条回复处理
+    if (!snapshot.contains('##')) {
+      // 提取预览：单回复显示更多内容（3行约150字符）
+      final preview = _extractPreview(snapshot, 150);
+      _rounds = [
+        _RoundInfo(
+          index: 0,
+          questionSelected: false,
+          questionPreview: null,
+          replies: [
+            _ReplyInfo(
+              model: '原文内容',
+              charCount: snapshot.length,
+              selected: true,
+              preview: preview,
+            ),
+          ],
+        ),
+      ];
+      return;
+    }
 
     final sections = snapshot.split('##').where((s) => s.trim().isNotEmpty).toList();
 
@@ -242,10 +327,14 @@ class _ContextStructureViewState extends State<ContextStructureView>
               ? modelLine.split(':').last.trim()
               : modelLine;
 
+          // 多回复模式：每个回复显示 1 行预览（约 60 字符）
+          final preview = _extractPreview(content, 60);
+
           currentReplies.add(_ReplyInfo(
             model: modelName,
             charCount: content.length,
             selected: true,
+            preview: preview,
           ));
         }
       }
@@ -283,6 +372,29 @@ class _ContextStructureViewState extends State<ContextStructureView>
   String _truncate(String text, int maxLength) {
     if (text.length <= maxLength) return text;
     return '${text.substring(0, maxLength)}...';
+  }
+
+  /// 提取内容预览
+  ///
+  /// 清理换行和多余空格，截取指定长度
+  String _extractPreview(String content, int maxLength) {
+    if (content.isEmpty) return '';
+
+    // 清理内容：替换多个换行为单个空格，去除首尾空白
+    final cleaned = content
+        .replaceAll(RegExp(r'\n+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    if (cleaned.length <= maxLength) return cleaned;
+
+    // 尝试在单词边界截断
+    final truncated = cleaned.substring(0, maxLength);
+    final lastSpace = truncated.lastIndexOf(' ');
+    if (lastSpace > maxLength * 0.7) {
+      return '${truncated.substring(0, lastSpace)}...';
+    }
+    return '$truncated...';
   }
 
   String _formatCharCount(int count) {
@@ -450,6 +562,9 @@ class _ContextStructureViewState extends State<ContextStructureView>
             final isLastReply = replyIndex == round.replies.length - 1;
             final hasQuestion = round.questionSelected && round.questionPreview != null;
 
+            // 判断是否为单回复模式（显示更多预览）
+            final isSingleReply = round.replies.length == 1 && _rounds.length == 1;
+
             return _buildTreeNode(
               isRoot: !hasQuestion,
               isLast: isLastReply,
@@ -458,6 +573,8 @@ class _ContextStructureViewState extends State<ContextStructureView>
               isSelected: reply.selected,
               icon: Icons.smart_toy_outlined,
               color: Colors.purple,
+              preview: reply.preview,
+              showMultilinePreview: isSingleReply,  // 单回复显示多行预览
             );
           }),
         ],
@@ -473,7 +590,93 @@ class _ContextStructureViewState extends State<ContextStructureView>
     required bool isSelected,
     required IconData icon,
     required Color color,
+    String? preview,
+    bool showMultilinePreview = false,
   }) {
+    // 单回复显示多行预览布局
+    if (showMultilinePreview && preview != null && preview.isNotEmpty) {
+      return Padding(
+        padding: EdgeInsets.only(left: isRoot ? 0 : 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 第一行：勾选 + 图标 + 标题 + 字数
+            Row(
+              children: [
+                // 勾选图标
+                Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withOpacity(0.15) : Colors.transparent,
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(
+                      color: isSelected ? color : Colors.grey[350]!,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: isSelected
+                      ? Icon(Icons.check, size: 10, color: color)
+                      : null,
+                ),
+                const SizedBox(width: 6),
+                Icon(icon, size: 14, color: color.withOpacity(0.8)),
+                const SizedBox(width: 4),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[800],
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: color,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            // 第二行：预览内容（多行）
+            Padding(
+              padding: const EdgeInsets.only(left: 22, top: 6),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  preview,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey[700],
+                    height: 1.4,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 多回复模式：一行显示（标题 + 字数 + 预览）
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -523,15 +726,28 @@ class _ContextStructureViewState extends State<ContextStructureView>
             ),
           ),
 
-          // 副标题
+          // 字数
           if (subtitle != null) ...[
             const SizedBox(width: 6),
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey[500],
+              ),
+            ),
+          ],
+
+          // 预览（多回复模式下显示在同一行）
+          if (preview != null && preview.isNotEmpty && !showMultilinePreview) ...[
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
-                subtitle,
+                preview,
                 style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey[500],
+                  fontSize: 10,
+                  color: Colors.grey[400],
+                  fontStyle: FontStyle.italic,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -608,11 +824,13 @@ class _ReplyInfo {
   final String model;
   final int charCount;
   final bool selected;
+  final String? preview;  // 内容预览
 
   _ReplyInfo({
     required this.model,
     required this.charCount,
     required this.selected,
+    this.preview,
   });
 }
 

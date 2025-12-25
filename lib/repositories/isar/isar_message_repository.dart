@@ -229,6 +229,46 @@ class IsarMessageRepository implements IMessageRepository {
     }
   }
 
+  @override
+  Future<Map<String, List<MessageModel>>> getAllUserMessages() async {
+    try {
+      final sw = Stopwatch()..start();
+      final isar = await _db.importInstance;
+      debugPrint('⏱️ [Isar] getAllUserMessages - 获取实例: ${sw.elapsedMilliseconds}ms');
+
+      // 一次性查询所有用户消息（role == 'user'）
+      sw.reset();
+      final entities = await isar.messageEntitys
+          .filter()
+          .roleEqualTo('user')
+          .sortByCreatedAt()
+          .findAll();
+      debugPrint('⏱️ [Isar] getAllUserMessages - 查询 (${entities.length}条): ${sw.elapsedMilliseconds}ms');
+
+      // 按 topicId 分组
+      sw.reset();
+      final grouped = <String, List<MessageModel>>{};
+      for (final entity in entities) {
+        grouped
+            .putIfAbsent(entity.topicId, () => [])
+            .add(_toMessageModel(entity));
+      }
+      debugPrint('⏱️ [Isar] getAllUserMessages - 分组+转换 (${grouped.length}个话题): ${sw.elapsedMilliseconds}ms');
+
+      // 每组按 roundIndex 排序
+      sw.reset();
+      for (final list in grouped.values) {
+        list.sort((a, b) => a.roundIndex.compareTo(b.roundIndex));
+      }
+      debugPrint('⏱️ [Isar] getAllUserMessages - 排序: ${sw.elapsedMilliseconds}ms');
+
+      return grouped;
+    } on IsarError catch (e) {
+      print('❌ 获取所有用户消息失败: $e');
+      return {};
+    }
+  }
+
   // ========== Block 查询 ==========
 
   @override

@@ -2179,12 +2179,16 @@ $modelResponses''';
     final messageId = reply['id'] as String? ?? '';
     final modelColor = _getModelColor(modelName);
 
-    // 提取内容
+    // 提取内容（包含多种可显示的块类型）
+    // 优先顺序：main_text > thinking > translation > code > error
     final blocks = reply['blocks'] as List<dynamic>? ?? [];
     String content = '';
-    for (final block in blocks) {
-      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-        content += block['content'] as String? ?? '';
+    final contentTypes = ['main_text', 'thinking', 'translation', 'code', 'error'];
+    for (final type in contentTypes) {
+      for (final block in blocks) {
+        if (block is Map<String, dynamic> && block['type'] == type) {
+          content += block['content'] as String? ?? '';
+        }
       }
     }
 
@@ -2295,12 +2299,16 @@ $modelResponses''';
     final modelName = model?['name'] as String? ?? 'Assistant';
     final messageId = reply['id'] as String? ?? '';
 
-    // 提取内容
+    // 提取内容（包含多种可显示的块类型）
+    // 优先顺序：main_text > thinking > translation > code > error
     final blocks = reply['blocks'] as List<dynamic>? ?? [];
     String content = '';
-    for (final block in blocks) {
-      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-        content += block['content'] as String? ?? '';
+    final contentTypes = ['main_text', 'thinking', 'translation', 'code', 'error'];
+    for (final type in contentTypes) {
+      for (final block in blocks) {
+        if (block is Map<String, dynamic> && block['type'] == type) {
+          content += block['content'] as String? ?? '';
+        }
       }
     }
 

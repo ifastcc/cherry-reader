@@ -19,184 +19,101 @@ Cherry Studio 对话的阅读器与知识管理工具
 
 ---
 
+## 截图
+
+<!-- 横向可滚动画廊 -->
+<div align="center">
+<table>
+  <tr>
+    <td><img src="assets/screenshots/home.png" width="280" alt="首页" /></td>
+    <td><img src="assets/screenshots/conversation.png" width="280" alt="对话" /></td>
+    <td><img src="assets/screenshots/multi-model.png" width="280" alt="多模型对比" /></td>
+    <td><img src="assets/screenshots/highlight.png" width="280" alt="高亮标注" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>话题列表</b></td>
+    <td align="center"><b>对话阅读</b></td>
+    <td align="center"><b>多模型对比</b></td>
+    <td align="center"><b>高亮标注</b></td>
+  </tr>
+</table>
+</div>
+
+---
+
 ## 功能
 
-导入 Cherry Studio 导出的对话数据，提供：
+### 阅读体验
 
-- **阅读体验**：全屏专注模式，流畅渲染长对话
-- **多模型对比**：同一问题的多个模型回答，AI 自动分析共识与分歧
-- **讨论挂载**：在任意回复下开启独立讨论，不污染原对话
-- **TTS 朗读**：Azure 语音，边下载边播放
-- **EPUB 导出**：适配各类阅读器
-- **高亮标注**：多色标记，本地持久化
-- **MCP Server**：让 Cursor / Claude Code / VS Code 等 AI 编程助手访问你的聊天记录
+| 功能 | 说明 |
+|------|------|
+| **全屏专注模式** | 隐藏侧边栏，沉浸式阅读长对话 |
+| **TTS 语音朗读** | Azure 语音引擎，边下载边播放，支持倍速调节 |
+| **EPUB 导出** | 导出为电子书，在 Kindle、Books 等阅读器中继续阅读 |
+| **高亮标注** | 5 种颜色标记重要内容，本地持久化存储 |
+
+### 多模型对比
+
+Cherry Studio 支持 `@提及` 多个模型回答同一问题。Cherry Reader 提供：
+
+| 功能 | 说明 |
+|------|------|
+| **并排展示** | 多个模型的回答左右对照显示 |
+| **AI 共识分析** | 自动分析各模型回答的共识点与分歧点 |
+| **主线标识** | 金色边框标记对话主线（你选择保留的回答） |
+
+### 讨论挂载
+
+在任意 AI 回复下开启独立讨论，深入探索某个观点，不污染原对话上下文。
+
+### MCP Server（桌面端）
+
+让 AI 编程助手（Cursor、Claude Code、VS Code、Cline 等）访问你的聊天记录。
+
+| 工具 | 用途 |
+|------|------|
+| `recall_my_conversations` | 回顾某段时间的对话（"这周聊了什么"） |
+| `search_past_discussions` | 语义/关键词搜索历史讨论 |
+| `read_conversation_detail` | 读取完整对话内容 |
+
+**启用**：设置 → MCP 服务 → 开启（localhost:9527，数据不离开设备）
+
+---
 
 ## 安装
 
-### 桌面端（macOS / Windows / Linux）
+### 下载
 
-从 [Releases](https://github.com/ifastcc/cherry-reader/releases) 下载：
+| 平台 | 来源 |
+|------|------|
+| **iOS / iPadOS** | [App Store](https://apps.apple.com/cn/app/cherry-reader/id6755708214) |
+| **macOS / Windows / Linux** | [GitHub Releases](https://github.com/ifastcc/cherry-reader/releases) |
 
-| 平台 | 文件 | 说明 |
-|------|------|------|
-| macOS | `Cherry.Reader-x.x.x-macos.dmg` | 拖入应用程序 |
-| Windows | `Cherry.Reader-x.x.x-windows.zip` | 解压后运行 exe |
-| Linux | `Cherry.Reader-x.x.x-linux.tar.gz` | 解压后运行 |
-
-### iOS / iPadOS
-
-[App Store](https://apps.apple.com/cn/app/cherry-reader/id6755708214)
-
-### 源码构建
+### 源码运行
 
 ```bash
 git clone https://github.com/ifastcc/cherry-reader.git
 cd cherry-reader/flutter_viewer
-flutter pub get
-flutter run -d macos  # 或 ios / android / windows / linux
+./run.sh          # macOS (默认)
+./run.sh ios      # iOS 模拟器
+./run.sh profile  # 性能分析模式
 ```
 
-## 配置
+---
 
-在设置中配置（AI 分析功能需要）：
-
-| 配置项 | 说明 |
-|-------|------|
-| API Key | OpenAI / Claude / 兼容格式 |
-| Base URL | 自定义 API 地址 |
-| Azure TTS | 语音朗读密钥 |
-
-## MCP Server（桌面端）
-
-桌面版内置 MCP Server，让 AI 编程助手（Cursor、Claude Code、VS Code Copilot、Cline 等）访问你的 Cherry Studio 聊天记录。
-
-**启用**：设置 → MCP 服务 → 开启
-
-> 纯本地运行（localhost:9527），数据不离开你的设备。
-
-### 快速配置
+## MCP 配置
 
 ```bash
 # Claude Code
 claude mcp add --transport http cherry-reader http://localhost:9527/mcp
 ```
 
-应用内提供 Cursor、VS Code、Cline、Cherry Studio 等工具的一键复制配置。
-
-### MCP Tools Reference
-
-#### `recall_my_conversations`
-
-回顾某段时间内聊过的内容。适合问「这周聊了什么」「最近在关注什么」。
-
-```typescript
-// 参数
-{
-  period?: "today" | "yesterday" | "this_week" | "this_month" | "last_7_days" | "last_30_days" | "custom",
-  start_date?: string,      // period=custom 时，格式 YYYY-MM-DD
-  end_date?: string,        // period=custom 时，格式 YYYY-MM-DD
-  min_rounds?: number,      // 最小轮次，默认 1
-  assistant_filter?: string, // 按助手名称筛选，如 "Claude GPT"
-  limit?: number            // 返回数量，默认 100，最大 500
-}
-
-// 返回
-{
-  period: string,
-  topics: [{
-    topic_id: string,
-    topic_name: string,
-    assistant_name: string,
-    round_count: number,
-    user_queries: [{ round: number, query: string }]
-  }]
-}
-```
-
-#### `search_past_discussions`
-
-搜索历史讨论。支持语义搜索和关键词搜索。
-
-```typescript
-// 参数
-{
-  query: string,            // 必填，如 "人生意义"、"职业规划"
-  assistant_filter?: string,
-  search_mode?: "semantic" | "keyword",  // 默认 semantic
-  min_score?: number,       // 语义搜索最小相似度 0-1，默认 0.5
-  time_range_days?: number, // 搜索范围（天），0=全部
-  min_rounds?: number,
-  limit?: number            // 默认 30
-}
-
-// 返回
-{
-  query: string,
-  search_mode: string,
-  related_topics: [{
-    topic_id: string,
-    topic_name: string,
-    round_count: number,
-    score: number | null,
-    user_queries: [{ round: number, query: string }]
-  }]
-}
-```
-
-#### `read_conversation_detail`
-
-读取对话详情。
-
-```typescript
-// 参数
-{
-  topic_id?: string,        // 与 topic_name 二选一
-  topic_name?: string,      // 支持模糊匹配
-  mode?: "queries_only" | "mainline" | "full",  // 默认 mainline
-  start_round?: number,     // 默认 0
-  round_count?: number,     // 默认 10
-  include_thinking?: boolean // 是否包含 AI 思考过程，默认 false
-}
-
-// 返回
-{
-  topic_id: string,
-  topic_name?: string,
-  mode: string,
-  start_round: number,
-  round_count: number,
-  rounds: [{
-    round: number,
-    messages: [{
-      id: string,
-      role: string,
-      model: string,
-      useful: boolean,
-      content: string,
-      created_at: string
-    }]
-  }]
-}
-```
-
-### 使用示例
-
-在 Cursor / Claude Code 中：
-
-```
-"帮我回顾一下这周和 Claude 聊了什么"
-"之前讨论过 React 状态管理吗？找一下"
-"读一下那个关于职业规划的对话"
-```
-
-## 贡献
-
-[Issue](https://github.com/ifastcc/cherry-reader/issues) 和 PR 欢迎。
+其他工具（Cursor、VS Code、Cline）的配置可在应用内一键复制。
 
 ---
 
 <div align="center">
 
-[下载 Cherry Reader](https://apps.apple.com/cn/app/cherry-reader/id6755708214) · [Releases（桌面端）](https://github.com/ifastcc/cherry-reader/releases)
+[App Store](https://apps.apple.com/cn/app/cherry-reader/id6755708214) · [GitHub Releases](https://github.com/ifastcc/cherry-reader/releases) · [Issues](https://github.com/ifastcc/cherry-reader/issues)
 
 </div>

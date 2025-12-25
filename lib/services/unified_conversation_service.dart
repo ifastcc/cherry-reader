@@ -2,6 +2,7 @@ import 'dart:developer' as developer;
 import 'package:uuid/uuid.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../models/isar/prompt_template_entity.dart';
+import '../utils/api_host_utils.dart';
 import 'isar_database.dart';
 import 'ai_provider_service.dart';
 import 'openai_service.dart';
@@ -724,9 +725,10 @@ class UnifiedConversationService {
     await _db.saveUnifiedMessage(assistantMessage);
 
     // 4. 调用 API 并流式更新
+    // 注意：需要规范化 apiHost，确保包含 /v1 等版本路径
     final service = OpenAIService(
       apiKey: provider.apiKey,
-      baseUrl: provider.apiHost,
+      baseUrl: formatOpenAIApiHost(provider.apiHost),
     );
 
     var fullContent = '';

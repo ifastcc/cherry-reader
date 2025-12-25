@@ -1275,7 +1275,7 @@ class _TreeNode extends StatelessWidget {
                       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                       child: Row(
                         children: [
-                          // 勾选框 - 单独处理点击，阻止事件冒泡
+                          // 勾选框
                           GestureDetector(
                             onTap: onToggleSelect,
                             behavior: HitTestBehavior.opaque,

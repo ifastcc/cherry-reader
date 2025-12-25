@@ -21,6 +21,7 @@ import '../utils/platform_utils.dart';
 import 'conversation_screen.dart';
 import 'settings_screen.dart';
 import 'search_screen.dart';
+import 'insight_screen.dart';
 import 'package:intl/intl.dart';
 
 /// 同步阶段
@@ -1411,13 +1412,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _buildStatusBar(),
         ],
       ),
-      floatingActionButton: _loadMode == DataLoadMode.manual
-          ? FloatingActionButton.extended(
-              onPressed: _isLoading ? null : _pickAndLoadFile,
-              icon: const Icon(Icons.folder_open),
-              label: const Text('加载数据'),
-            )
-          : null,
+      floatingActionButton: _buildFloatingActionButton(),
+    );
+  }
+
+  /// 构建悬浮按钮
+  Widget? _buildFloatingActionButton() {
+    // 手动模式且无数据时，显示"加载数据"按钮
+    if (_loadMode == DataLoadMode.manual && _topicIndex == null) {
+      return FloatingActionButton.extended(
+        onPressed: _isLoading ? null : _pickAndLoadFile,
+        icon: const Icon(Icons.folder_open),
+        label: const Text('加载数据'),
+      );
+    }
+
+    // 没有数据时不显示洞察按钮
+    if (_topicIndex == null) {
+      return null;
+    }
+
+    // 有数据时显示"洞察"悬浮按钮
+    return FloatingActionButton(
+      onPressed: _isLoading ? null : () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const InsightScreen(),
+          ),
+        );
+      },
+      tooltip: '洞察',
+      child: const Icon(Icons.insights),
     );
   }
 

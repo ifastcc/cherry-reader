@@ -45,6 +45,12 @@ abstract class IMessageRepository {
   /// 获取话题的所有消息（慎用：可能数据量大）
   Future<List<MessageModel>> loadAllMessages(String topicId);
 
+  /// 【性能优化】获取所有用户消息（跨话题批量查询）
+  ///
+  /// 用于 AI 洞察等需要全量用户提问的场景
+  /// 返回按 topicId 分组的用户消息
+  Future<Map<String, List<MessageModel>>> getAllUserMessages();
+
   // ========== Block 查询 ==========
 
   /// 加载消息的所有 Block

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
 
 import 'cherry_extractor.dart';
+import 'insight_service.dart';
 import 'version_service.dart';
 import 'versioned_data_import_service.dart';
 
@@ -182,6 +183,9 @@ class BackgroundImportService {
         debugPrint('✅ 后台导入完成（版本已锁定，未激活）: ${version.versionId}');
       }
 
+      // 5. 【性能优化】后台预加载 AI 洞察数据
+      _triggerPreload();
+
       _updateStatus(ImportStatus.completed(version.versionId));
     } catch (e) {
       debugPrint('❌ 后台导入失败: $e');
@@ -245,5 +249,20 @@ class BackgroundImportService {
   void _updateStatus(ImportStatus status) {
     _currentStatus = status;
     _statusController.add(status);
+  }
+
+  /// 触发后台预加载（不阻塞导入流程）
+  void _triggerPreload() {
+    // 先失效缓存
+    InsightService.instance.invalidateCache();
+
+    // 异步预加载，不等待完成
+    Future.microtask(() async {
+      try {
+        await InsightService.instance.preloadQueries();
+      } catch (e) {
+        debugPrint('⚠️ 预加载失败（不影响导入）: $e');
+      }
+    });
   }
 }

@@ -30,7 +30,10 @@ import 'package:just_audio/just_audio.dart';
 import 'ai_provider_screen.dart';
 import 'onboarding_screen.dart';
 import '../services/prompt_template_service.dart';
+import '../services/insight_service.dart';
+import '../services/perspective_storage.dart';
 import '../models/isar/prompt_template_entity.dart';
+import '../models/isar/perspective_entity.dart';
 
 // SharedPreferences 键名常量
 const String _keyApiUrl = 'openai_api_url';
@@ -270,6 +273,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildProviderManagementCard(),
                     const SizedBox(height: 12),
                     _buildAIPreferencesCard(),
+
+                    const SizedBox(height: 24),
+
+                    // ========== 洞察视角 ==========
+                    _buildSectionHeader('洞察视角', Icons.psychology),
+                    _buildPerspectiveManagementSection(),
 
                     const SizedBox(height: 24),
 
@@ -2429,6 +2438,530 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
     );
   }
+
+  /// 构建洞察视角管理区域
+  Widget _buildPerspectiveManagementSection() {
+    return FutureBuilder<List<PerspectiveEntity>>(
+      future: InsightService.instance.getAllPerspectives(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+
+        final perspectives = snapshot.data!;
+        // 按 sortOrder 排序
+        perspectives.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+
+        // 分离内置和自定义视角
+        final builtinPerspectives = perspectives.where((p) => p.isBuiltin).toList();
+        final customPerspectives = perspectives.where((p) => !p.isBuiltin).toList();
+
+        // 按分组组织内置视角
+        final grouped = <String, List<PerspectiveEntity>>{};
+        for (final p in builtinPerspectives) {
+          grouped.putIfAbsent(p.category, () => []).add(p);
+        }
+
+        // 分组顺序
+        const categoryOrder = [
+          BuiltinPerspectives.categorySelf,
+          BuiltinPerspectives.categorySolve,
+          BuiltinPerspectives.categoryAction,
+          BuiltinPerspectives.categoryGrow,
+        ];
+
+        final enabledCount = perspectives.where((p) => p.isEnabled).length;
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.psychology, size: 20),
+                    const SizedBox(width: 8),
+                    const Text(
+                      '选择要显示的视角',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const Spacer(),
+                    if (perspectives.isEmpty)
+                      TextButton.icon(
+                        onPressed: () async {
+                          await InsightService.instance.forceResetBuiltinPerspectives();
+                          setState(() {});
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('已重置内置视角')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.refresh, size: 16),
+                        label: const Text('重置视角'),
+                      )
+                    else
+                      Text(
+                        '$enabledCount / ${perspectives.length}',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '在洞察页面中显示的分析视角',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                ),
+                const SizedBox(height: 16),
+
+                // 按分组显示内置视角
+                for (final category in categoryOrder) ...[
+                  if (grouped.containsKey(category)) ...[
+                    _buildCategoryHeader(category),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: grouped[category]!
+                          .map((p) => _buildPerspectiveChip(p))
+                          .toList(),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ],
+
+                // 自定义视角区域
+                const Divider(),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Text('✨', style: TextStyle(fontSize: 14)),
+                    const SizedBox(width: 6),
+                    Text(
+                      '自定义视角',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () => _showPerspectiveEditor(null),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('添加'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (customPerspectives.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey[300]!),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.lightbulb_outline, color: Colors.grey[400], size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          '创建自己的分析视角和 Prompt 模板',
+                          style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: customPerspectives
+                        .map((p) => _buildCustomPerspectiveChip(p))
+                        .toList(),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 构建分组标题
+  Widget _buildCategoryHeader(String category) {
+    final name = BuiltinPerspectives.categoryNames[category] ?? category;
+    final icon = BuiltinPerspectives.categoryIcons[category] ?? '📁';
+    return Row(
+      children: [
+        Text(icon, style: const TextStyle(fontSize: 14)),
+        const SizedBox(width: 6),
+        Text(
+          name,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: Colors.grey[700],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 构建单个视角 Chip
+  Widget _buildPerspectiveChip(PerspectiveEntity perspective) {
+    return Tooltip(
+      message: perspective.description,
+      child: FilterChip(
+        avatar: Text(perspective.icon, style: const TextStyle(fontSize: 14)),
+        label: Text(
+          perspective.name,
+          style: TextStyle(
+            fontSize: 12,
+            color: perspective.isEnabled ? Colors.white : null,
+          ),
+        ),
+        selected: perspective.isEnabled,
+        selectedColor: Colors.green,
+        checkmarkColor: Colors.white,
+        onSelected: (selected) async {
+          await InsightService.instance.togglePerspectiveEnabled(
+            perspective.perspectiveId,
+            selected,
+          );
+          setState(() {}); // 刷新列表
+        },
+      ),
+    );
+  }
+
+  /// 构建自定义视角 Chip（带编辑和删除功能）
+  Widget _buildCustomPerspectiveChip(PerspectiveEntity perspective) {
+    return GestureDetector(
+      onLongPress: () => _showPerspectiveEditor(perspective),
+      child: Tooltip(
+        message: '${perspective.description}\n长按编辑',
+        child: InputChip(
+          avatar: Text(perspective.icon, style: const TextStyle(fontSize: 14)),
+          label: Text(
+            perspective.name,
+            style: TextStyle(
+              fontSize: 12,
+              color: perspective.isEnabled ? Colors.white : null,
+            ),
+          ),
+          selected: perspective.isEnabled,
+          selectedColor: Colors.blue,
+          checkmarkColor: Colors.white,
+          onSelected: (selected) async {
+            await InsightService.instance.togglePerspectiveEnabled(
+              perspective.perspectiveId,
+              selected,
+            );
+            setState(() {}); // 刷新列表
+          },
+          onDeleted: () => _confirmDeletePerspective(perspective),
+          deleteIconColor: perspective.isEnabled ? Colors.white70 : Colors.grey,
+        ),
+      ),
+    );
+  }
+
+  /// 确认删除视角
+  Future<void> _confirmDeletePerspective(PerspectiveEntity perspective) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Text(perspective.icon, style: const TextStyle(fontSize: 24)),
+            const SizedBox(width: 8),
+            Text('删除「${perspective.name}」'),
+          ],
+        ),
+        content: const Text('确定要删除这个自定义视角吗？\n此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final success = await InsightService.instance.deleteCustomPerspective(
+        perspective.perspectiveId,
+      );
+
+      if (mounted) {
+        if (success) {
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('已删除「${perspective.name}」'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('删除失败'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  /// 显示视角编辑对话框
+  Future<void> _showPerspectiveEditor(PerspectiveEntity? perspective) async {
+    final isEditing = perspective != null;
+
+    final nameController = TextEditingController(text: perspective?.name ?? '');
+    final iconController = TextEditingController(text: perspective?.icon ?? '🔍');
+    final descController = TextEditingController(text: perspective?.description ?? '');
+    final promptController = TextEditingController(text: perspective?.promptTemplate ?? _defaultPromptTemplate);
+    String selectedCategory = perspective?.category ?? BuiltinPerspectives.categorySelf;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(isEditing ? Icons.edit : Icons.add_circle_outline),
+              const SizedBox(width: 8),
+              Text(isEditing ? '编辑视角' : '添加自定义视角'),
+            ],
+          ),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 基本信息行
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 图标
+                      SizedBox(
+                        width: 80,
+                        child: TextField(
+                          controller: iconController,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 24),
+                          decoration: const InputDecoration(
+                            labelText: '图标',
+                            hintText: '🔍',
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLength: 2,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // 名称
+                      Expanded(
+                        child: TextField(
+                          controller: nameController,
+                          decoration: const InputDecoration(
+                            labelText: '视角名称',
+                            hintText: '例如：批判思维',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 分组选择
+                  const Text('分组', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      BuiltinPerspectives.categorySelf,
+                      BuiltinPerspectives.categorySolve,
+                      BuiltinPerspectives.categoryAction,
+                      BuiltinPerspectives.categoryGrow,
+                    ].map((category) {
+                      final isSelected = selectedCategory == category;
+                      final name = BuiltinPerspectives.categoryNames[category] ?? category;
+                      final icon = BuiltinPerspectives.categoryIcons[category] ?? '📁';
+                      return ChoiceChip(
+                        avatar: Text(icon, style: const TextStyle(fontSize: 12)),
+                        label: Text(name),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setDialogState(() => selectedCategory = category);
+                          }
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 描述
+                  TextField(
+                    controller: descController,
+                    decoration: const InputDecoration(
+                      labelText: '简短描述',
+                      hintText: '例如：用批判性思维审视你的想法',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Prompt 模板
+                  const Text('Prompt 模板', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 4),
+                  Text(
+                    '使用 {queries} 作为用户提问列表的占位符',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: promptController,
+                    decoration: const InputDecoration(
+                      hintText: '请分析以下提问...',
+                      border: OutlineInputBorder(),
+                      alignLabelWithHint: true,
+                    ),
+                    maxLines: 12,
+                    style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+                final icon = iconController.text.trim();
+                final desc = descController.text.trim();
+                final prompt = promptController.text.trim();
+
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('请输入视角名称')),
+                  );
+                  return;
+                }
+
+                if (!prompt.contains('{queries}')) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Prompt 模板必须包含 {queries} 占位符')),
+                  );
+                  return;
+                }
+
+                Navigator.pop(context, {
+                  'name': name,
+                  'icon': icon.isEmpty ? '🔍' : icon,
+                  'description': desc,
+                  'promptTemplate': prompt,
+                  'category': selectedCategory,
+                });
+              },
+              child: Text(isEditing ? '保存' : '创建'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result != null) {
+      if (isEditing) {
+        // 更新现有视角
+        perspective.name = result['name'];
+        perspective.icon = result['icon'];
+        perspective.description = result['description'];
+        perspective.promptTemplate = result['promptTemplate'];
+        perspective.category = result['category'];
+        perspective.updatedAt = DateTime.now().millisecondsSinceEpoch;
+
+        await InsightService.instance.updateCustomPerspective(perspective);
+
+        if (mounted) {
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('已更新「${result['name']}」'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        // 创建新视角
+        final newPerspective = PerspectiveEntity.create(
+          perspectiveId: 'custom_${DateTime.now().millisecondsSinceEpoch}',
+          name: result['name'],
+          icon: result['icon'],
+          description: result['description'],
+          promptTemplate: result['promptTemplate'],
+          isBuiltin: false,
+          sortOrder: 200, // 自定义视角排在内置视角后面
+          isEnabled: true,
+          category: result['category'],
+        );
+
+        await InsightService.instance.addCustomPerspective(newPerspective);
+
+        if (mounted) {
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('已创建「${result['name']}」'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  /// 默认 Prompt 模板
+  static const String _defaultPromptTemplate = '''你是一位专业的分析师。请分析以下用户提问。
+
+用户提问列表：
+{queries}
+
+请从以下角度分析：
+
+## 一、问题识别
+识别用户提问中的核心问题和关注点。
+
+## 二、深入分析
+对这些问题进行深入分析。
+
+## 三、建议
+给出具体的建议。
+
+用第二人称"你"来表述，语气温和但有洞察力。''';
 }
 
 /// 获取保存的 API 配置（全局函数）

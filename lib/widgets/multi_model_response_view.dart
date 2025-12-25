@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/multi_model_service.dart';
@@ -113,14 +114,32 @@ class _ModelResponseCard extends StatefulWidget {
 
 class _ModelResponseCardState extends State<_ModelResponseCard> {
   String _content = '';
+  StreamSubscription<String>? _subscription;
 
   @override
   void initState() {
     super.initState();
     _content = widget.response.fullContent;
+    _subscribeToStream();
+  }
+
+  @override
+  void didUpdateWidget(_ModelResponseCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 如果 response 对象变了，需要重新订阅
+    if (oldWidget.response != widget.response) {
+      _subscription?.cancel();
+      _content = widget.response.fullContent;
+      _subscribeToStream();
+    }
+  }
+
+  void _subscribeToStream() {
+    // 如果已经完成，不需要订阅
+    if (widget.response.isComplete) return;
 
     // 监听流式更新
-    widget.response.contentStream.listen(
+    _subscription = widget.response.contentStream.listen(
       (content) {
         if (mounted) {
           setState(() {
@@ -131,7 +150,18 @@ class _ModelResponseCardState extends State<_ModelResponseCard> {
       onError: (error) {
         // 错误已在 response 中处理
       },
+      onDone: () {
+        // 流完成时取消订阅引用，避免内存泄漏
+        _subscription = null;
+      },
     );
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    _subscription = null;
+    super.dispose();
   }
 
   @override

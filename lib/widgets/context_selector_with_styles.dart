@@ -24,6 +24,9 @@ class ContextSelectorWithStyles extends StatefulWidget {
   final Future<List<TopicSummary>> Function(String? assistantId)? onLoadTopics;
   final Future<Map<String, dynamic>?> Function(String topicId)? onLoadTopicDetail;
 
+  /// 只读模式：隐藏勾选框、操作按钮和底部 footer
+  final bool readOnly;
+
   const ContextSelectorWithStyles({
     super.key,
     this.contextData,
@@ -37,6 +40,7 @@ class ContextSelectorWithStyles extends StatefulWidget {
     this.onClear,
     this.onLoadTopics,
     this.onLoadTopicDetail,
+    this.readOnly = false,
   });
 
   @override
@@ -850,7 +854,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
           Expanded(
             child: _buildTreeList(primary),
           ),
-          _buildFooter(stats, primary),
+          if (!widget.readOnly) _buildFooter(stats, primary),
         ],
       ),
     );
@@ -873,15 +877,18 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
               Icon(Icons.account_tree_outlined, size: 18, color: Colors.grey[600]),
               const SizedBox(width: 8),
               Text(
-                '上下文',
+                widget.readOnly ? '讨论内容' : '上下文',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.grey[800]),
               ),
-              const SizedBox(width: 16),
-              _ActionChip(label: '推荐', icon: Icons.auto_awesome, onTap: _selectMainlineOnly),
-              const SizedBox(width: 6),
-              _ActionChip(label: '全选', icon: Icons.done_all, onTap: _selectAll),
-              const SizedBox(width: 6),
-              _ActionChip(label: '清空', icon: Icons.clear_all, onTap: _clearAll),
+              // 只读模式下隐藏操作按钮
+              if (!widget.readOnly) ...[
+                const SizedBox(width: 16),
+                _ActionChip(label: '推荐', icon: Icons.auto_awesome, onTap: _selectMainlineOnly),
+                const SizedBox(width: 6),
+                _ActionChip(label: '全选', icon: Icons.done_all, onTap: _selectAll),
+                const SizedBox(width: 6),
+                _ActionChip(label: '清空', icon: Icons.clear_all, onTap: _clearAll),
+              ],
               const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1141,13 +1148,15 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               child: Row(
                 children: [
-                  // Checkbox
-                  _buildCheckbox(
-                    isQuestionSelected,
-                    () => _toggleRound(assistant.id, topic.id, round),
-                    small: true,
-                  ),
-                  const SizedBox(width: 10),
+                  // Checkbox（只读模式下隐藏）
+                  if (!widget.readOnly) ...[
+                    _buildCheckbox(
+                      isQuestionSelected,
+                      () => _toggleRound(assistant.id, topic.id, round),
+                      small: true,
+                    ),
+                    const SizedBox(width: 10),
+                  ],
                   // 问题图标
                   Icon(Icons.help_outline, size: 14, color: const Color(0xFF42A5F5)),
                   const SizedBox(width: 4),
@@ -1231,9 +1240,11 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
 
     return Column(
       children: [
-        // 点击整行 = 选中；点击箭头 = 展开
+        // 点击整行 = 选中（编辑模式）/ 展开（只读模式）
         InkWell(
-          onTap: () => _toggleReply(assistant.id, topic.id, round, reply),
+          onTap: widget.readOnly
+              ? () => _toggleReplyExpand(replyKey)
+              : () => _toggleReply(assistant.id, topic.id, round, reply),
           borderRadius: BorderRadius.circular(4),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
@@ -1246,14 +1257,16 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
               children: [
                 Row(
                   children: [
-                    // Checkbox（subtle 模式，视觉更轻）
-                    _buildCheckbox(
-                      isSelected,
-                      () => _toggleReply(assistant.id, topic.id, round, reply),
-                      small: true,
-                      subtle: true,
-                    ),
-                    const SizedBox(width: 6),
+                    // Checkbox（只读模式下隐藏）
+                    if (!widget.readOnly) ...[
+                      _buildCheckbox(
+                        isSelected,
+                        () => _toggleReply(assistant.id, topic.id, round, reply),
+                        small: true,
+                        subtle: true,
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     // 回复图标
                     Icon(
                       Icons.lightbulb_outline,
