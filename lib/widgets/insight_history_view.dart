@@ -3,16 +3,11 @@ import '../models/isar/insight_entity.dart';
 import '../services/insight_service.dart';
 import 'unified_markdown_renderer.dart';
 
-/// 历史洞察视图
+/// 历史洞察页面
 ///
-/// 显示历史生成的洞察记录
+/// 独立页面显示历史生成的洞察记录
 class InsightHistoryView extends StatefulWidget {
-  final VoidCallback? onClose;
-
-  const InsightHistoryView({
-    super.key,
-    this.onClose,
-  });
+  const InsightHistoryView({super.key});
 
   @override
   State<InsightHistoryView> createState() => _InsightHistoryViewState();
@@ -114,53 +109,29 @@ class _InsightHistoryViewState extends State<InsightHistoryView> {
       return _buildDetailView(theme, colorScheme);
     }
 
-    return Column(
-      children: [
-        // 标题栏
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: colorScheme.outline.withValues(alpha: 0.1),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('历史洞察'),
+        actions: [
+          if (_insights.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Center(
+                child: Text(
+                  '共 ${_insights.length} 条',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.outline,
+                  ),
+                ),
               ),
             ),
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: widget.onClose,
-                icon: const Icon(Icons.arrow_back),
-                tooltip: '返回',
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '历史洞察',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '共 ${_insights.length} 条',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.outline,
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // 列表
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _insights.isEmpty
-                  ? _buildEmptyState(theme)
-                  : _buildList(theme, colorScheme),
-        ),
-      ],
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _insights.isEmpty
+              ? _buildEmptyState(theme)
+              : _buildList(theme, colorScheme),
     );
   }
 
@@ -311,74 +282,59 @@ class _InsightHistoryViewState extends State<InsightHistoryView> {
   Widget _buildDetailView(ThemeData theme, ColorScheme colorScheme) {
     final insight = _selectedInsight!;
 
-    return Column(
-      children: [
-        // 标题栏
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: colorScheme.outline.withValues(alpha: 0.1),
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: () => setState(() => _selectedInsight = null),
-                icon: const Icon(Icons.arrow_back),
-                tooltip: '返回列表',
-              ),
-              const SizedBox(width: 8),
-              Text(
-                insight.perspectiveIcon,
-                style: const TextStyle(fontSize: 20),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      insight.perspectiveName,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      _formatDate(insight.createdAt),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.outline,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                onPressed: () => _deleteInsight(insight),
-                icon: Icon(
-                  Icons.delete_outline,
-                  color: colorScheme.error,
-                ),
-                tooltip: '删除',
-              ),
-            ],
-          ),
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => setState(() => _selectedInsight = null),
+          tooltip: '返回列表',
         ),
-
-        // 内容
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: UnifiedMarkdownRenderer(
-              data: insight.content,
-              selectable: true,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              insight.perspectiveIcon,
+              style: const TextStyle(fontSize: 20),
             ),
-          ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  insight.perspectiveName,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  _formatDate(insight.createdAt),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.outline,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
-      ],
+        actions: [
+          IconButton(
+            onPressed: () => _deleteInsight(insight),
+            icon: Icon(
+              Icons.delete_outline,
+              color: colorScheme.error,
+            ),
+            tooltip: '删除',
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: UnifiedMarkdownRenderer(
+          data: insight.content,
+          selectable: true,
+        ),
+      ),
     );
   }
 }

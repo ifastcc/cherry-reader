@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/isar/perspective_entity.dart';
 import '../widgets/unified_markdown_renderer.dart';
 import '../services/insight_service.dart';
+import '../services/perspective_storage.dart';
 import '../widgets/query_selector_compact_style.dart';
 import '../widgets/insight_history_view.dart';
 
@@ -19,19 +20,23 @@ class InsightScreen extends StatefulWidget {
 class _InsightScreenState extends State<InsightScreen> {
   final _service = InsightService.instance;
 
-  // 视角
-  List<PerspectiveEntity> _perspectives = [];
+  // 视角（按分组组织）
+  Map<String, List<PerspectiveEntity>> _groupedPerspectives = {};
   String? _selectedPerspectiveId;
 
   // 选中的提问
   List<QueryItem> _selectedQueries = [];
-  Set<String>? _assistantFilters;  // 多选助手过滤
+  
+  // 助手筛选
+  List<Map<String, String>> _assistants = [];  // 全部助手列表
+  Set<String> _selectedAssistants = {};  // 选中的助手名称
+  int _assistantFilterVersion = 0;  // 用于重建 QuerySelectorCompactStyle
 
   // 状态
   bool _isLoading = true;
   bool _isGenerating = false;
-  bool _showHistory = false;
   String _streamingContent = '';
+  bool _showResult = false;  // 显示生成结果
 
   @override
   void initState() {
@@ -41,20 +46,45 @@ class _InsightScreenState extends State<InsightScreen> {
 
   Future<void> _init() async {
     await _service.init();
+    await _loadAssistants();
     await _loadPerspectives();
+  }
+
+  Future<void> _loadAssistants() async {
+    try {
+      final assistants = await _service.getAssistantList();
+      final allNames = assistants
+          .map((a) => a['name'] ?? '')
+          .where((n) => n.isNotEmpty)
+          .toSet();
+      setState(() {
+        _assistants = assistants;
+        _selectedAssistants = allNames;  // 默认全选
+      });
+    } catch (e) {
+      print('❌ 加载助手列表失败: $e');
+    }
   }
 
   Future<void> _loadPerspectives() async {
     setState(() => _isLoading = true);
 
     try {
-      // 只加载启用的视角
-      final perspectives = await _service.getEnabledPerspectives();
+      // 按分组加载启用的视角
+      final grouped = await _service.getEnabledPerspectivesGrouped();
       setState(() {
-        _perspectives = perspectives;
-        if (perspectives.isNotEmpty && _selectedPerspectiveId == null) {
-          _selectedPerspectiveId = perspectives.first.perspectiveId;
+        _groupedPerspectives = grouped;
+        
+        // 设置默认选中的视角
+        if (_selectedPerspectiveId == null) {
+          for (final category in BuiltinPerspectives.categoryOrder) {
+            if (grouped.containsKey(category) && grouped[category]!.isNotEmpty) {
+              _selectedPerspectiveId = grouped[category]!.first.perspectiveId;
+              break;
+            }
+          }
         }
+        
         _isLoading = false;
       });
     } catch (e) {
@@ -70,15 +100,454 @@ class _InsightScreenState extends State<InsightScreen> {
   }
 
   void _onAssistantFilterChanged(Set<String>? filters) {
-    setState(() {
-      _assistantFilters = filters;
-    });
+    // 从 QuerySelectorCompactStyle 同步助手筛选状态
+    if (filters != null) {
+      setState(() => _selectedAssistants = filters);
+    } else {
+      // null 表示全选
+      final allNames = _assistants
+          .map((a) => a['name'] ?? '')
+          .where((n) => n.isNotEmpty)
+          .toSet();
+      setState(() => _selectedAssistants = allNames);
+    }
   }
 
   void _onPerspectiveSelected(PerspectiveEntity perspective) {
     setState(() {
       _selectedPerspectiveId = perspective.perspectiveId;
     });
+  }
+
+  // ============ 弹窗 ============
+
+  void _showPerspectiveDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _buildPerspectiveSheet(),
+    );
+  }
+
+  void _showAssistantDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _buildAssistantSheet(),
+    );
+  }
+
+  Widget _buildAssistantSheet() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final allNames = _assistants
+        .map((a) => a['name'] ?? '')
+        .where((n) => n.isNotEmpty)
+        .toSet();
+    
+    return StatefulBuilder(
+      builder: (context, setSheetState) {
+        final allSelected = _selectedAssistants.length == allNames.length;
+        
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.5,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) => Container(
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Column(
+              children: [
+                // 拖动手柄
+                Container(
+                  margin: const EdgeInsets.symmetric(vertical: 10),
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colorScheme.outline.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                // 标题
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                  child: Row(
+                    children: [
+                      Text('选择要分析的助手', style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      )),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () {
+                          setSheetState(() {
+                            if (allSelected) {
+                              _selectedAssistants.clear();
+                            } else {
+                              _selectedAssistants = Set.from(allNames);
+                            }
+                          });
+                        },
+                        child: Text(allSelected ? '取消全选' : '全选'),
+                      ),
+                    ],
+                  ),
+                ),
+                // 助手列表
+                Expanded(
+                  child: FutureBuilder<List<AssistantStats>>(
+                    future: _service.getAssistantStats(),
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      
+                      final stats = snapshot.data!;
+                      return ListView.separated(
+                        controller: scrollController,
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        itemCount: stats.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          return _buildAssistantCard(
+                            stats[index],
+                            theme,
+                            colorScheme,
+                            setSheetState,
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                // 底部按钮
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: _selectedAssistants.isEmpty ? null : () {
+                        setState(() {
+                          _assistantFilterVersion++;
+                        });
+                        Navigator.pop(context);
+                      },
+                      child: Text('确认 (已选 ${_selectedAssistants.length}/${allNames.length})'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAssistantCard(
+    AssistantStats stats,
+    ThemeData theme,
+    ColorScheme colorScheme,
+    StateSetter setSheetState,
+  ) {
+    final isSelected = _selectedAssistants.contains(stats.name);
+    
+    // 格式化时间
+    String timeText = '';
+    if (stats.latestTime != null) {
+      final now = DateTime.now();
+      final diff = now.difference(stats.latestTime!);
+      if (diff.inDays == 0) {
+        timeText = '今天更新';
+      } else if (diff.inDays == 1) {
+        timeText = '昨天更新';
+      } else if (diff.inDays < 7) {
+        timeText = '${diff.inDays}天前更新';
+      } else if (diff.inDays < 30) {
+        timeText = '${diff.inDays ~/ 7}周前更新';
+      } else if (diff.inDays < 365) {
+        timeText = '${diff.inDays ~/ 30}月前更新';
+      } else {
+        timeText = '${diff.inDays ~/ 365}年前更新';
+      }
+    }
+    
+    return Material(
+      color: isSelected 
+          ? colorScheme.primary.withValues(alpha: 0.06)
+          : colorScheme.surfaceContainerLowest,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: () {
+          setSheetState(() {
+            if (isSelected) {
+              _selectedAssistants.remove(stats.name);
+            } else {
+              _selectedAssistants.add(stats.name);
+            }
+          });
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected 
+                  ? colorScheme.primary.withValues(alpha: 0.3)
+                  : colorScheme.outline.withValues(alpha: 0.1),
+            ),
+          ),
+          child: Row(
+            children: [
+              // 勾选框
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: isSelected ? colorScheme.primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: isSelected ? colorScheme.primary : colorScheme.outline.withValues(alpha: 0.3),
+                    width: 2,
+                  ),
+                ),
+                child: isSelected
+                    ? Icon(Icons.check, size: 16, color: colorScheme.onPrimary)
+                    : null,
+              ),
+              const SizedBox(width: 14),
+              // 助手信息
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      stats.name,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: isSelected ? colorScheme.primary : colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text(
+                          '${stats.topicCount} 个话题',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.outline,
+                          ),
+                        ),
+                        if (stats.messageCount > 0) ...[
+                          Text(
+                            ' · ',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.outline,
+                            ),
+                          ),
+                          Text(
+                            '${stats.messageCount} 条提问',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.outline,
+                            ),
+                          ),
+                        ],
+                        if (timeText.isNotEmpty) ...[
+                          Text(
+                            ' · ',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.outline,
+                            ),
+                          ),
+                          Text(
+                            timeText,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.outline,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPerspectiveSheet() {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    
+    // 展平所有视角
+    final allPerspectives = <PerspectiveEntity>[];
+    for (final category in BuiltinPerspectives.categoryOrder) {
+      final perspectives = _groupedPerspectives[category];
+      if (perspectives != null) {
+        allPerspectives.addAll(perspectives);
+      }
+    }
+    
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.5,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) => Container(
+        decoration: BoxDecoration(
+          color: colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Column(
+          children: [
+            // 拖动手柄
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colorScheme.outline.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            // 标题
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+              child: Row(
+                children: [
+                  Text('选择分析视角', style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  )),
+                  const Spacer(),
+                  Text(
+                    '共 ${allPerspectives.length} 个',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.outline,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 视角列表
+            Expanded(
+              child: ListView.separated(
+                controller: scrollController,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                itemCount: allPerspectives.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  return _buildPerspectiveCard(allPerspectives[index], theme, colorScheme);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPerspectiveCard(
+    PerspectiveEntity perspective,
+    ThemeData theme,
+    ColorScheme colorScheme,
+  ) {
+    final isSelected = perspective.perspectiveId == _selectedPerspectiveId;
+    
+    return Material(
+      color: isSelected 
+          ? colorScheme.primary.withValues(alpha: 0.06)
+          : colorScheme.surfaceContainerLowest,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: () {
+          _onPerspectiveSelected(perspective);
+          Navigator.pop(context);
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected 
+                  ? colorScheme.primary.withValues(alpha: 0.3)
+                  : colorScheme.outline.withValues(alpha: 0.1),
+            ),
+          ),
+          child: Row(
+            children: [
+              // 图标
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Center(
+                  child: Text(perspective.icon, style: const TextStyle(fontSize: 22)),
+                ),
+              ),
+              const SizedBox(width: 14),
+              // 标题和描述
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      perspective.name,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: isSelected ? colorScheme.primary : colorScheme.onSurface,
+                      ),
+                    ),
+                    if (perspective.description.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        perspective.description,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.outline,
+                          height: 1.3,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              // 箭头/勾选
+              Icon(
+                isSelected ? Icons.check_circle : Icons.chevron_right,
+                color: isSelected ? colorScheme.primary : colorScheme.outline.withValues(alpha: 0.5),
+                size: 22,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ============ 获取助手筛选摘要 ============
+
+  String _getAssistantSummary() {
+    final allNames = _assistants
+        .map((a) => a['name'] ?? '')
+        .where((n) => n.isNotEmpty)
+        .toSet();
+    final allSelected = _selectedAssistants.length == allNames.length;
+    return allSelected
+        ? '全部助手'
+        : _selectedAssistants.length == 1
+            ? _selectedAssistants.first
+            : '${_selectedAssistants.length}个助手';
   }
 
   Future<void> _startInsight() async {
@@ -103,11 +572,16 @@ class _InsightScreenState extends State<InsightScreen> {
 
     try {
       // 计算 timeRangeLabel
-      final filterLabel = _assistantFilters == null || _assistantFilters!.isEmpty
+      final allNames = _assistants
+          .map((a) => a['name'] ?? '')
+          .where((n) => n.isNotEmpty)
+          .toSet();
+      final allSelected = _selectedAssistants.length == allNames.length;
+      final filterLabel = allSelected
           ? '全部'
-          : _assistantFilters!.length == 1
-              ? _assistantFilters!.first
-              : '${_assistantFilters!.length}个助手';
+          : _selectedAssistants.length == 1
+              ? _selectedAssistants.first
+              : '${_selectedAssistants.length}个助手';
 
       await for (final chunk in _service.generateInsightStream(
         perspectiveId: _selectedPerspectiveId!,
@@ -121,11 +595,11 @@ class _InsightScreenState extends State<InsightScreen> {
         });
       }
 
-      // 生成完成后显示历史
+      // 生成完成后显示结果
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('洞察生成完成')),
-        );
+        setState(() {
+          _showResult = true;
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -142,85 +616,132 @@ class _InsightScreenState extends State<InsightScreen> {
     }
   }
 
+  void _openHistoryPage() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const InsightHistoryView(),
+      ),
+    );
+  }
+
+  void _resetToSelection() {
+    setState(() {
+      _showResult = false;
+      _streamingContent = '';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
+    // 正在生成或已有结果时显示生成/结果视图
+    final showGeneratingOrResult = _isGenerating || _showResult;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('AI 洞察'),
+        leading: showGeneratingOrResult
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _resetToSelection,
+                tooltip: '返回选择',
+              )
+            : null,
         actions: [
           TextButton.icon(
-            onPressed: () => setState(() => _showHistory = true),
+            onPressed: _openHistoryPage,
             icon: const Icon(Icons.history),
             label: const Text('历史洞察'),
           ),
         ],
       ),
-      body: _showHistory
-          ? _buildHistoryView()
-          : _isGenerating
-              ? _buildGeneratingView(theme, colorScheme)
-              : _buildMainView(theme, colorScheme),
-    );
-  }
-
-  Widget _buildHistoryView() {
-    return InsightHistoryView(
-      onClose: () => setState(() => _showHistory = false),
+      body: showGeneratingOrResult
+          ? _buildGeneratingView(theme, colorScheme)
+          : _buildMainView(theme, colorScheme),
     );
   }
 
   Widget _buildGeneratingView(ThemeData theme, ColorScheme colorScheme) {
-    final selectedPerspective = _perspectives
-        .where((p) => p.perspectiveId == _selectedPerspectiveId)
-        .firstOrNull;
+    final selectedPerspective = _findSelectedPerspective();
 
     return Column(
       children: [
-        // 状态栏
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: colorScheme.primaryContainer.withValues(alpha: 0.3),
-            border: Border(
-              bottom: BorderSide(
-                color: colorScheme.outline.withValues(alpha: 0.2),
-              ),
-            ),
-          ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: colorScheme.primary,
+        // 状态栏 - 根据状态显示不同内容
+        if (_isGenerating)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: colorScheme.primaryContainer.withValues(alpha: 0.3),
+              border: Border(
+                bottom: BorderSide(
+                  color: colorScheme.outline.withValues(alpha: 0.2),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '正在生成洞察...',
-                  style: theme.textTheme.bodyMedium?.copyWith(
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
                     color: colorScheme.primary,
                   ),
                 ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '正在生成洞察...',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _resetToSelection,
+                  child: const Text('取消'),
+                ),
+              ],
+            ),
+          )
+        else if (_showResult)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: colorScheme.tertiaryContainer.withValues(alpha: 0.3),
+              border: Border(
+                bottom: BorderSide(
+                  color: colorScheme.outline.withValues(alpha: 0.2),
+                ),
               ),
-              TextButton(
-                onPressed: () {
-                  setState(() {
-                    _isGenerating = false;
-                    _streamingContent = '';
-                  });
-                },
-                child: const Text('取消'),
-              ),
-            ],
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.check_circle,
+                  size: 18,
+                  color: colorScheme.tertiary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '洞察生成完成',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.tertiary,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _startInsight,
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('重新生成'),
+                ),
+              ],
+            ),
           ),
-        ),
 
         // 内容
         Expanded(
@@ -269,16 +790,18 @@ class _InsightScreenState extends State<InsightScreen> {
 
     return Column(
       children: [
-        // 视角选择（横向滚动 Chips，固定在顶部）
-        _buildPerspectiveChips(theme, colorScheme),
+        // 双下拉筛选器
+        _buildDualDropdown(theme, colorScheme),
 
         // 话题选择（占据剩余空间）
         Expanded(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: QuerySelectorCompactStyle(
+              key: ValueKey('assistant_filter_$_assistantFilterVersion'),
               onSelectionChanged: _onSelectionChanged,
               onAssistantFilterChanged: _onAssistantFilterChanged,
+              initialAssistantFilters: _selectedAssistants,
             ),
           ),
         ),
@@ -289,14 +812,15 @@ class _InsightScreenState extends State<InsightScreen> {
     );
   }
 
-  /// 视角选择 Chips（横向滚动）
-  Widget _buildPerspectiveChips(ThemeData theme, ColorScheme colorScheme) {
-    final selectedPerspective = _perspectives
-        .where((p) => p.perspectiveId == _selectedPerspectiveId)
-        .firstOrNull;
+  /// 双下拉筛选器
+  Widget _buildDualDropdown(ThemeData theme, ColorScheme colorScheme) {
+    final selectedPerspective = _findSelectedPerspective();
+    final categoryColor = selectedPerspective != null
+        ? BuiltinPerspectives.categoryColors[selectedPerspective.category] ?? colorScheme.primary
+        : colorScheme.primary;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         color: colorScheme.surface,
         border: Border(
@@ -305,72 +829,27 @@ class _InsightScreenState extends State<InsightScreen> {
           ),
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          // 标签行
-          Row(
-            children: [
-              Icon(
-                Icons.psychology_outlined,
-                size: 16,
-                color: colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                '分析视角',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-              if (selectedPerspective != null) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '${selectedPerspective.icon} ${selectedPerspective.name}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: colorScheme.onPrimaryContainer,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ],
+          // 视角下拉
+          Expanded(
+            child: _buildDropdownButton(
+              context: context,
+              icon: selectedPerspective?.icon ?? '🔮',
+              label: selectedPerspective?.name ?? '选择视角',
+              color: categoryColor,
+              onTap: _showPerspectiveDialog,
+            ),
           ),
-          const SizedBox(height: 8),
-
-          // Chips 横向滚动
-          SizedBox(
-            height: 36,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _perspectives.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final perspective = _perspectives[index];
-                final isSelected = perspective.perspectiveId == _selectedPerspectiveId;
-
-                return FilterChip(
-                  selected: isSelected,
-                  showCheckmark: false,
-                  avatar: Text(
-                    perspective.icon,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                  label: Text(perspective.name),
-                  labelStyle: theme.textTheme.labelMedium?.copyWith(
-                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                  ),
-                  onSelected: (_) => _onPerspectiveSelected(perspective),
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                );
-              },
+          const SizedBox(width: 12),
+          // 助手下拉
+          Expanded(
+            child: _buildDropdownButton(
+              context: context,
+              icon: '👤',
+              label: _getAssistantSummary(),
+              color: colorScheme.secondary,
+              onTap: _showAssistantDialog,
             ),
           ),
         ],
@@ -378,11 +857,65 @@ class _InsightScreenState extends State<InsightScreen> {
     );
   }
 
+  Widget _buildDropdownButton({
+    required BuildContext context,
+    required String icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Material(
+      color: color.withValues(alpha: 0.08),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Text(icon, style: const TextStyle(fontSize: 16)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Icon(
+                Icons.arrow_drop_down,
+                size: 20,
+                color: colorScheme.outline,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 查找当前选中的视角
+  PerspectiveEntity? _findSelectedPerspective() {
+    for (final perspectives in _groupedPerspectives.values) {
+      for (final p in perspectives) {
+        if (p.perspectiveId == _selectedPerspectiveId) {
+          return p;
+        }
+      }
+    }
+    return null;
+  }
+
   /// 底部按钮
   Widget _buildBottomButton(ColorScheme colorScheme) {
-    final selectedPerspective = _perspectives
-        .where((p) => p.perspectiveId == _selectedPerspectiveId)
-        .firstOrNull;
+    final selectedPerspective = _findSelectedPerspective();
 
     return Container(
       padding: const EdgeInsets.all(16),

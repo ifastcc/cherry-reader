@@ -5,7 +5,6 @@ import '../services/insight_service.dart';
 /// 精简版 Query 选择器
 ///
 /// 设计原则：
-/// - 保留原版的助手筛选头部
 /// - 话题作为最小选择单位（不展开到每个轮次）
 /// - 显示话题的总字数
 /// - 统计信息集成到底部
@@ -34,7 +33,6 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
   List<Map<String, String>> _assistants = [];
   Set<String> _selectedAssistants = {};
   bool _isLoading = true;
-  bool _isAssistantFilterExpanded = false;
 
   // 选中的话题ID（话题作为最小单位）
   final Set<String> _selectedTopicIds = {};
@@ -236,48 +234,6 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
     });
   }
 
-  // ============ 助手筛选 ============
-
-  void _toggleAssistant(String name) {
-    setState(() {
-      if (_selectedAssistants.contains(name)) {
-        _selectedAssistants.remove(name);
-      } else {
-        _selectedAssistants.add(name);
-      }
-      _selectedTopicIds.clear();
-    });
-    final allNames =
-        _assistants.map((a) => a['name'] ?? '').where((n) => n.isNotEmpty).toSet();
-    widget.onAssistantFilterChanged?.call(
-      _selectedAssistants.length == allNames.length ? null : _selectedAssistants,
-    );
-    // _loadData 完成后会自动重新应用 _selectedPeriod 并通知父组件
-    _loadData();
-  }
-
-  void _toggleAllAssistants() {
-    final allNames =
-        _assistants.map((a) => a['name'] ?? '').where((n) => n.isNotEmpty).toSet();
-    final allSelected = _selectedAssistants.length == allNames.length;
-
-    setState(() {
-      if (allSelected) {
-        // 取消全选
-        _selectedAssistants.clear();
-      } else {
-        // 全选
-        _selectedAssistants = Set.from(allNames);
-      }
-      _selectedTopicIds.clear();
-    });
-    widget.onAssistantFilterChanged?.call(
-      _selectedAssistants.length == allNames.length ? null : _selectedAssistants,
-    );
-    // _loadData 完成后会自动重新应用 _selectedPeriod 并通知父组件
-    _loadData();
-  }
-
   // ============ 统计 ============
 
   int get _totalTopicCount {
@@ -344,11 +300,7 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 助手筛选器（保留原版）
-        _buildAssistantFilter(theme, colorScheme),
-        const SizedBox(height: 12),
-
-        // 快捷选择按钮（保留原版风格）
+        // 快捷选择按钮
         _buildQuickSelectButtons(theme, colorScheme),
         const SizedBox(height: 12),
 
@@ -367,148 +319,7 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
     );
   }
 
-  /// 助手筛选器（保留原版风格）
-  Widget _buildAssistantFilter(ThemeData theme, ColorScheme colorScheme) {
-    final allNames =
-        _assistants.map((a) => a['name'] ?? '').where((n) => n.isNotEmpty).toSet();
-    final allSelected = _selectedAssistants.length == allNames.length;
-    final selectedCount = _selectedAssistants.length;
-    final totalCount = allNames.length;
-
-    final summaryText = allSelected
-        ? '全部助手'
-        : selectedCount == 1
-            ? _selectedAssistants.first
-            : '$selectedCount/$totalCount 个助手';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InkWell(
-          onTap: () =>
-              setState(() => _isAssistantFilterExpanded = !_isAssistantFilterExpanded),
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: colorScheme.outline.withValues(alpha: 0.2),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.people_outline,
-                  size: 18,
-                  color: colorScheme.primary,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '助手筛选',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: allSelected
-                        ? colorScheme.primaryContainer.withValues(alpha: 0.5)
-                        : colorScheme.primary.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    summaryText,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                Icon(
-                  _isAssistantFilterExpanded ? Icons.expand_less : Icons.expand_more,
-                  size: 20,
-                  color: colorScheme.outline,
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (_isAssistantFilterExpanded) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: colorScheme.surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: colorScheme.outline.withValues(alpha: 0.2),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      '点击选择要分析的助手',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.outline,
-                      ),
-                    ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: _toggleAllAssistants,
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: Text(
-                        allSelected ? '取消全选' : '全选',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.primary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: _assistants.map((a) {
-                    final name = a['name'] ?? '';
-                    if (name.isEmpty) return const SizedBox.shrink();
-                    final isSelected = _selectedAssistants.contains(name);
-                    return FilterChip(
-                      label: Text(name),
-                      selected: isSelected,
-                      onSelected: (_) => _toggleAssistant(name),
-                      showCheckmark: true,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.compact,
-                      labelStyle: theme.textTheme.bodySmall?.copyWith(
-                        color: isSelected
-                            ? colorScheme.onPrimaryContainer
-                            : colorScheme.onSurface,
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  /// 快捷选择按钮（保留原版风格）
+  /// 快捷选择按钮
   Widget _buildQuickSelectButtons(ThemeData theme, ColorScheme colorScheme) {
     final buttons = [
       ('今天', 'today', Icons.today),
@@ -600,8 +411,8 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
   }
 
   // 布局常量
-  static const double _topicIndent = 48.0;
-  static const double _topicSelectWidth = 28.0;
+  static const double _topicIndent = 52.0;  // 子项缩进，对齐到月份标签文字左侧
+  static const double _topicSelectWidth = 24.0;
 
   Widget _buildMonthSection(
     MonthGroup monthGroup,
@@ -620,17 +431,18 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // 月份标题行
-        InkWell(
-          onTap: () => _toggleMonthExpanded(monthGroup.label),
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            margin: const EdgeInsets.only(top: 8, bottom: 4),
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 4),
+          child: InkWell(
+            onTap: () => _toggleMonthExpanded(monthGroup.label),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
             decoration: BoxDecoration(
               color: selectedInMonth > 0
-                  ? colorScheme.primaryContainer.withValues(alpha: 0.15)
+                  ? colorScheme.primaryContainer.withValues(alpha: 0.12)
                   : colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: selectedInMonth > 0
                     ? colorScheme.primary.withValues(alpha: 0.2)
@@ -717,12 +529,13 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
                 const SizedBox(width: 12),
               ],
             ),
+            ),
           ),
         ),
         // 话题列表
         if (isExpanded)
           Padding(
-            padding: const EdgeInsets.only(left: 4),
+            padding: const EdgeInsets.only(left: _topicIndent),
             child: Column(
               children: monthGroup.topicGroups
                   .map((tg) => _buildTopicRow(tg, theme, colorScheme))
@@ -745,17 +558,18 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
     // 为不同助手生成不同的颜色
     final assistantColor = _getAssistantColor(topicGroup.assistantName, colorScheme);
 
-    return InkWell(
-      onTap: () => _toggleTopicSelection(topicGroup),
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 2),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? colorScheme.primaryContainer.withValues(alpha: 0.2)
-              : colorScheme.surfaceContainerLowest.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(10),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: InkWell(
+        onTap: () => _toggleTopicSelection(topicGroup),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? colorScheme.primaryContainer.withValues(alpha: 0.2)
+                : colorScheme.surfaceContainerLowest.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: isSelected
                 ? colorScheme.primary.withValues(alpha: 0.3)
@@ -764,21 +578,17 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
           ),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const SizedBox(width: _topicIndent - 8),
             // 选择图标
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: SizedBox(
-                width: _topicSelectWidth,
-                child: Icon(
-                  isSelected ? Icons.check_circle_rounded : Icons.circle_outlined,
-                  size: 20,
-                  color: isSelected
-                      ? colorScheme.primary
-                      : colorScheme.outline.withValues(alpha: 0.35),
-                ),
+            SizedBox(
+              width: _topicSelectWidth,
+              child: Icon(
+                isSelected ? Icons.check_circle_rounded : Icons.circle_outlined,
+                size: 20,
+                color: isSelected
+                    ? colorScheme.primary
+                    : colorScheme.outline.withValues(alpha: 0.35),
               ),
             ),
             // 主内容区
@@ -793,21 +603,23 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
                       fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                       color: isSelected
                           ? colorScheme.onSurface
-                          : colorScheme.onSurface.withValues(alpha: 0.9),
-                      height: 1.3,
+                          : colorScheme.onSurface.withValues(alpha: 0.85),
+                      height: 1.45,
+                      letterSpacing: 0.1,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
                   // 预览文本
                   if (firstQuery != null) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 5),
                     Text(
                       firstQuery.preview,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.outline.withValues(alpha: 0.65),
-                        height: 1.3,
+                        color: colorScheme.outline.withValues(alpha: 0.45),
+                        height: 1.35,
                         fontSize: 12,
+                        letterSpacing: 0.15,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -858,32 +670,35 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 // 助手标签 + 日期
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      constraints: const BoxConstraints(maxWidth: 100),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: assistantColor.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(3),
+                        color: assistantColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        _truncateAssistantName(topicGroup.assistantName, 6),
+                        topicGroup.assistantName,
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: assistantColor.withValues(alpha: 0.8),
-                          fontSize: 9,
+                          color: assistantColor.withValues(alpha: 0.9),
+                          fontSize: 11,
                           fontWeight: FontWeight.w500,
                         ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 8),
                     Text(
                       _formatDate(topicGroup.latestTime),
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.outline.withValues(alpha: 0.6),
-                        fontSize: 10,
+                        color: colorScheme.outline.withValues(alpha: 0.7),
+                        fontSize: 11,
                       ),
                     ),
                   ],
@@ -892,6 +707,7 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
             ),
             const SizedBox(width: 8),
           ],
+        ),
         ),
       ),
     );
@@ -973,12 +789,7 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
                       ),
                     ],
                   )
-                : Text(
-                    '共 $_totalTopicCount 个话题可选',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.outline,
-                    ),
-                  ),
+                : const SizedBox.shrink(),
           ),
 
           // 清空按钮

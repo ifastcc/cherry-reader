@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'isar_database.dart';
 import 'ai_provider_service.dart';
 import 'openai_service.dart';
@@ -61,6 +62,23 @@ class MonthGroup {
   MonthGroup({
     required this.label,
     required this.topicGroups,
+  });
+}
+
+/// 助手统计信息
+class AssistantStats {
+  final String id;
+  final String name;
+  final int topicCount;      // 话题数
+  final int messageCount;    // 消息数
+  final DateTime? latestTime; // 最后更新时间
+
+  AssistantStats({
+    required this.id,
+    required this.name,
+    required this.topicCount,
+    required this.messageCount,
+    this.latestTime,
   });
 }
 
@@ -185,6 +203,65 @@ class InsightService {
     debugPrint('✅ 已强制重置 ${builtins.length} 个内置视角');
   }
 
+  // ============ 分组显示管理 ============
+
+  /// 获取分组显示状态
+  Future<bool> getCategoryVisibility(String category) async {
+    final prefs = await SharedPreferences.getInstance();
+    // 默认显示
+    return prefs.getBool('insight_category_visible_$category') ?? true;
+  }
+
+  /// 设置分组显示状态
+  Future<void> setCategoryVisibility(String category, bool visible) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('insight_category_visible_$category', visible);
+  }
+
+  /// 获取所有分组的显示状态
+  Future<Map<String, bool>> getAllCategoryVisibility() async {
+    final prefs = await SharedPreferences.getInstance();
+    final result = <String, bool>{};
+    for (final category in BuiltinPerspectives.categoryOrder) {
+      result[category] = prefs.getBool('insight_category_visible_$category') ?? true;
+    }
+    return result;
+  }
+
+  /// 按分组获取启用的视角（只返回显示的分组）
+  Future<Map<String, List<PerspectiveEntity>>> getEnabledPerspectivesGrouped() async {
+    final isar = await _db.instance;
+    final perspectives = await isar.perspectiveEntitys
+        .filter()
+        .isEnabledEqualTo(true)
+        .sortBySortOrder()
+        .findAll();
+
+    final categoryVisibility = await getAllCategoryVisibility();
+    final grouped = <String, List<PerspectiveEntity>>{};
+
+    for (final p in perspectives) {
+      // 只添加显示的分组
+      if (categoryVisibility[p.category] == true) {
+        grouped.putIfAbsent(p.category, () => []).add(p);
+      }
+    }
+
+    return grouped;
+  }
+
+  /// 获取所有视角按分组组织（用于设置页面）
+  Future<Map<String, List<PerspectiveEntity>>> getAllPerspectivesGrouped() async {
+    final perspectives = await getAllPerspectives();
+    final grouped = <String, List<PerspectiveEntity>>{};
+
+    for (final p in perspectives) {
+      grouped.putIfAbsent(p.category, () => []).add(p);
+    }
+
+    return grouped;
+  }
+
   // ============ 数据查询 ============
 
   /// 获取助手列表
@@ -205,6 +282,55 @@ class InsightService {
     }).toList();
 
     return _assistantListCache!;
+  }
+
+  /// 获取助手统计信息（话题数、消息数、最后更新时间）
+  Future<List<AssistantStats>> getAssistantStats() async {
+    await _ensureDataLoaded();
+    
+    final assistantList = await getAssistantList();
+    final statsMap = <String, AssistantStats>{};
+    
+    // 初始化所有助手的统计
+    for (final a in assistantList) {
+      final name = a['name'] ?? '';
+      final id = a['id'] ?? '';
+      if (name.isNotEmpty) {
+        statsMap[name] = AssistantStats(
+          id: id,
+          name: name,
+          topicCount: 0,
+          messageCount: 0,
+          latestTime: null,
+        );
+      }
+    }
+    
+    // 从缓存中统计
+    if (_allTopicGroupsCache != null) {
+      for (final tg in _allTopicGroupsCache!) {
+        final current = statsMap[tg.assistantName];
+        if (current != null) {
+          DateTime? newLatest = current.latestTime;
+          if (newLatest == null || tg.latestTime.isAfter(newLatest)) {
+            newLatest = tg.latestTime;
+          }
+          statsMap[tg.assistantName] = AssistantStats(
+            id: current.id,
+            name: current.name,
+            topicCount: current.topicCount + 1,
+            messageCount: current.messageCount + tg.roundCount,
+            latestTime: newLatest,
+          );
+        }
+      }
+    }
+    
+    // 按话题数降序排序
+    final result = statsMap.values.toList()
+      ..sort((a, b) => b.topicCount.compareTo(a.topicCount));
+    
+    return result;
   }
 
   /// 预加载全部话题数据（首次调用时执行）

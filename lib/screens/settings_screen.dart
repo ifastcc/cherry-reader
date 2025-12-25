@@ -2469,10 +2469,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
         // 分组顺序
         const categoryOrder = [
+          BuiltinPerspectives.categoryReview,
           BuiltinPerspectives.categorySelf,
-          BuiltinPerspectives.categorySolve,
-          BuiltinPerspectives.categoryAction,
-          BuiltinPerspectives.categoryGrow,
+          BuiltinPerspectives.categoryThinking,
+          BuiltinPerspectives.categoryMaster,
         ];
 
         final enabledCount = perspectives.where((p) => p.isEnabled).length;
@@ -2521,20 +2521,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 16),
 
                 // 按分组显示内置视角
-                for (final category in categoryOrder) ...[
-                  if (grouped.containsKey(category)) ...[
-                    _buildCategoryHeader(category),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: grouped[category]!
-                          .map((p) => _buildPerspectiveChip(p))
-                          .toList(),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                ],
+                FutureBuilder<Map<String, bool>>(
+                  future: InsightService.instance.getAllCategoryVisibility(),
+                  builder: (context, visibilitySnapshot) {
+                    final categoryVisibility = visibilitySnapshot.data ?? {};
+                    
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final category in categoryOrder) ...[
+                          if (grouped.containsKey(category)) ...[
+                            _buildCategoryHeader(
+                              category,
+                              categoryVisibility[category] ?? true,
+                              grouped[category]!.length,
+                              () async {
+                                final current = categoryVisibility[category] ?? true;
+                                await InsightService.instance.setCategoryVisibility(
+                                  category, 
+                                  !current,
+                                );
+                                setState(() {});
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: grouped[category]!
+                                  .map((p) => _buildPerspectiveChip(
+                                    p, 
+                                    categoryVisibility[category] ?? true,
+                                  ))
+                                  .toList(),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                        ],
+                      ],
+                    );
+                  },
+                ),
 
                 // 自定义视角区域
                 const Divider(),
@@ -2596,49 +2623,125 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 构建分组标题
-  Widget _buildCategoryHeader(String category) {
+  /// 构建分组标题（带显示/隐藏开关）
+  Widget _buildCategoryHeader(
+    String category,
+    bool isVisible,
+    int perspectiveCount,
+    VoidCallback onToggle,
+  ) {
     final name = BuiltinPerspectives.categoryNames[category] ?? category;
     final icon = BuiltinPerspectives.categoryIcons[category] ?? '📁';
-    return Row(
-      children: [
-        Text(icon, style: const TextStyle(fontSize: 14)),
-        const SizedBox(width: 6),
-        Text(
-          name,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-            color: Colors.grey[700],
+    final color = BuiltinPerspectives.categoryColors[category] ?? Colors.blue;
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Text(icon, style: const TextStyle(fontSize: 16)),
+          const SizedBox(width: 8),
+          Text(
+            name,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
           ),
-        ),
-      ],
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '$perspectiveCount',
+              style: TextStyle(
+                fontSize: 11,
+                color: color,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const Spacer(),
+          // 显示/隐藏开关
+          Tooltip(
+            message: isVisible ? '点击隐藏该分组' : '点击显示该分组',
+            child: InkWell(
+              onTap: onToggle,
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isVisible 
+                      ? color.withValues(alpha: 0.15) 
+                      : Colors.grey.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isVisible ? Icons.visibility : Icons.visibility_off,
+                      size: 14,
+                      color: isVisible ? color : Colors.grey,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      isVisible ? '显示' : '隐藏',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: isVisible ? color : Colors.grey,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   /// 构建单个视角 Chip
-  Widget _buildPerspectiveChip(PerspectiveEntity perspective) {
+  Widget _buildPerspectiveChip(PerspectiveEntity perspective, bool categoryVisible) {
+    final categoryColor = BuiltinPerspectives.categoryColors[perspective.category] ?? Colors.blue;
+    // 如果分组被隐藏，视角显示为置灰状态
+    final isEffectivelyEnabled = perspective.isEnabled && categoryVisible;
+    
     return Tooltip(
-      message: perspective.description,
-      child: FilterChip(
-        avatar: Text(perspective.icon, style: const TextStyle(fontSize: 14)),
-        label: Text(
-          perspective.name,
-          style: TextStyle(
-            fontSize: 12,
-            color: perspective.isEnabled ? Colors.white : null,
+      message: !categoryVisible 
+          ? '该分组已隐藏\n${perspective.description}'
+          : perspective.description,
+      child: Opacity(
+        opacity: categoryVisible ? 1.0 : 0.5,
+        child: FilterChip(
+          avatar: Text(perspective.icon, style: const TextStyle(fontSize: 14)),
+          label: Text(
+            perspective.name,
+            style: TextStyle(
+              fontSize: 12,
+              color: isEffectivelyEnabled ? Colors.white : null,
+            ),
           ),
+          selected: perspective.isEnabled,
+          selectedColor: categoryColor,
+          checkmarkColor: Colors.white,
+          onSelected: (selected) async {
+            await InsightService.instance.togglePerspectiveEnabled(
+              perspective.perspectiveId,
+              selected,
+            );
+            setState(() {}); // 刷新列表
+          },
         ),
-        selected: perspective.isEnabled,
-        selectedColor: Colors.green,
-        checkmarkColor: Colors.white,
-        onSelected: (selected) async {
-          await InsightService.instance.togglePerspectiveEnabled(
-            perspective.perspectiveId,
-            selected,
-          );
-          setState(() {}); // 刷新列表
-        },
       ),
     );
   }
@@ -2797,10 +2900,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Wrap(
                     spacing: 8,
                     children: [
+                      BuiltinPerspectives.categoryReview,
                       BuiltinPerspectives.categorySelf,
-                      BuiltinPerspectives.categorySolve,
-                      BuiltinPerspectives.categoryAction,
-                      BuiltinPerspectives.categoryGrow,
+                      BuiltinPerspectives.categoryThinking,
+                      BuiltinPerspectives.categoryMaster,
                     ].map((category) {
                       final isSelected = selectedCategory == category;
                       final name = BuiltinPerspectives.categoryNames[category] ?? category;
