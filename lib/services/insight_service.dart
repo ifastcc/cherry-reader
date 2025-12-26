@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'isar_database.dart';
 import 'ai_provider_service.dart';
 import 'openai_service.dart';
@@ -203,46 +202,41 @@ class InsightService {
     debugPrint('✅ 已强制重置 ${builtins.length} 个内置视角');
   }
 
-  // ============ 分组显示管理 ============
+  // ============ 自定义分组管理 ============
 
-  /// 获取分组显示状态
-  Future<bool> getCategoryVisibility(String category) async {
-    final prefs = await SharedPreferences.getInstance();
-    // 默认显示
-    return prefs.getBool('insight_category_visible_$category') ?? true;
+  /// 获取所有自定义分组名称（非内置分组）
+  Future<List<String>> getCustomCategories() async {
+    final isar = await _db.instance;
+    final customPerspectives = await isar.perspectiveEntitys
+        .filter()
+        .isBuiltinEqualTo(false)
+        .findAll();
+
+    final categories = customPerspectives
+        .map((p) => p.category)
+        .where((c) => !BuiltinPerspectives.categoryOrder.contains(c))
+        .toSet()
+        .toList();
+    
+    categories.sort();
+    return categories;
   }
 
-  /// 设置分组显示状态
-  Future<void> setCategoryVisibility(String category, bool visible) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('insight_category_visible_$category', visible);
-  }
-
-  /// 获取所有分组的显示状态
-  Future<Map<String, bool>> getAllCategoryVisibility() async {
-    final prefs = await SharedPreferences.getInstance();
-    final result = <String, bool>{};
-    for (final category in BuiltinPerspectives.categoryOrder) {
-      result[category] = prefs.getBool('insight_category_visible_$category') ?? true;
-    }
-    return result;
-  }
-
-  /// 按分组获取启用的视角（只返回显示的分组）
+  /// 按分组获取启用的视角
+  /// 
+  /// 返回：内置视角全部显示 + 启用的自定义视角
   Future<Map<String, List<PerspectiveEntity>>> getEnabledPerspectivesGrouped() async {
     final isar = await _db.instance;
-    final perspectives = await isar.perspectiveEntitys
-        .filter()
-        .isEnabledEqualTo(true)
+    final allPerspectives = await isar.perspectiveEntitys
+        .where()
         .sortBySortOrder()
         .findAll();
 
-    final categoryVisibility = await getAllCategoryVisibility();
     final grouped = <String, List<PerspectiveEntity>>{};
 
-    for (final p in perspectives) {
-      // 只添加显示的分组
-      if (categoryVisibility[p.category] == true) {
+    for (final p in allPerspectives) {
+      // 内置视角始终显示，自定义视角需要启用
+      if (p.isBuiltin || p.isEnabled) {
         grouped.putIfAbsent(p.category, () => []).add(p);
       }
     }

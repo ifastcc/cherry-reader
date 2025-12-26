@@ -2457,25 +2457,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
         // 按 sortOrder 排序
         perspectives.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
 
-        // 分离内置和自定义视角
-        final builtinPerspectives = perspectives.where((p) => p.isBuiltin).toList();
+        // 只需要自定义视角
         final customPerspectives = perspectives.where((p) => !p.isBuiltin).toList();
 
-        // 按分组组织内置视角
-        final grouped = <String, List<PerspectiveEntity>>{};
-        for (final p in builtinPerspectives) {
-          grouped.putIfAbsent(p.category, () => []).add(p);
+        // 按分组组织自定义视角
+        final customGrouped = <String, List<PerspectiveEntity>>{};
+        for (final p in customPerspectives) {
+          customGrouped.putIfAbsent(p.category, () => []).add(p);
         }
 
-        // 分组顺序
-        const categoryOrder = [
+        // 内置分组顺序（用于判断自定义视角是否归类到内置分组）
+        const builtinCategoryOrder = [
           BuiltinPerspectives.categoryReview,
           BuiltinPerspectives.categorySelf,
           BuiltinPerspectives.categoryThinking,
           BuiltinPerspectives.categoryMaster,
         ];
 
-        final enabledCount = perspectives.where((p) => p.isEnabled).length;
+        // 自定义分组顺序（排除内置分组后按字母排序）
+        final customCategoryOrder = customGrouped.keys
+            .where((c) => !builtinCategoryOrder.contains(c))
+            .toList()
+          ..sort();
 
         return Card(
           child: Padding(
@@ -2483,100 +2486,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 自定义视角标题
                 Row(
                   children: [
-                    const Icon(Icons.psychology, size: 20),
-                    const SizedBox(width: 8),
-                    const Text(
-                      '选择要显示的视角',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const Spacer(),
-                    if (perspectives.isEmpty)
-                      TextButton.icon(
-                        onPressed: () async {
-                          await InsightService.instance.forceResetBuiltinPerspectives();
-                          setState(() {});
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('已重置内置视角')),
-                            );
-                          }
-                        },
-                        icon: const Icon(Icons.refresh, size: 16),
-                        label: const Text('重置视角'),
-                      )
-                    else
-                      Text(
-                        '$enabledCount / ${perspectives.length}',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '在洞察页面中显示的分析视角',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
-                const SizedBox(height: 16),
-
-                // 按分组显示内置视角
-                FutureBuilder<Map<String, bool>>(
-                  future: InsightService.instance.getAllCategoryVisibility(),
-                  builder: (context, visibilitySnapshot) {
-                    final categoryVisibility = visibilitySnapshot.data ?? {};
-                    
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (final category in categoryOrder) ...[
-                          if (grouped.containsKey(category)) ...[
-                            _buildCategoryHeader(
-                              category,
-                              categoryVisibility[category] ?? true,
-                              grouped[category]!.length,
-                              () async {
-                                final current = categoryVisibility[category] ?? true;
-                                await InsightService.instance.setCategoryVisibility(
-                                  category, 
-                                  !current,
-                                );
-                                setState(() {});
-                              },
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: grouped[category]!
-                                  .map((p) => _buildPerspectiveChip(
-                                    p, 
-                                    categoryVisibility[category] ?? true,
-                                  ))
-                                  .toList(),
-                            ),
-                            const SizedBox(height: 16),
-                          ],
-                        ],
-                      ],
-                    );
-                  },
-                ),
-
-                // 自定义视角区域
-                const Divider(),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Text('✨', style: TextStyle(fontSize: 14)),
+                    const Text('✨', style: TextStyle(fontSize: 16)),
                     const SizedBox(width: 6),
-                    Text(
+                    const Text(
                       '自定义视角',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
+                      style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const Spacer(),
                     TextButton.icon(
@@ -2586,7 +2503,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
+                Text(
+                  '创建自己的分析视角和 Prompt 模板',
+                  style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+
                 if (customPerspectives.isEmpty)
                   Container(
                     padding: const EdgeInsets.all(16),
@@ -2601,20 +2524,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Icon(Icons.lightbulb_outline, color: Colors.grey[400], size: 20),
                         const SizedBox(width: 8),
                         Text(
-                          '创建自己的分析视角和 Prompt 模板',
+                          '点击“添加”创建你的第一个视角',
                           style: TextStyle(color: Colors.grey[500], fontSize: 13),
                         ),
                       ],
                     ),
                   )
-                else
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: customPerspectives
-                        .map((p) => _buildCustomPerspectiveChip(p))
-                        .toList(),
-                  ),
+                else ...[
+                  // 按自定义分组展示
+                  for (final category in customCategoryOrder) ...[
+                    _buildCustomCategoryHeader(category, customGrouped[category]!.length),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: customGrouped[category]!
+                          .map((p) => _buildCustomPerspectiveChip(p))
+                          .toList(),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  // 归类到内置分组的自定义视角
+                  for (final category in builtinCategoryOrder) ...[
+                    if (customGrouped.containsKey(category)) ...[
+                      _buildCustomCategoryHeader(
+                        category, 
+                        customGrouped[category]!.length,
+                        isBuiltinCategory: true,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: customGrouped[category]!
+                            .map((p) => _buildCustomPerspectiveChip(p))
+                            .toList(),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                  ],
+                ],
               ],
             ),
           ),
@@ -2623,16 +2572,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 构建分组标题（带显示/隐藏开关）
-  Widget _buildCategoryHeader(
-    String category,
-    bool isVisible,
-    int perspectiveCount,
-    VoidCallback onToggle,
-  ) {
-    final name = BuiltinPerspectives.categoryNames[category] ?? category;
-    final icon = BuiltinPerspectives.categoryIcons[category] ?? '📁';
-    final color = BuiltinPerspectives.categoryColors[category] ?? Colors.blue;
+  /// 构建自定义分组标题
+  Widget _buildCustomCategoryHeader(
+    String category, 
+    int perspectiveCount, {
+    bool isBuiltinCategory = false,
+  }) {
+    // 如果是内置分组，使用内置配色
+    final name = isBuiltinCategory 
+        ? BuiltinPerspectives.categoryNames[category] ?? category
+        : category;
+    final icon = isBuiltinCategory
+        ? BuiltinPerspectives.categoryIcons[category] ?? '📌'
+        : '📌';
+    final color = isBuiltinCategory
+        ? BuiltinPerspectives.categoryColors[category] ?? Colors.teal
+        : Colors.teal;
     
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -2642,67 +2597,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Row(
         children: [
-          Text(icon, style: const TextStyle(fontSize: 16)),
-          const SizedBox(width: 8),
+          Text(icon, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 6),
           Text(
             name,
             style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
               color: color,
             ),
           ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              '$perspectiveCount',
-              style: TextStyle(
-                fontSize: 11,
-                color: color,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          const Spacer(),
-          // 显示/隐藏开关
-          Tooltip(
-            message: isVisible ? '点击隐藏该分组' : '点击显示该分组',
-            child: InkWell(
-              onTap: onToggle,
-              borderRadius: BorderRadius.circular(6),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isVisible 
-                      ? color.withValues(alpha: 0.15) 
-                      : Colors.grey.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      isVisible ? Icons.visibility : Icons.visibility_off,
-                      size: 14,
-                      color: isVisible ? color : Colors.grey,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      isVisible ? '显示' : '隐藏',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isVisible ? color : Colors.grey,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+          const SizedBox(width: 6),
+          Text(
+            '$perspectiveCount',
+            style: TextStyle(
+              fontSize: 11,
+              color: color.withValues(alpha: 0.7),
             ),
           ),
         ],
@@ -2710,43 +2620,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 构建单个视角 Chip
-  Widget _buildPerspectiveChip(PerspectiveEntity perspective, bool categoryVisible) {
-    final categoryColor = BuiltinPerspectives.categoryColors[perspective.category] ?? Colors.blue;
-    // 如果分组被隐藏，视角显示为置灰状态
-    final isEffectivelyEnabled = perspective.isEnabled && categoryVisible;
-    
-    return Tooltip(
-      message: !categoryVisible 
-          ? '该分组已隐藏\n${perspective.description}'
-          : perspective.description,
-      child: Opacity(
-        opacity: categoryVisible ? 1.0 : 0.5,
-        child: FilterChip(
-          avatar: Text(perspective.icon, style: const TextStyle(fontSize: 14)),
-          label: Text(
-            perspective.name,
-            style: TextStyle(
-              fontSize: 12,
-              color: isEffectivelyEnabled ? Colors.white : null,
-            ),
-          ),
-          selected: perspective.isEnabled,
-          selectedColor: categoryColor,
-          checkmarkColor: Colors.white,
-          onSelected: (selected) async {
-            await InsightService.instance.togglePerspectiveEnabled(
-              perspective.perspectiveId,
-              selected,
-            );
-            setState(() {}); // 刷新列表
-          },
-        ),
-      ),
-    );
-  }
-
-  /// 构建自定义视角 Chip（带编辑和删除功能）
+  /// 构建自定义视角 Chip
   Widget _buildCustomPerspectiveChip(PerspectiveEntity perspective) {
     return GestureDetector(
       onLongPress: () => _showPerspectiveEditor(perspective),
@@ -2839,7 +2713,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final iconController = TextEditingController(text: perspective?.icon ?? '🔍');
     final descController = TextEditingController(text: perspective?.description ?? '');
     final promptController = TextEditingController(text: perspective?.promptTemplate ?? _defaultPromptTemplate);
-    String selectedCategory = perspective?.category ?? BuiltinPerspectives.categorySelf;
+    final customCategoryController = TextEditingController();
+    
+    // 初始化分组选择
+    String selectedCategory = perspective?.category ?? '';
+    bool isCustomCategory = perspective != null && 
+        !BuiltinPerspectives.categoryOrder.contains(perspective.category);
+    if (isCustomCategory) {
+      customCategoryController.text = perspective.category;
+    }
+    
+    // 获取现有的自定义分组
+    final existingCustomCategories = await InsightService.instance.getCustomCategories();
+
+    if (!mounted) return;
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -2895,30 +2782,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 16),
 
                   // 分组选择
-                  const Text('分组', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                  Row(
+                    children: [
+                      const Text('分组', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                      const SizedBox(width: 8),
+                      Text(
+                        '可选择现有分组或输入新分组',
+                        style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
+                  // 内置分组选项
                   Wrap(
                     spacing: 8,
+                    runSpacing: 8,
                     children: [
-                      BuiltinPerspectives.categoryReview,
-                      BuiltinPerspectives.categorySelf,
-                      BuiltinPerspectives.categoryThinking,
-                      BuiltinPerspectives.categoryMaster,
-                    ].map((category) {
-                      final isSelected = selectedCategory == category;
-                      final name = BuiltinPerspectives.categoryNames[category] ?? category;
-                      final icon = BuiltinPerspectives.categoryIcons[category] ?? '📁';
-                      return ChoiceChip(
-                        avatar: Text(icon, style: const TextStyle(fontSize: 12)),
-                        label: Text(name),
-                        selected: isSelected,
-                        onSelected: (selected) {
-                          if (selected) {
-                            setDialogState(() => selectedCategory = category);
-                          }
-                        },
-                      );
-                    }).toList(),
+                      ...BuiltinPerspectives.categoryOrder.map((category) {
+                        final isSelected = !isCustomCategory && selectedCategory == category;
+                        final name = BuiltinPerspectives.categoryNames[category] ?? category;
+                        final icon = BuiltinPerspectives.categoryIcons[category] ?? '📁';
+                        return ChoiceChip(
+                          avatar: Text(icon, style: const TextStyle(fontSize: 12)),
+                          label: Text(name),
+                          selected: isSelected,
+                          onSelected: (selected) {
+                            if (selected) {
+                              setDialogState(() {
+                                selectedCategory = category;
+                                isCustomCategory = false;
+                                customCategoryController.clear();
+                              });
+                            }
+                          },
+                        );
+                      }),
+                      // 现有自定义分组
+                      ...existingCustomCategories.map((category) {
+                        final isSelected = isCustomCategory && selectedCategory == category;
+                        return ChoiceChip(
+                          avatar: const Text('📌', style: TextStyle(fontSize: 12)),
+                          label: Text(category),
+                          selected: isSelected,
+                          selectedColor: Colors.teal.withValues(alpha: 0.2),
+                          onSelected: (selected) {
+                            if (selected) {
+                              setDialogState(() {
+                                selectedCategory = category;
+                                isCustomCategory = true;
+                                customCategoryController.text = category;
+                              });
+                            }
+                          },
+                        );
+                      }),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // 自定义分组输入
+                  TextField(
+                    controller: customCategoryController,
+                    decoration: InputDecoration(
+                      labelText: '自定义分组',
+                      hintText: '输入新的分组名称...',
+                      border: const OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.add, size: 18),
+                      suffixIcon: customCategoryController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, size: 18),
+                              onPressed: () {
+                                setDialogState(() {
+                                  customCategoryController.clear();
+                                  isCustomCategory = false;
+                                });
+                              },
+                            )
+                          : null,
+                    ),
+                    onChanged: (value) {
+                      setDialogState(() {
+                        if (value.trim().isNotEmpty) {
+                          selectedCategory = value.trim();
+                          isCustomCategory = true;
+                        } else {
+                          isCustomCategory = false;
+                        }
+                      });
+                    },
                   ),
                   const SizedBox(height: 16),
 
@@ -2967,10 +2917,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 final icon = iconController.text.trim();
                 final desc = descController.text.trim();
                 final prompt = promptController.text.trim();
+                final category = isCustomCategory 
+                    ? customCategoryController.text.trim() 
+                    : selectedCategory;
 
                 if (name.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('请输入视角名称')),
+                  );
+                  return;
+                }
+
+                if (category.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('请选择或输入分组名称')),
                   );
                   return;
                 }
@@ -2987,7 +2947,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'icon': icon.isEmpty ? '🔍' : icon,
                   'description': desc,
                   'promptTemplate': prompt,
-                  'category': selectedCategory,
+                  'category': category,
                 });
               },
               child: Text(isEditing ? '保存' : '创建'),

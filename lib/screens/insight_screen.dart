@@ -75,14 +75,17 @@ class _InsightScreenState extends State<InsightScreen> {
       setState(() {
         _groupedPerspectives = grouped;
         
-        // 设置默认选中的视角
-        if (_selectedPerspectiveId == null) {
+        // 设置默认选中的视角（优先内置分组，其次自定义分组）
+        if (_selectedPerspectiveId == null && grouped.isNotEmpty) {
+          // 优先从内置分组选择
           for (final category in BuiltinPerspectives.categoryOrder) {
             if (grouped.containsKey(category) && grouped[category]!.isNotEmpty) {
               _selectedPerspectiveId = grouped[category]!.first.perspectiveId;
               break;
             }
           }
+          // 如果没有内置分组，从任意分组选择第一个
+          _selectedPerspectiveId ??= grouped.values.first.first.perspectiveId;
         }
         
         _isLoading = false;
@@ -384,12 +387,19 @@ class _InsightScreenState extends State<InsightScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     
-    // 展平所有视角
+    // 展平所有视角（内置分组优先，然后是自定义分组）
     final allPerspectives = <PerspectiveEntity>[];
+    // 先添加内置分组的视角
     for (final category in BuiltinPerspectives.categoryOrder) {
       final perspectives = _groupedPerspectives[category];
       if (perspectives != null) {
         allPerspectives.addAll(perspectives);
+      }
+    }
+    // 再添加自定义分组的视角
+    for (final category in _groupedPerspectives.keys) {
+      if (!BuiltinPerspectives.categoryOrder.contains(category)) {
+        allPerspectives.addAll(_groupedPerspectives[category]!);
       }
     }
     

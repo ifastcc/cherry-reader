@@ -83,12 +83,12 @@ claude mcp add --transport http cherry-reader http://localhost:9527/mcp
 <table>
   <tr>
     <td><img src="assets/screenshots/insight.png" width="280" alt="AI 洞察" /></td>
-    <td><img src="assets/screenshots/conversation.png" width="280" alt="对话阅读" /></td>
-    <td><img src="assets/screenshots/highlight.png" width="280" alt="高亮标注" /></td>
+    <td><img src="assets/screenshots/tts.png" width="280" alt="朗读" /></td>
+<td><img src="assets/screenshots/highlight.jpg" width="280" alt="高亮标注" /></td>
   </tr>
   <tr>
     <td align="center">AI 洞察</td>
-    <td align="center">对话阅读</td>
+    <td align="center">朗读</td>
     <td align="center">高亮标注</td>
   </tr>
 </table>
