@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'no_scrollbar_behavior.dart';
 import 'screens/home_screen.dart';
+import 'screens/main_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/analysis_cache_manager.dart';
@@ -171,7 +172,7 @@ class CherryViewerApp extends StatelessWidget {
           elevation: 2,
         ),
       ),
-      home: showOnboarding ? const OnboardingScreen() : const HomeScreen(),
+      home: showOnboarding ? const OnboardingScreen() : const MainScreen(),
     );
   }
 }

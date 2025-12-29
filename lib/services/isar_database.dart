@@ -10,6 +10,7 @@ import '../models/isar/prompt_template_entity.dart';
 import '../models/isar/version_entity.dart';
 import '../models/isar/insight_entity.dart';
 import '../models/isar/perspective_entity.dart';
+import '../models/isar/note_entity.dart';
 import 'perspective_storage.dart';
 // 新架构：消息级存储
 import '../models/isar/assistant_entity.dart';
@@ -103,6 +104,8 @@ class IsarDatabase {
           // 洞察功能
           InsightEntitySchema,
           PerspectiveEntitySchema,
+          // 笔记功能
+          NoteEntitySchema,
           // 版本管理
           VersionEntitySchema,
           // 消息级存储
