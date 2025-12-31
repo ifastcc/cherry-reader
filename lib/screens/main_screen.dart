@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
-import 'notes_screen.dart';
+import 'knowledge/knowledge_hub_screen.dart';
 
 /// 主页面（底部导航）
 ///
 /// 包含两个一级页面：
 /// - 对话（HomeScreen）
-/// - 笔记（NotesScreen）
+/// - 知识库（KnowledgeHubScreen）
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 
@@ -22,14 +22,12 @@ class _MainScreenState extends State<MainScreen> {
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
-        children: [
+        children: const [
           // 对话页面
-          const HomeScreen(),
+          HomeScreen(),
 
-          // 笔记页面
-          NotesScreen(
-            onNavigateToConversation: _navigateToConversation,
-          ),
+          // 知识库页面
+          KnowledgeHubScreen(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -44,30 +42,11 @@ class _MainScreenState extends State<MainScreen> {
             label: '对话',
           ),
           NavigationDestination(
-            icon: Icon(Icons.edit_note_outlined),
-            selectedIcon: Icon(Icons.edit_note),
-            label: '笔记',
+            icon: Icon(Icons.auto_awesome_mosaic_outlined),
+            selectedIcon: Icon(Icons.auto_awesome_mosaic),
+            label: '知识库',
           ),
         ],
-      ),
-    );
-  }
-
-  /// 从笔记跳转到对话
-  ///
-  /// TODO: Phase 9 - 实现完整的跳转功能
-  /// 当前由于 ConversationScreen 需要 CherryExtractor，
-  /// 而 extractor 是在 HomeScreen 中管理的，
-  /// 需要重构架构才能实现跨页面跳转。
-  void _navigateToConversation(String topicId, String? messageId) {
-    // 切换到对话 Tab
-    setState(() => _currentIndex = 0);
-
-    // 显示提示
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('已切换到对话页面，跳转到具体对话功能开发中...'),
-        duration: Duration(seconds: 2),
       ),
     );
   }

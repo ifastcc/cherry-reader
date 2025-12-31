@@ -101,6 +101,13 @@ class _ContextSelectorState extends State<ContextSelector> {
     // 如果检查 contextSnapshot 变化，会导致用户取消选择后状态被立即重置
     if (oldWidget.contextData != widget.contextData ||
         oldWidget.currentRoundIndex != widget.currentRoundIndex) {
+      // 清空缓存
+      _availableTopics = null;  // 🔴 关键：清空话题列表缓存
+      _additionalTopics.clear();
+      _selections.clear();
+
+      debugPrint('🧹 [ContextSelector] 数据变化，清空缓存');
+
       _parseContextData();
       _initDefaultSelection();
     }

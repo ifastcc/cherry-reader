@@ -236,6 +236,25 @@ class _ConversationScreenState extends State<ConversationScreen> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(ConversationScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // 如果话题 ID 变化，需要重新加载数据
+    if (oldWidget.topicId != widget.topicId) {
+      debugPrint('🔄 [ConversationScreen] topicId 变化: ${oldWidget.topicId} → ${widget.topicId}');
+
+      // 清空所有缓存
+      _conversation = null;
+      _cachedGroups = null;
+      _aiAnalyses = {};
+      _discussionCounts = {};
+
+      // 重新加载数据
+      _loadData();
+    }
+  }
+
   /// 滚动变化回调：更新当前轮次和滚动进度
   ///
   /// 核心逻辑：

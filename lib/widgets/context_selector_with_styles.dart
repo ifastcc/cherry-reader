@@ -124,6 +124,9 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     final currentAssistantId = widget.currentAssistantId;
     final currentTopicId = widget.currentTopicId;
 
+    // 跟踪是否找到了当前话题
+    bool foundCurrentTopic = false;
+
     for (final entry in groupedTopics.entries) {
       final assistantId = entry.key;
       final topics = entry.value;
@@ -133,6 +136,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
       final topicNodes = <_TopicNode>[];
       for (final topic in topics) {
         final isCurrentTopic = topic.id == currentTopicId;
+        if (isCurrentTopic) foundCurrentTopic = true;
 
         // 如果是当前话题，使用传入的 contextData 构建轮次
         List<_RoundNode> rounds;
@@ -182,6 +186,43 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
         isCurrent: isCurrentAssistant,
         topics: topicNodes,
       ));
+    }
+
+    // 🔴 关键修复：如果当前话题不在索引中（新话题），手动添加
+    if (!foundCurrentTopic && currentTopicId != null && _currentTopicRounds.isNotEmpty) {
+      debugPrint('⚠️ [ContextSelector] 当前话题不在索引中，手动添加: $currentTopicId');
+
+      final assistantId = currentAssistantId ?? 'unknown';
+      final assistantName = widget.currentAssistantName ?? '当前助手';
+      final topicName = widget.currentTopicName ?? '当前话题';
+
+      // 查找或创建当前助手的节点
+      final existingAssistant = _assistants.cast<_AssistantNode?>().firstWhere(
+        (a) => a?.id == assistantId,
+        orElse: () => null,
+      );
+
+      final currentTopicNode = _TopicNode(
+        id: currentTopicId,
+        name: topicName,
+        isCurrent: true,
+        rounds: _currentTopicRounds,
+        roundCount: _currentTopicRounds.length,
+        isLoaded: true,
+      );
+
+      if (existingAssistant != null) {
+        // 添加到现有助手
+        existingAssistant.topics.insert(0, currentTopicNode);
+      } else {
+        // 创建新助手节点
+        _assistants.insert(0, _AssistantNode(
+          id: assistantId,
+          name: assistantName,
+          isCurrent: true,
+          topics: [currentTopicNode],
+        ));
+      }
     }
 
     // 当前助手排在最前
@@ -243,12 +284,37 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
   @override
   void didUpdateWidget(ContextSelectorWithStyles oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.contextData != widget.contextData ||
-        oldWidget.currentRoundIndex != widget.currentRoundIndex) {
+
+    // 检测数据源是否变化
+    // 注意：不检查 contextSnapshot，因为它是由本组件生成并返回给父组件的
+    // 如果检查 contextSnapshot 变化，会导致用户选择后状态被立即重置（无限循环）
+    final dataChanged = oldWidget.contextData != widget.contextData;
+    final roundChanged = oldWidget.currentRoundIndex != widget.currentRoundIndex;
+    final topicChanged = oldWidget.currentTopicId != widget.currentTopicId;
+
+    if (dataChanged || topicChanged) {
+      // 数据源变化：清空所有缓存，重新初始化
+      _fullContentCache.clear();
+      _selections.clear();
+      _assistants.clear();
+      _currentTopicRounds = [];
+
+      debugPrint('🧹 [ContextSelector] 数据源变化，清空缓存 (topicId: ${widget.currentTopicId})');
+
+      _parseContextData();
+      _initFromIndexService();
+      _initDefaultSelection();
+      _initDefaultExpansion();
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _notifyChange();
+      });
+    } else if (roundChanged) {
+      // 仅轮次变化：轻量级更新
       _parseContextData();
       _initDefaultSelection();
       _initDefaultExpansion();
-      // 通知父组件更新显示
+
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _notifyChange();
       });

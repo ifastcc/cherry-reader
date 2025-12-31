@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
-import '../models/isar/highlight_entity.dart';
 import '../models/isar/ai_analysis_entity.dart';
 import '../models/isar/discussion_entity.dart';
 import '../models/isar/discussion_message_entity.dart';
@@ -10,7 +9,7 @@ import '../models/isar/prompt_template_entity.dart';
 import '../models/isar/version_entity.dart';
 import '../models/isar/insight_entity.dart';
 import '../models/isar/perspective_entity.dart';
-import '../models/isar/note_entity.dart';
+import '../models/isar/knowledge_entry.dart';
 import 'perspective_storage.dart';
 // 新架构：消息级存储
 import '../models/isar/assistant_entity.dart';
@@ -93,7 +92,6 @@ class IsarDatabase {
       _isar = await Isar.open(
         [
           // 基础功能
-          HighlightEntitySchema,
           AIAnalysisEntitySchema,
           DiscussionEntitySchema,
           DiscussionMessageEntitySchema,
@@ -104,8 +102,8 @@ class IsarDatabase {
           // 洞察功能
           InsightEntitySchema,
           PerspectiveEntitySchema,
-          // 笔记功能
-          NoteEntitySchema,
+          // 统一知识条目（笔记、标注、高亮）
+          KnowledgeEntrySchema,
           // 版本管理
           VersionEntitySchema,
           // 消息级存储
@@ -135,89 +133,6 @@ class IsarDatabase {
       _initialized = false;
       print('🔒 Isar 数据库已关闭');
     }
-  }
-
-  // ============ 标注相关操作 ============
-
-  /// 批量加载指定消息的标注
-  Future<Map<String, List<HighlightEntity>>> batchLoadHighlights(
-    List<String> messageIds,
-  ) async {
-    if (messageIds.isEmpty) return {};
-
-    final isar = await instance;
-    final highlights = await isar.highlightEntitys
-        .filter()
-        .anyOf(messageIds, (q, messageId) => q.messageIdEqualTo(messageId))
-        .findAll();
-
-    // 按 messageId 分组
-    final grouped = <String, List<HighlightEntity>>{};
-    for (final h in highlights) {
-      grouped.putIfAbsent(h.messageId, () => []).add(h);
-    }
-
-    return grouped;
-  }
-
-  /// 加载单个消息的标注
-  Future<List<HighlightEntity>> loadHighlights(String messageId) async {
-    if (messageId.isEmpty) return [];
-
-    final isar = await instance;
-    return isar.highlightEntitys
-        .filter()
-        .messageIdEqualTo(messageId)
-        .sortByCreatedAtDesc()
-        .findAll();
-  }
-
-  /// 保存标注
-  Future<void> saveHighlight(HighlightEntity highlight) async {
-    final isar = await instance;
-    await isar.writeTxn(() async {
-      await isar.highlightEntitys.put(highlight);
-    });
-  }
-
-  /// 批量保存标注
-  Future<void> saveHighlights(List<HighlightEntity> highlights) async {
-    if (highlights.isEmpty) return;
-
-    final isar = await instance;
-    await isar.writeTxn(() async {
-      await isar.highlightEntitys.putAll(highlights);
-    });
-  }
-
-  /// 删除标注
-  Future<void> deleteHighlight(String highlightId) async {
-    final isar = await instance;
-    await isar.writeTxn(() async {
-      await isar.highlightEntitys
-          .filter()
-          .highlightIdEqualTo(highlightId)
-          .deleteFirst();
-    });
-  }
-
-  /// 清除指定消息的所有标注
-  Future<void> clearHighlights(String messageId) async {
-    final isar = await instance;
-    await isar.writeTxn(() async {
-      await isar.highlightEntitys
-          .filter()
-          .messageIdEqualTo(messageId)
-          .deleteAll();
-    });
-  }
-
-  /// 监听指定消息的标注变化（实时更新）
-  Stream<List<HighlightEntity>> watchHighlights(String messageId) {
-    return instanceSync.highlightEntitys
-        .filter()
-        .messageIdEqualTo(messageId)
-        .watch(fireImmediately: true);
   }
 
   // ============ AI 分析缓存相关操作 ============
@@ -300,7 +215,7 @@ class IsarDatabase {
   Future<Map<String, dynamic>> getStatistics() async {
     final isar = await instance;
 
-    final highlightCount = await isar.highlightEntitys.count();
+    final knowledgeCount = await isar.knowledgeEntrys.count();
     final topicCount = await isar.topicEntitys.count();
     final messageCount = await isar.messageEntitys.count();
     final analysisCount = await isar.aIAnalysisEntitys.count();
@@ -308,7 +223,7 @@ class IsarDatabase {
     final dbSize = await isar.getSize(includeIndexes: true);
 
     return {
-      'highlights': highlightCount,
+      'knowledge_entries': knowledgeCount,
       'topics': topicCount,
       'messages': messageCount,
       'analyses': analysisCount,

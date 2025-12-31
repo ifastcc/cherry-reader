@@ -5,10 +5,10 @@ import '../models/highlight_data.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../services/highlight_service.dart';
 import '../services/unified_conversation_service.dart';
-import '../screens/fullscreen_reader_screen.dart';
 import '../screens/ai_chat_screen.dart';
 import 'unified_markdown_renderer.dart';
 import 'highlight_style_menu.dart';
+import 'knowledge/quick_capture_sheet.dart';
 import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
 
@@ -17,7 +17,6 @@ import '../models/tts_item.dart';
 /// 整合了所有卡片类型的共同逻辑：
 /// - 标注加载/保存（使用 HighlightService）
 /// - Markdown 渲染（使用 UnifiedMarkdownRenderer）
-/// - 全屏阅读（导航到 FullscreenReaderScreen）
 /// - 文本选择和高亮标注
 ///
 /// 使用方式：
@@ -42,7 +41,7 @@ class HighlightableCard extends StatefulWidget {
   /// 自定义头部组件
   final Widget? header;
 
-  /// 模型名称（用于全屏阅读显示）
+  /// 模型名称
   final String modelName;
 
   /// 模型颜色
@@ -72,10 +71,10 @@ class HighlightableCard extends StatefulWidget {
   /// 朗读回调
   final VoidCallback? onSpeak;
 
-  /// 【可选】是否启用长文本折叠功能（默认关闭，保持原有双击全屏行为）
+  /// 【可选】是否启用长文本折叠功能（默认关闭）
   final bool enableCollapse;
 
-  // 可选的上下文参数（用于全屏阅读页讨论功能）
+  // 可选的上下文参数
   final String? topicId;
   final int? roundIndex;
   final Map<String, dynamic>? contextData;
@@ -410,7 +409,12 @@ class _HighlightableCardState extends State<HighlightableCard> {
       styleType: _currentHighlightType,
     );
 
-    _highlightService.addHighlight(widget.messageId, highlight).then((
+    _highlightService.addHighlight(
+      widget.messageId,
+      highlight,
+      topicId: widget.topicId,
+      topicName: widget.contextData?['topicName'] as String?,
+    ).then((
       highlights,
     ) {
       if (mounted) {
@@ -487,39 +491,23 @@ class _HighlightableCardState extends State<HighlightableCard> {
     );
   }
 
-  Future<void> _openFullscreen() async {
-    debugPrint(
-      '[HighlightableCard] Navigating to fullscreen with messageId: ${widget.messageId}',
+  /// 显示快速记录弹窗（创建标注）
+  void _showQuickCaptureSheet() {
+    QuickCaptureSheet.show(
+      context: context,
+      selectedText: _selectedText,
+      selectionStart: _selectionStart,
+      selectionEnd: _selectionEnd,
+      messageId: widget.messageId,
+      topicId: widget.topicId,
+      topicName: widget.contextData?['topicName'] as String?,
+      onCreated: () {
+        // 创建完成后重新加载高亮
+        _loadHighlights();
+      },
     );
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => FullscreenReaderScreen(
-          content: widget.content,
-          modelName: widget.modelName,
-          messageId: widget.messageId,
-          backgroundColor: widget.modelColor, // 传递模型颜色
-          topicId: widget.topicId,
-          roundIndex: widget.roundIndex,
-          contextData: widget.contextData,
-        ),
-      ),
-    );
-    // 从全屏返回后，强制刷新标注
-    debugPrint(
-      '[HighlightableCard] Returned from fullscreen, reloading highlights...',
-    );
-    final highlights = await _highlightService.reloadHighlights(
-      widget.messageId,
-    );
-    if (mounted) {
-      setState(() {
-        _highlights = highlights;
-        // 高亮变化时清除 Markdown 缓存
-        _cachedMarkdownWidget = null;
-      });
-    }
   }
+
 
   String _formatTime(String isoTime) {
     if (isoTime.isEmpty) return '';
@@ -581,9 +569,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
   /// 流式布局（无边框、自然撑开）
   Widget _buildStreamLayout() {
     return GestureDetector(
-      // 启用折叠时：双击展开/收缩，长按全屏；否则：双击全屏
-      onDoubleTap: widget.enableCollapse ? _toggleExpand : _openFullscreen,
-      onLongPress: widget.enableCollapse ? _openFullscreen : null,
+      // 双击展开/收缩
+      onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         child: Column(
@@ -621,15 +608,6 @@ class _HighlightableCardState extends State<HighlightableCard> {
             style: TextStyle(color: Colors.grey[500], fontSize: 11),
           ),
         const Spacer(),
-        // 全屏阅读提示
-        GestureDetector(
-          onTap: _openFullscreen,
-          child: Icon(
-            Icons.fullscreen_rounded,
-            size: 18,
-            color: Colors.grey[400],
-          ),
-        ),
       ],
     );
   }
@@ -637,9 +615,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
   /// 传统卡片布局
   Widget _buildCardLayout() {
     return GestureDetector(
-      // 启用折叠时：双击展开/收缩，长按全屏；否则：双击全屏
-      onDoubleTap: widget.enableCollapse ? _toggleExpand : _openFullscreen,
-      onLongPress: widget.enableCollapse ? _openFullscreen : null,
+      // 双击展开/收缩
+      onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
       child: widget.maxHeight != null
           ? ConstrainedBox(
               constraints: BoxConstraints(maxHeight: widget.maxHeight!),
@@ -814,6 +791,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
         return AdaptiveTextSelectionToolbar.buttonItems(
           anchors: selectableRegionState.contextMenuAnchors,
           buttonItems: [
+            // 高亮按钮
             ContextMenuButtonItem(
               onPressed: () {
                 if (_selectedText.isNotEmpty) {
@@ -826,7 +804,18 @@ class _HighlightableCardState extends State<HighlightableCard> {
                 ContextMenuController.removeAny();
               },
               type: ContextMenuButtonType.custom,
-              label: '📌 高亮',
+              label: '高亮',
+            ),
+            // 标注按钮（打开快速记录弹窗）
+            ContextMenuButtonItem(
+              onPressed: () {
+                if (_selectedText.isNotEmpty) {
+                  ContextMenuController.removeAny();
+                  _showQuickCaptureSheet();
+                }
+              },
+              type: ContextMenuButtonType.custom,
+              label: '标注',
             ),
             ...buttonItems,
           ],
@@ -877,28 +866,6 @@ class _HighlightableCardState extends State<HighlightableCard> {
               ),
             ),
           ],
-          const SizedBox(width: 12),
-          GestureDetector(
-            onTap: _openFullscreen,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.fullscreen,
-                  size: 16,
-                  color: hintColor,
-                ),
-                const SizedBox(width: 2),
-                Text(
-                  '长按全屏',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: hintColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
