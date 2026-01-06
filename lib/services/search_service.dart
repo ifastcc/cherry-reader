@@ -102,7 +102,7 @@ class SearchService {
     if (topics.isEmpty) return [];
 
     // 2. 批量获取助手信息
-    final assistantIds = topics.map((t) => t.assistantId).toSet().toList();
+    final assistantIds = topics.expand((t) => t.assistantIds).toSet().toList();
     final assistants = await isar.assistantEntitys
         .filter()
         .anyOf(assistantIds, (q, id) => q.assistantIdEqualTo(id))
@@ -116,7 +116,9 @@ class SearchService {
 
     // 4. 构建结果
     return topics.map((topic) {
-      final assistant = assistantMap[topic.assistantId];
+      final assistantNames = topic.assistantIds
+          .map((id) => assistantMap[id]?.name ?? '未知助手')
+          .toList();
       final lowerName = topic.name.toLowerCase();
       final lowerKeyword = keyword.toLowerCase();
       final matchIndex = lowerName.indexOf(lowerKeyword);
@@ -130,8 +132,8 @@ class SearchService {
         topicId: topic.topicId,
         topicName: topic.name,
         contentPreview: contentPreviews[topic.topicId],
-        assistantId: topic.assistantId,
-        assistantName: assistant?.name ?? '未知助手',
+        assistantIds: topic.assistantIds,
+        assistantNames: assistantNames,
         createdAt: topic.createdAt,
       );
     }).toList();
@@ -229,7 +231,7 @@ class SearchService {
     final topicMap = {for (final t in topics) t.topicId: t};
 
     // 4. 批量获取助手信息
-    final assistantIds = topics.map((t) => t.assistantId).toSet().toList();
+    final assistantIds = topics.expand((t) => t.assistantIds).toSet().toList();
     final assistants = await isar.assistantEntitys
         .filter()
         .anyOf(assistantIds, (q, id) => q.assistantIdEqualTo(id))
@@ -248,7 +250,9 @@ class SearchService {
       final topic = topicMap[block.topicId];
       if (topic == null) continue;
 
-      final assistant = assistantMap[topic.assistantId];
+      final assistantNames = topic.assistantIds
+          .map((id) => assistantMap[id]?.name ?? '未知助手')
+          .toList();
 
       // 使用 text_cleaner 生成干净的 snippet
       final snippetResult = generateSearchSnippet(
@@ -270,8 +274,8 @@ class SearchService {
         matchEnd: snippetResult.matchEnd,
         topicId: block.topicId,
         topicName: topic.name,
-        assistantId: topic.assistantId,
-        assistantName: assistant?.name ?? '未知助手',
+        assistantIds: topic.assistantIds,
+        assistantNames: assistantNames,
         messageId: block.messageId,
         role: message?.role,
         modelName: message?.modelName,
@@ -381,8 +385,12 @@ class SearchService {
     final assistantNames = <String, String>{};
 
     for (final result in results) {
-      groups.putIfAbsent(result.assistantId, () => []).add(result);
-      assistantNames[result.assistantId] = result.assistantName;
+      for (int i = 0; i < result.assistantIds.length; i++) {
+        final id = result.assistantIds[i];
+        final name = result.assistantNames[i];
+        groups.putIfAbsent(id, () => []).add(result);
+        assistantNames[id] = name;
+      }
     }
 
     // 组内按时间倒序排序

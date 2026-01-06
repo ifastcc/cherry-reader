@@ -877,6 +877,44 @@ class _AIChatScreenState extends State<AIChatScreen> {
     );
   }
 
+  /// 将消息列表转换为 rounds 格式（用于 ContextEditor）
+  List<Map<String, dynamic>> _convertMessagesToRounds(List<dynamic> messages) {
+    final rounds = <Map<String, dynamic>>[];
+    Map<String, dynamic>? currentUserMsg;
+    List<Map<String, dynamic>> currentReplies = [];
+
+    for (final msg in messages) {
+      if (msg is! Map<String, dynamic>) continue;
+
+      final role = msg['role'] as String?;
+      if (role == 'user') {
+        // 保存上一轮
+        if (currentUserMsg != null || currentReplies.isNotEmpty) {
+          rounds.add({
+            'index': rounds.length,
+            'question': currentUserMsg ?? {},
+            'replies': List<Map<String, dynamic>>.from(currentReplies),
+          });
+          currentReplies = [];
+        }
+        currentUserMsg = msg;
+      } else if (role == 'assistant') {
+        currentReplies.add(msg);
+      }
+    }
+
+    // 保存最后一轮
+    if (currentUserMsg != null || currentReplies.isNotEmpty) {
+      rounds.add({
+        'index': rounds.length,
+        'question': currentUserMsg ?? {},
+        'replies': List<Map<String, dynamic>>.from(currentReplies),
+      });
+    }
+
+    return rounds;
+  }
+
   void _showTemplateContent(TaskTemplateEntity template) {
     showDialog(
       context: context,
@@ -917,12 +955,66 @@ class _AIChatScreenState extends State<AIChatScreen> {
     );
   }
 
-  void _showContextEditor() {
+  Future<void> _showContextEditor() async {
     // 单回复讨论：直接弹窗预览，不需要编辑器
     if (widget.contextTypeFilter == ConversationContextType.singleMessage) {
       _showContextPreview();
       return;
     }
+
+    // 准备上下文数据
+    Map<String, dynamic>? contextData = widget.initialContextData;
+    
+    // 如果有活跃对话且是基于话题的，尝试加载最新数据以支持自动展开
+    if (_activeConversationId != null && _conversations.isNotEmpty) {
+      try {
+        final conversation = _conversations.firstWhere(
+          (c) => c.conversationId == _activeConversationId, 
+          orElse: () => _conversations.first
+        );
+        
+        if (conversation.contextId.startsWith('topic:')) {
+          final topicId = conversation.contextId.split(':')[1];
+          // 获取话题完整数据
+          final topicService = TopicService();
+          final topicData = await topicService.getTopicFullData(topicId);
+          
+          if (topicData != null) {
+             // 转换消息为轮次格式
+             final messages = topicData['messages'] as List<dynamic>? ?? [];
+             final rounds = _convertMessagesToRounds(messages);
+             
+             // 获取助手信息
+             final assistantIds = topicData['assistantIds'] as List<dynamic>? ?? [];
+             final assistantId = assistantIds.isNotEmpty ? assistantIds.first as String : null;
+             
+             // 获取助手名称 (为了显示更友好)
+             String? assistantName;
+             if (assistantId != null) {
+               final assistants = await topicService.getAssistants();
+               final assistant = assistants.cast<dynamic>().firstWhere(
+                 (a) => a.assistantId == assistantId, 
+                 orElse: () => null
+               );
+               if (assistant != null) assistantName = assistant.name;
+             }
+
+             contextData = {
+               'topicId': topicId,
+               'topicName': topicData['name'],
+               'assistantId': assistantId,
+               'assistantName': assistantName,
+               'rounds': rounds,
+             };
+          }
+        }
+      } catch (e) {
+        debugPrint('加载上下文数据失败: $e');
+        // 失败回退到 initialContextData
+      }
+    }
+
+    if (!mounted) return;
 
     // 多轮对话：进入完整的 Context 编辑器
     Navigator.of(context).push(
@@ -932,9 +1024,9 @@ class _AIChatScreenState extends State<AIChatScreen> {
         barrierDismissible: true,
         pageBuilder: (context, animation, secondaryAnimation) {
           return _ContextEditorPage(
-            contextData: widget.initialContextData,
+            contextData: contextData,
             contextSnapshot: _currentContextContent ?? '',
-            currentRoundIndex: widget.initialContextData?['currentRoundIndex'],
+            currentRoundIndex: contextData?['currentRoundIndex'] ?? widget.initialContextData?['currentRoundIndex'],
             contextType: widget.contextTypeFilter ?? ConversationContextType.topic,
             onContextChanged: (newSnapshot, structuredContext, contextDataJson) {
               setState(() {

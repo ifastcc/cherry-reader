@@ -16,7 +16,7 @@ class IsarTopicRepository implements ITopicRepository {
     return TopicModel(
       topicId: entity.topicId,
       name: entity.name,
-      assistantId: entity.assistantId,
+      assistantIds: entity.assistantIds,
       messageCount: entity.messageCount,
       roundCount: entity.roundCount,
       createdAt: entity.createdAt,
@@ -28,7 +28,7 @@ class IsarTopicRepository implements ITopicRepository {
     return TopicEntity.fromData(
       topicId: model.topicId,
       name: model.name,
-      assistantId: model.assistantId,
+      assistantIds: model.assistantIds,
       messageCount: model.messageCount,
       roundCount: model.roundCount,
       createdAt: model.createdAt,
@@ -74,7 +74,7 @@ class IsarTopicRepository implements ITopicRepository {
       final isar = await _db.importInstance;
       final entities = await isar.topicEntitys
           .filter()
-          .assistantIdEqualTo(assistantId)
+          .assistantIdsElementEqualTo(assistantId)
           .sortByUpdatedAtDesc()
           .findAll();
       return entities.map(_toModel).toList();
@@ -101,7 +101,7 @@ class IsarTopicRepository implements ITopicRepository {
       final isar = await _db.importInstance;
       return isar.topicEntitys
           .filter()
-          .assistantIdEqualTo(assistantId)
+          .assistantIdsElementEqualTo(assistantId)
           .count();
     } on IsarError catch (e) {
       print('❌ 获取助手话题数量失败: $e');
@@ -162,7 +162,7 @@ class IsarTopicRepository implements ITopicRepository {
       await isar.writeTxn(() async {
         await isar.topicEntitys
             .filter()
-            .assistantIdEqualTo(assistantId)
+            .assistantIdsElementEqualTo(assistantId)
             .deleteAll();
       });
     } on IsarError catch (e) {

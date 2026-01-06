@@ -5,7 +5,7 @@
 class TopicModel {
   final String topicId;
   final String name;
-  final String assistantId;
+  final List<String> assistantIds;
   final int messageCount;
   final int roundCount;
   final int createdAt;
@@ -14,7 +14,7 @@ class TopicModel {
   const TopicModel({
     required this.topicId,
     required this.name,
-    required this.assistantId,
+    required this.assistantIds,
     required this.messageCount,
     required this.roundCount,
     required this.createdAt,
@@ -25,7 +25,7 @@ class TopicModel {
   TopicModel copyWith({
     String? topicId,
     String? name,
-    String? assistantId,
+    List<String>? assistantIds,
     int? messageCount,
     int? roundCount,
     int? createdAt,
@@ -34,7 +34,7 @@ class TopicModel {
     return TopicModel(
       topicId: topicId ?? this.topicId,
       name: name ?? this.name,
-      assistantId: assistantId ?? this.assistantId,
+      assistantIds: assistantIds ?? this.assistantIds,
       messageCount: messageCount ?? this.messageCount,
       roundCount: roundCount ?? this.roundCount,
       createdAt: createdAt ?? this.createdAt,
@@ -44,7 +44,7 @@ class TopicModel {
 
   @override
   String toString() =>
-      'TopicModel(id: $topicId, name: $name, messages: $messageCount, rounds: $roundCount)';
+      'TopicModel(id: $topicId, name: $name, assistants: $assistantIds, messages: $messageCount, rounds: $roundCount)';
 
   @override
   bool operator ==(Object other) =>

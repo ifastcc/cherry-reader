@@ -18,9 +18,10 @@ class TopicEntity {
   /// 话题名称
   late String name;
 
-  /// 所属 Assistant ID（复合索引）
-  @Index(composite: [CompositeIndex('createdAt')])
-  late String assistantId;
+  /// 所属 Assistant IDs（支持多归属）
+  /// Isar 会为列表中的每个元素创建索引
+  @Index()
+  late List<String> assistantIds;
 
   /// 消息数量
   late int messageCount;
@@ -42,7 +43,7 @@ class TopicEntity {
   factory TopicEntity.fromData({
     required String topicId,
     required String name,
-    required String assistantId,
+    required List<String> assistantIds,
     required int messageCount,
     required int roundCount,
     int? createdAt,
@@ -52,7 +53,7 @@ class TopicEntity {
     return TopicEntity()
       ..topicId = topicId
       ..name = name
-      ..assistantId = assistantId
+      ..assistantIds = assistantIds
       ..messageCount = messageCount
       ..roundCount = roundCount
       ..createdAt = createdAt ?? now

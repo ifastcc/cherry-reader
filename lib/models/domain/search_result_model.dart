@@ -29,8 +29,8 @@ class SearchResultModel {
   final String? contentPreview;
 
   /// 所属助手信息
-  final String assistantId;
-  final String assistantName;
+  final List<String> assistantIds;
+  final List<String> assistantNames;
 
   /// 消息元数据（仅 type == message 时有值）
   final String? messageId;
@@ -50,8 +50,8 @@ class SearchResultModel {
     required this.topicId,
     required this.topicName,
     this.contentPreview,
-    required this.assistantId,
-    required this.assistantName,
+    required this.assistantIds,
+    required this.assistantNames,
     this.messageId,
     this.role,
     this.modelName,

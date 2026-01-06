@@ -101,8 +101,10 @@ class GetUserQueriesTool extends MCPTool {
 
       // 1. 先找完全匹配的（名称等于关键词）
       final exactMatches = allTopics.where((t) {
-        final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-        return keywords.any((k) => name == k);
+        return t.assistantIds.any((id) {
+          final name = (assistantNames[id] ?? '').toLowerCase();
+          return keywords.any((k) => name == k);
+        });
       }).toList();
 
       // 2. 如果有完全匹配，只返回完全匹配的
@@ -111,8 +113,10 @@ class GetUserQueriesTool extends MCPTool {
       } else {
         // 3. 否则返回模糊匹配的
         allTopics = allTopics.where((t) {
-          final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-          return keywords.any((k) => name.contains(k));
+          return t.assistantIds.any((id) {
+            final name = (assistantNames[id] ?? '').toLowerCase();
+            return keywords.any((k) => name.contains(k));
+          });
         }).toList();
       }
     }
@@ -159,7 +163,9 @@ class GetUserQueriesTool extends MCPTool {
       topicResults.add({
         'topic_id': topic.topicId,
         'topic_name': topic.name,
-        'assistant_name': assistantNames[topic.assistantId] ?? '未知助手',
+        'assistant_name': topic.assistantIds
+            .map((id) => assistantNames[id] ?? '未知助手')
+            .join(', '),
         'round_count': topic.roundCount,
         'user_queries': userQueries,
       });

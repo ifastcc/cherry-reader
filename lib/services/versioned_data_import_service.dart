@@ -336,7 +336,7 @@ class VersionedDataImportService {
       for (final asst in assistants) {
         final count = await _isar.topicEntitys
             .filter()
-            .assistantIdEqualTo(asst.assistantId)
+            .assistantIdsElementEqualTo(asst.assistantId)
             .count();
         asst.topicCount = count;
         await _isar.assistantEntitys.putByIndex('assistantId', asst);
@@ -382,7 +382,7 @@ class VersionedDataImportService {
     final topicEntity = TopicEntity.fromData(
       topicId: topicId,
       name: topicData['name'] as String? ?? '未命名话题',
-      assistantId: assistantId,
+      assistantIds: [assistantId],
       messageCount: messages.length,
       roundCount: roundCount,
       createdAt: _parseTimestamp(topicData['createdAt']),

@@ -128,15 +128,16 @@ class HighlightableCard extends StatefulWidget {
     final messageId = data['id'] as String? ?? '';
     final timestamp = data['created_at'] as String? ?? '';
 
-    // 提取纯文本内容（包含多种可显示的块类型）
-    // 优先顺序：main_text > thinking > translation > code > error
+    // 提取纯文本内容
+    // 按照 block 在列表中的顺序拼接（TopicService 已按 orderIndex 排序）
     String plainContent = '';
-    final contentTypes = ['main_text', 'thinking', 'translation', 'code', 'error'];
-    for (final type in contentTypes) {
-      for (final block in blocks) {
-        if (block is Map<String, dynamic> && block['type'] == type) {
-          plainContent += block['content'] as String? ?? '';
-        }
+    // 支持的文本块类型
+    final textBlockTypes = ['main_text', 'thinking', 'translation', 'code', 'error', 'text'];
+
+    for (final block in blocks) {
+      if (block is Map<String, dynamic> && textBlockTypes.contains(block['type'])) {
+        final content = block['content'] as String? ?? '';
+        plainContent += content;
       }
     }
 

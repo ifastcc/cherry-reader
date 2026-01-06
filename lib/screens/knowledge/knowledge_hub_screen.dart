@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import '../../models/knowledge_item.dart';
 import '../../services/knowledge_service.dart';
@@ -14,10 +16,10 @@ class KnowledgeHubScreen extends StatefulWidget {
   const KnowledgeHubScreen({super.key});
 
   @override
-  State<KnowledgeHubScreen> createState() => _KnowledgeHubScreenState();
+  State<KnowledgeHubScreen> createState() => KnowledgeHubScreenState();
 }
 
-class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
+class KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
   final KnowledgeService _knowledgeService = KnowledgeService();
 
   // 状态
@@ -26,10 +28,9 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
   bool _isLoading = true;
   String? _error;
 
-  // 筛选状态
+  // 筛选/搜索状态
   String? _selectedTag;
   String _searchQuery = '';
-  bool _isSearching = false;
 
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -47,9 +48,9 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
     super.dispose();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadData({bool showLoading = true}) async {
     setState(() {
-      _isLoading = true;
+      _isLoading = showLoading;
       _error = null;
     });
 
@@ -66,8 +67,9 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
       // 应用标签筛选
       List<KnowledgeItem> filteredItems = items;
       if (_selectedTag != null) {
-        filteredItems =
-            items.where((item) => item.tags.contains(_selectedTag)).toList();
+        filteredItems = items
+            .where((item) => item.tags.contains(_selectedTag))
+            .toList();
       }
 
       // 应用搜索筛选
@@ -96,119 +98,148 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: _buildAppBar(context),
-      body: Column(
-        children: [
-          // 标签筛选（有标签时显示）
-          if (_allTags.isNotEmpty) _buildTagFilter(context),
-          // 内容区域
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _error != null
-                    ? _buildErrorState(context)
-                    : _items.isEmpty
-                        ? KnowledgeEmptyState(onCreateNote: _handleCreateNote)
-                        : _buildItemList(context),
+      extendBody: true,
+      body: RefreshIndicator(
+        onRefresh: () => _loadData(showLoading: false),
+        edgeOffset: 120,
+        child: CustomScrollView(
+          controller: _scrollController,
+          physics: const AlwaysScrollableScrollPhysics(
+            parent: BouncingScrollPhysics(),
           ),
-        ],
+          slivers: [
+            _buildHeroHeader(context),
+            if (_allTags.isNotEmpty)
+              SliverToBoxAdapter(child: _buildTagFilter(context)),
+            _buildContentArea(context),
+          ],
+        ),
       ),
-      floatingActionButton: _buildFAB(context),
     );
   }
 
-  PreferredSizeWidget _buildAppBar(BuildContext context) {
+  /// 处理主按钮点击
+  void handleMainAction() {
+    _handleCreateNote();
+  }
+
+  SliverAppBar _buildHeroHeader(BuildContext context) {
     final theme = Theme.of(context);
+    final topPadding = MediaQuery.of(context).padding.top;
 
-    if (_isSearching) {
-      return AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            setState(() {
-              _isSearching = false;
-              _searchQuery = '';
-              _searchController.clear();
-            });
-            _loadData();
-          },
-        ),
-        title: TextField(
-          controller: _searchController,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: '搜索知识库...',
-            border: InputBorder.none,
-            hintStyle: TextStyle(
-              color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
-            ),
-          ),
-          style: TextStyle(
-            color: theme.colorScheme.onSurface,
-            fontSize: 16,
-          ),
-          onChanged: (value) {
-            setState(() => _searchQuery = value);
-            _loadData();
-          },
-        ),
-        actions: [
-          if (_searchQuery.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.clear),
-              onPressed: () {
-                _searchController.clear();
-                setState(() => _searchQuery = '');
-                _loadData();
-              },
-            ),
-        ],
-      );
-    }
-
-    return AppBar(
-      title: const Text('知识库'),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.search),
-          onPressed: () => setState(() => _isSearching = true),
-        ),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert),
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'refresh',
-              child: Row(
-                children: [
-                  Icon(Icons.refresh, size: 20),
-                  SizedBox(width: 12),
-                  Text('刷新'),
-                ],
+    return SliverAppBar(
+      pinned: true,
+      expandedHeight: 320,
+      automaticallyImplyLeading: false,
+      surfaceTintColor: Colors.transparent,
+      backgroundColor: theme.colorScheme.surface,
+      flexibleSpace: FlexibleSpaceBar(
+        background: LayoutBuilder(
+          builder: (context, constraints) {
+            return Container(
+              padding: EdgeInsets.fromLTRB(16, topPadding + 16, 16, 16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    theme.colorScheme.primaryContainer.withOpacity(0.65),
+                    theme.colorScheme.surface,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'stats',
-              child: Row(
-                children: [
-                  Icon(Icons.bar_chart, size: 20),
-                  SizedBox(width: 12),
-                  Text('统计'),
-                ],
+              child: SingleChildScrollView(
+                primary: false,
+                physics: const BouncingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '知识库',
+                                style: theme.textTheme.headlineSmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '快速查看、筛选和整理你的片段',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            tooltip: '统计',
+                            icon: const Icon(Icons.bar_chart_rounded),
+                            onPressed: _showStatsDialog,
+                          ),
+                          IconButton(
+                            tooltip: '刷新',
+                            icon: const Icon(Icons.refresh_rounded),
+                            onPressed: () => _loadData(showLoading: false),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          _buildHeroStat(
+                            context,
+                            label: '条目',
+                            value: _items.length,
+                            icon: Icons.auto_awesome_mosaic,
+                          ),
+                          const SizedBox(width: 10),
+                          _buildHeroStat(
+                            context,
+                            label: '标签',
+                            value: _allTags.length,
+                            icon: Icons.tag,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      _buildSearchField(context),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          if (_items.isNotEmpty)
+                            FilledButton.icon(
+                              onPressed: _handleDailyReview,
+                              icon: const Icon(Icons.auto_awesome),
+                              label: const Text('每日回顾'),
+                            ),
+                          if (_items.isNotEmpty) const SizedBox(width: 8),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: theme.colorScheme.primary
+                                  .withOpacity(0.9),
+                            ),
+                            onPressed: _handleCreateNote,
+                            icon: const Icon(Icons.add),
+                            label: const Text('新建记录'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ],
-          onSelected: (value) {
-            switch (value) {
-              case 'refresh':
-                _loadData();
-                break;
-              case 'stats':
-                _showStatsDialog();
-                break;
-            }
+            );
           },
         ),
-      ],
+      ),
     );
   }
 
@@ -217,63 +248,135 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
     final theme = Theme.of(context);
 
     return SizedBox(
-      height: 44,
-      child: ListView.builder(
+      height: 56,
+      child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: _allTags.length,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         itemBuilder: (context, index) {
           final tag = _allTags[index];
           final isSelected = _selectedTag == tag;
 
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilterChip(
-              label: Text('#$tag'),
-              selected: isSelected,
-              onSelected: (_) {
-                setState(() => _selectedTag = isSelected ? null : tag);
-                _loadData();
-              },
-              backgroundColor: theme.colorScheme.surface,
-              selectedColor: theme.colorScheme.secondaryContainer,
-              labelStyle: TextStyle(
-                fontSize: 12,
+          return GestureDetector(
+            onTap: () {
+              setState(() => _selectedTag = isSelected ? null : tag);
+              _loadData(showLoading: false);
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                gradient: isSelected
+                    ? LinearGradient(
+                        colors: [
+                          theme.colorScheme.primaryContainer,
+                          theme.colorScheme.primary.withOpacity(0.85),
+                        ],
+                      )
+                    : null,
                 color: isSelected
-                    ? theme.colorScheme.onSecondaryContainer
-                    : theme.colorScheme.onSurfaceVariant,
+                    ? null
+                    : theme.colorScheme.surfaceVariant.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: isSelected
+                      ? Colors.transparent
+                      : theme.colorScheme.outline.withOpacity(0.25),
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: theme.colorScheme.primary.withOpacity(0.25),
+                          blurRadius: 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ]
+                    : [],
               ),
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              visualDensity: VisualDensity.compact,
-              side: BorderSide(
-                color: isSelected
-                    ? Colors.transparent
-                    : theme.colorScheme.outline.withOpacity(0.3),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.tag,
+                    size: 14,
+                    color: isSelected
+                        ? theme.colorScheme.onPrimary
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '#$tag',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: isSelected
+                          ? theme.colorScheme.onPrimary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
           );
         },
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemCount: _allTags.length,
       ),
     );
   }
 
-  /// 知识项列表
-  Widget _buildItemList(BuildContext context) {
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      child: ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.only(top: 8, bottom: 100),
-        itemCount: _items.length,
-        itemBuilder: (context, index) {
-          final item = _items[index];
+  /// 内容区域（加载态、错误态、列表）
+  Widget _buildContentArea(BuildContext context) {
+    if (_isLoading) {
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 12),
+              Text(
+                '正在整理你的知识...',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_error != null) {
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: _buildErrorState(context),
+      );
+    }
+
+    if (_items.isEmpty) {
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: KnowledgeEmptyState(onCreateNote: _handleCreateNote),
+      );
+    }
+
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 120),
+      sliver: SliverList(
+        delegate: SliverChildBuilderDelegate((context, index) {
+          if (index.isOdd) {
+            return const SizedBox(height: 6);
+          }
+          final itemIndex = index ~/ 2;
+          final item = _items[itemIndex];
           return KnowledgeCard(
             item: item,
             onTap: () => _handleItemTap(item),
             onSourceTap: item.hasSource ? () => _handleSourceTap(item) : null,
             onDelete: () => _handleDelete(item),
           );
-        },
+        }, childCount: _items.length * 2 - 1),
       ),
     );
   }
@@ -286,18 +389,11 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.error_outline,
-            size: 48,
-            color: theme.colorScheme.error,
-          ),
+          Icon(Icons.error_outline, size: 48, color: theme.colorScheme.error),
           const SizedBox(height: 16),
           Text(
             '加载失败',
-            style: TextStyle(
-              fontSize: 16,
-              color: theme.colorScheme.error,
-            ),
+            style: TextStyle(fontSize: 16, color: theme.colorScheme.error),
           ),
           const SizedBox(height: 8),
           Text(
@@ -319,28 +415,7 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
     );
   }
 
-  /// FAB
-  Widget _buildFAB(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // 每日回顾按钮
-        if (_items.isNotEmpty)
-          FloatingActionButton.small(
-            heroTag: 'daily_review',
-            onPressed: _handleDailyReview,
-            child: const Icon(Icons.auto_awesome),
-          ),
-        const SizedBox(height: 12),
-        // 新建笔记按钮
-        FloatingActionButton(
-          heroTag: 'create_note',
-          onPressed: _handleCreateNote,
-          child: const Icon(Icons.add),
-        ),
-      ],
-    );
-  }
+
 
   // ==================== 事件处理 ====================
 
@@ -360,7 +435,7 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
       MaterialPageRoute(
         builder: (context) => KnowledgeEditorScreen(item: item),
       ),
-    ).then((_) => _loadData());
+    ).then((_) => _loadData(showLoading: false));
   }
 
   void _handleSourceTap(KnowledgeItem item) {
@@ -376,7 +451,7 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
   Future<void> _handleDelete(KnowledgeItem item) async {
     try {
       await _knowledgeService.deleteItem(item);
-      _loadData();
+      _loadData(showLoading: false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -401,16 +476,14 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
     QuickCaptureSheet.show(
       context: context,
       initialType: KnowledgeType.note,
-      onCreated: _loadData,
+      onCreated: () => _loadData(showLoading: false),
     );
   }
 
   void _handleDailyReview() {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => const DailyReviewScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const DailyReviewScreen()),
     );
   }
 
@@ -458,12 +531,132 @@ class _KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
         Expanded(child: Text(label)),
         Text(
           '$count',
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            color: color,
-          ),
+          style: TextStyle(fontWeight: FontWeight.w600, color: color),
         ),
       ],
+    );
+  }
+
+  Widget _buildHeroStat(
+    BuildContext context, {
+    required String label,
+    required int value,
+    required IconData icon,
+  }) {
+    final theme = Theme.of(context);
+
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface.withOpacity(0.7),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: theme.colorScheme.outline.withOpacity(0.1)),
+          boxShadow: [
+            BoxShadow(
+              color: theme.shadowColor.withOpacity(0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              height: 32,
+              width: 32,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: theme.colorScheme.primaryContainer,
+              ),
+              child: Icon(
+                icon,
+                size: 18,
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$value',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchField(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface.withOpacity(0.75),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: theme.colorScheme.outline.withOpacity(0.15),
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(
+            children: [
+              Icon(
+                Icons.search,
+                color: theme.colorScheme.onSurfaceVariant,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: '搜索知识库、标签或来源...',
+                    border: InputBorder.none,
+                    hintStyle: TextStyle(
+                      color: theme.colorScheme.onSurfaceVariant.withOpacity(
+                        0.6,
+                      ),
+                    ),
+                  ),
+                  onChanged: (value) {
+                    setState(() => _searchQuery = value);
+                    _loadData(showLoading: false);
+                  },
+                ),
+              ),
+              if (_searchQuery.isNotEmpty)
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _searchQuery = '');
+                    _loadData(showLoading: false);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

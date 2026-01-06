@@ -34,8 +34,8 @@ class QueryItem {
 class TopicGroup {
   final String topicId;
   final String topicName;
-  final String assistantId;
-  final String assistantName;
+  final List<String> assistantIds;
+  final List<String> assistantNames;
   final List<QueryItem> queries;
   final int totalCharCount;
   final int roundCount;
@@ -44,8 +44,8 @@ class TopicGroup {
   TopicGroup({
     required this.topicId,
     required this.topicName,
-    required this.assistantId,
-    required this.assistantName,
+    required this.assistantIds,
+    required this.assistantNames,
     required this.queries,
     required this.totalCharCount,
     required this.roundCount,
@@ -303,19 +303,22 @@ class InsightService {
     // 从缓存中统计
     if (_allTopicGroupsCache != null) {
       for (final tg in _allTopicGroupsCache!) {
-        final current = statsMap[tg.assistantName];
-        if (current != null) {
-          DateTime? newLatest = current.latestTime;
-          if (newLatest == null || tg.latestTime.isAfter(newLatest)) {
-            newLatest = tg.latestTime;
+        for (int i = 0; i < tg.assistantNames.length; i++) {
+          final name = tg.assistantNames[i];
+          final current = statsMap[name];
+          if (current != null) {
+            DateTime? newLatest = current.latestTime;
+            if (newLatest == null || tg.latestTime.isAfter(newLatest)) {
+              newLatest = tg.latestTime;
+            }
+            statsMap[name] = AssistantStats(
+              id: current.id,
+              name: current.name,
+              topicCount: current.topicCount + 1,
+              messageCount: current.messageCount + tg.roundCount,
+              latestTime: newLatest,
+            );
           }
-          statsMap[tg.assistantName] = AssistantStats(
-            id: current.id,
-            name: current.name,
-            topicCount: current.topicCount + 1,
-            messageCount: current.messageCount + tg.roundCount,
-            latestTime: newLatest,
-          );
         }
       }
     }
@@ -408,12 +411,15 @@ class InsightService {
         }
 
         if (queries.isNotEmpty) {
-          final assistantName = _assistantIdToNameCache?[topic.assistantId] ?? '未知助手';
+          final assistantNames = topic.assistantIds
+              .map((id) => _assistantIdToNameCache?[id] ?? '未知助手')
+              .toList();
+          
           topicGroups.add(TopicGroup(
             topicId: topic.topicId,
             topicName: topic.name,
-            assistantId: topic.assistantId,
-            assistantName: assistantName,
+            assistantIds: topic.assistantIds,
+            assistantNames: assistantNames,
             queries: queries,
             totalCharCount: totalChars,
             roundCount: queries.length,
@@ -448,7 +454,7 @@ class InsightService {
     List<TopicGroup> filteredGroups;
     if (assistantFilters != null && assistantFilters.isNotEmpty) {
       filteredGroups = _allTopicGroupsCache!
-          .where((tg) => assistantFilters.contains(tg.assistantName))
+          .where((tg) => tg.assistantNames.any((n) => assistantFilters.contains(n)))
           .toList();
     } else {
       filteredGroups = _allTopicGroupsCache!;

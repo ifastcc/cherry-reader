@@ -556,7 +556,8 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
         topicGroup.queries.isNotEmpty ? topicGroup.queries.first : null;
 
     // 为不同助手生成不同的颜色
-    final assistantColor = _getAssistantColor(topicGroup.assistantName, colorScheme);
+    final assistantName = topicGroup.assistantNames.join(', ');
+    final assistantColor = _getAssistantColor(assistantName, colorScheme);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
@@ -683,7 +684,7 @@ class _QuerySelectorCompactStyleState extends State<QuerySelectorCompactStyle> {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        topicGroup.assistantName,
+                        topicGroup.assistantNames.join(', '),
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: assistantColor.withValues(alpha: 0.9),
                           fontSize: 11,

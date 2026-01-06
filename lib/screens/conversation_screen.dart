@@ -16,6 +16,7 @@ import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
 import '../widgets/tts_mini_player.dart';
 import '../widgets/dual_fab.dart';
+import '../widgets/keep_alive_wrapper.dart';
 
 /// 页内搜索匹配结果
 class InPageSearchMatch {
@@ -1270,8 +1271,10 @@ $modelResponses''';
             key: ValueKey(index),
             controller: _scrollController,
             index: index,
-            child: RepaintBoundary(
-              child: _buildConversationGroup(groups[index], index),
+            child: KeepAliveWrapper(
+              child: RepaintBoundary(
+                child: _buildConversationGroup(groups[index], index),
+              ),
             ),
           );
         },
@@ -2199,15 +2202,13 @@ $modelResponses''';
     final modelColor = _getModelColor(modelName);
 
     // 提取内容（包含多种可显示的块类型）
-    // 优先顺序：main_text > thinking > translation > code > error
+    // 按照 block 在列表中的顺序拼接
     final blocks = reply['blocks'] as List<dynamic>? ?? [];
     String content = '';
-    final contentTypes = ['main_text', 'thinking', 'translation', 'code', 'error'];
-    for (final type in contentTypes) {
-      for (final block in blocks) {
-        if (block is Map<String, dynamic> && block['type'] == type) {
-          content += block['content'] as String? ?? '';
-        }
+    final contentTypes = ['main_text', 'thinking', 'translation', 'code', 'error', 'text'];
+    for (final block in blocks) {
+      if (block is Map<String, dynamic> && contentTypes.contains(block['type'])) {
+        content += block['content'] as String? ?? '';
       }
     }
 

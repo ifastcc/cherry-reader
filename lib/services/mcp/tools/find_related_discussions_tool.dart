@@ -174,8 +174,10 @@ class FindRelatedDiscussionsTool extends MCPTool {
 
       // 1. 先找完全匹配的（名称等于关键词）
       final exactMatches = allTopics.where((t) {
-        final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-        return keywords.any((k) => name == k);
+        return t.assistantIds.any((id) {
+          final name = (assistantNames[id] ?? '').toLowerCase();
+          return keywords.any((k) => name == k);
+        });
       }).toList();
 
       // 2. 如果有完全匹配，只返回完全匹配的
@@ -184,8 +186,10 @@ class FindRelatedDiscussionsTool extends MCPTool {
       } else {
         // 3. 否则返回模糊匹配的
         allTopics = allTopics.where((t) {
-          final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-          return keywords.any((k) => name.contains(k));
+          return t.assistantIds.any((id) {
+            final name = (assistantNames[id] ?? '').toLowerCase();
+            return keywords.any((k) => name.contains(k));
+          });
         }).toList();
       }
     }
@@ -278,8 +282,10 @@ class FindRelatedDiscussionsTool extends MCPTool {
 
       // 1. 先找完全匹配的（名称等于关键词）
       final exactMatches = allTopics.where((t) {
-        final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-        return filterKeywords.any((k) => name == k);
+        return t.assistantIds.any((id) {
+          final name = (assistantNames[id] ?? '').toLowerCase();
+          return filterKeywords.any((k) => name == k);
+        });
       }).toList();
 
       // 2. 如果有完全匹配，只返回完全匹配的
@@ -288,8 +294,10 @@ class FindRelatedDiscussionsTool extends MCPTool {
       } else {
         // 3. 否则返回模糊匹配的
         allTopics = allTopics.where((t) {
-          final name = (assistantNames[t.assistantId] ?? '').toLowerCase();
-          return filterKeywords.any((k) => name.contains(k));
+          return t.assistantIds.any((id) {
+            final name = (assistantNames[id] ?? '').toLowerCase();
+            return filterKeywords.any((k) => name.contains(k));
+          });
         }).toList();
       }
     }

@@ -43,7 +43,7 @@ class TopicService {
       result[assistant.assistantId] = topics.map((topic) => {
         'id': topic.topicId,
         'name': topic.name,
-        'assistantId': topic.assistantId,
+        'assistantId': assistant.assistantId, // Use the key we are grouping by
         'messageCount': topic.messageCount,
         'roundCount': topic.roundCount,
         'createdAt': topic.createdAt,
@@ -120,7 +120,7 @@ class TopicService {
         'id': msg.messageId,
         'role': msg.role,
         'topicId': msg.topicId,
-        'assistantId': topic.assistantId,
+        // 'assistantId': topic.assistantId, // Removed as it's M:N now
         'createdAt': DateTime.fromMillisecondsSinceEpoch(msg.createdAt).toIso8601String(),
         'status': msg.status,
         'askId': msg.askId,
@@ -137,7 +137,7 @@ class TopicService {
     return {
       'id': topic.topicId,
       'name': topic.name,
-      'assistantId': topic.assistantId,
+      'assistantIds': topic.assistantIds,
       'messages': messagesData,
       'createdAt': DateTime.fromMillisecondsSinceEpoch(topic.createdAt).toIso8601String(),
       'updatedAt': DateTime.fromMillisecondsSinceEpoch(topic.updatedAt).toIso8601String(),

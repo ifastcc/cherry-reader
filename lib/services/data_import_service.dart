@@ -55,28 +55,33 @@ class DataImportService {
       await prefs.setBool(_importingFlagKey, true);
 
       // 1. 获取所有话题（先统计，用于去重）
+      // 1. 获取所有话题（聚合 assistantIds）
       final groupedTopics = _extractor.getTopicsByAssistant();
-      final allTopics = <Map<String, dynamic>>[];
-      final seenTopicIds = <String>{}; // 防止同一 topic 被多个 assistant 引用导致重复
+      final topicIdToData = <String, Map<String, dynamic>>{};
+      final topicIdToAssistantIds = <String, Set<String>>{};
 
       for (final entry in groupedTopics.entries) {
+        final assistantId = entry.key;
         final topics = entry.value['topics'] as List<dynamic>? ?? [];
+
         for (final topic in topics) {
           if (topic is! Map<String, dynamic>) continue;
           final topicId = topic['id'] as String?;
           if (topicId == null) continue;
 
-          // 去重：同一个 topic 只导入一次
-          if (seenTopicIds.contains(topicId)) {
-            continue;
-          }
-          seenTopicIds.add(topicId);
-
-          allTopics.add({
-            'assistantId': entry.key,
-            'topic': topic,
-          });
+          // 保存话题数据（假设同一ID的话题数据是一致的）
+          topicIdToData[topicId] = topic;
+          // 聚合 assistantId
+          topicIdToAssistantIds.putIfAbsent(topicId, () => {}).add(assistantId);
         }
+      }
+
+      final allTopics = <Map<String, dynamic>>[];
+      for (final topicId in topicIdToData.keys) {
+        allTopics.add({
+          'assistantIds': topicIdToAssistantIds[topicId]!.toList(),
+          'topic': topicIdToData[topicId],
+        });
       }
 
       result.totalTopics = allTopics.length;
@@ -121,7 +126,7 @@ class DataImportService {
           for (final item in batch) {
             final importedMessages = await _importTopic(
               isar,
-              item['assistantId'] as String,
+              item['assistantIds'] as List<String>,
               item['topic'] as Map<String, dynamic>,
             );
             result.importedMessages += importedMessages;
@@ -324,7 +329,7 @@ class DataImportService {
       for (final asst in assistants) {
         final count = await isar.topicEntitys
             .filter()
-            .assistantIdEqualTo(asst.assistantId)
+            .assistantIdsElementEqualTo(asst.assistantId)
             .count();
         asst.topicCount = count;
         await isar.assistantEntitys.putByIndex('assistantId', asst);
@@ -337,7 +342,7 @@ class DataImportService {
   /// 返回导入的消息数量
   Future<int> _importTopic(
     Isar isar,
-    String assistantId,
+    List<String> assistantIds,
     Map<String, dynamic> topicData,
   ) async {
     final topicId = topicData['id'] as String;
@@ -371,7 +376,7 @@ class DataImportService {
     final topicEntity = TopicEntity.fromData(
       topicId: topicId,
       name: topicData['name'] as String? ?? '未命名话题',
-      assistantId: assistantId,
+      assistantIds: assistantIds,
       messageCount: messages.length,
       roundCount: roundCount,
       createdAt: _parseTimestamp(topicData['createdAt']),

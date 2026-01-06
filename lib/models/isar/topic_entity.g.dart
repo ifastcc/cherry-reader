@@ -17,10 +17,10 @@ const TopicEntitySchema = CollectionSchema(
   name: r'TopicEntity',
   id: 6128556367133761634,
   properties: {
-    r'assistantId': PropertySchema(
+    r'assistantIds': PropertySchema(
       id: 0,
-      name: r'assistantId',
-      type: IsarType.string,
+      name: r'assistantIds',
+      type: IsarType.stringList,
     ),
     r'createdAt': PropertySchema(
       id: 1,
@@ -65,21 +65,16 @@ const TopicEntitySchema = CollectionSchema(
         ),
       ],
     ),
-    r'assistantId_createdAt': IndexSchema(
-      id: -7665333822463674199,
-      name: r'assistantId_createdAt',
+    r'assistantIds': IndexSchema(
+      id: -9038255351375666135,
+      name: r'assistantIds',
       unique: false,
       replace: false,
       properties: [
         IndexPropertySchema(
-          name: r'assistantId',
+          name: r'assistantIds',
           type: IndexType.hash,
           caseSensitive: true,
-        ),
-        IndexPropertySchema(
-          name: r'createdAt',
-          type: IndexType.value,
-          caseSensitive: false,
         ),
       ],
     ),
@@ -112,7 +107,13 @@ int _topicEntityEstimateSize(
   Map<Type, List<int>> allOffsets,
 ) {
   var bytesCount = offsets.last;
-  bytesCount += 3 + object.assistantId.length * 3;
+  bytesCount += 3 + object.assistantIds.length * 3;
+  {
+    for (var i = 0; i < object.assistantIds.length; i++) {
+      final value = object.assistantIds[i];
+      bytesCount += value.length * 3;
+    }
+  }
   bytesCount += 3 + object.name.length * 3;
   bytesCount += 3 + object.topicId.length * 3;
   return bytesCount;
@@ -124,7 +125,7 @@ void _topicEntitySerialize(
   List<int> offsets,
   Map<Type, List<int>> allOffsets,
 ) {
-  writer.writeString(offsets[0], object.assistantId);
+  writer.writeStringList(offsets[0], object.assistantIds);
   writer.writeLong(offsets[1], object.createdAt);
   writer.writeLong(offsets[2], object.messageCount);
   writer.writeString(offsets[3], object.name);
@@ -140,7 +141,7 @@ TopicEntity _topicEntityDeserialize(
   Map<Type, List<int>> allOffsets,
 ) {
   final object = TopicEntity();
-  object.assistantId = reader.readString(offsets[0]);
+  object.assistantIds = reader.readStringList(offsets[0]) ?? [];
   object.createdAt = reader.readLong(offsets[1]);
   object.id = id;
   object.messageCount = reader.readLong(offsets[2]);
@@ -159,7 +160,7 @@ P _topicEntityDeserializeProp<P>(
 ) {
   switch (propertyId) {
     case 0:
-      return (reader.readString(offset)) as P;
+      return (reader.readStringList(offset) ?? []) as P;
     case 1:
       return (reader.readLong(offset)) as P;
     case 2:
@@ -393,35 +394,36 @@ extension TopicEntityQueryWhere
     });
   }
 
-  QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause>
-  assistantIdEqualToAnyCreatedAt(String assistantId) {
+  QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause> assistantIdsEqualTo(
+    List<String> assistantIds,
+  ) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(
         IndexWhereClause.equalTo(
-          indexName: r'assistantId_createdAt',
-          value: [assistantId],
+          indexName: r'assistantIds',
+          value: [assistantIds],
         ),
       );
     });
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause>
-  assistantIdNotEqualToAnyCreatedAt(String assistantId) {
+  assistantIdsNotEqualTo(List<String> assistantIds) {
     return QueryBuilder.apply(this, (query) {
       if (query.whereSort == Sort.asc) {
         return query
             .addWhereClause(
               IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
+                indexName: r'assistantIds',
                 lower: [],
-                upper: [assistantId],
+                upper: [assistantIds],
                 includeUpper: false,
               ),
             )
             .addWhereClause(
               IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
-                lower: [assistantId],
+                indexName: r'assistantIds',
+                lower: [assistantIds],
                 includeLower: false,
                 upper: [],
               ),
@@ -430,133 +432,21 @@ extension TopicEntityQueryWhere
         return query
             .addWhereClause(
               IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
-                lower: [assistantId],
+                indexName: r'assistantIds',
+                lower: [assistantIds],
                 includeLower: false,
                 upper: [],
               ),
             )
             .addWhereClause(
               IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
+                indexName: r'assistantIds',
                 lower: [],
-                upper: [assistantId],
+                upper: [assistantIds],
                 includeUpper: false,
               ),
             );
       }
-    });
-  }
-
-  QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause>
-  assistantIdCreatedAtEqualTo(String assistantId, int createdAt) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addWhereClause(
-        IndexWhereClause.equalTo(
-          indexName: r'assistantId_createdAt',
-          value: [assistantId, createdAt],
-        ),
-      );
-    });
-  }
-
-  QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause>
-  assistantIdEqualToCreatedAtNotEqualTo(String assistantId, int createdAt) {
-    return QueryBuilder.apply(this, (query) {
-      if (query.whereSort == Sort.asc) {
-        return query
-            .addWhereClause(
-              IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
-                lower: [assistantId],
-                upper: [assistantId, createdAt],
-                includeUpper: false,
-              ),
-            )
-            .addWhereClause(
-              IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
-                lower: [assistantId, createdAt],
-                includeLower: false,
-                upper: [assistantId],
-              ),
-            );
-      } else {
-        return query
-            .addWhereClause(
-              IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
-                lower: [assistantId, createdAt],
-                includeLower: false,
-                upper: [assistantId],
-              ),
-            )
-            .addWhereClause(
-              IndexWhereClause.between(
-                indexName: r'assistantId_createdAt',
-                lower: [assistantId],
-                upper: [assistantId, createdAt],
-                includeUpper: false,
-              ),
-            );
-      }
-    });
-  }
-
-  QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause>
-  assistantIdEqualToCreatedAtGreaterThan(
-    String assistantId,
-    int createdAt, {
-    bool include = false,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addWhereClause(
-        IndexWhereClause.between(
-          indexName: r'assistantId_createdAt',
-          lower: [assistantId, createdAt],
-          includeLower: include,
-          upper: [assistantId],
-        ),
-      );
-    });
-  }
-
-  QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause>
-  assistantIdEqualToCreatedAtLessThan(
-    String assistantId,
-    int createdAt, {
-    bool include = false,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addWhereClause(
-        IndexWhereClause.between(
-          indexName: r'assistantId_createdAt',
-          lower: [assistantId],
-          upper: [assistantId, createdAt],
-          includeUpper: include,
-        ),
-      );
-    });
-  }
-
-  QueryBuilder<TopicEntity, TopicEntity, QAfterWhereClause>
-  assistantIdEqualToCreatedAtBetween(
-    String assistantId,
-    int lowerCreatedAt,
-    int upperCreatedAt, {
-    bool includeLower = true,
-    bool includeUpper = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addWhereClause(
-        IndexWhereClause.between(
-          indexName: r'assistantId_createdAt',
-          lower: [assistantId, lowerCreatedAt],
-          includeLower: includeLower,
-          upper: [assistantId, upperCreatedAt],
-          includeUpper: includeUpper,
-        ),
-      );
     });
   }
 
@@ -667,11 +557,11 @@ extension TopicEntityQueryWhere
 extension TopicEntityQueryFilter
     on QueryBuilder<TopicEntity, TopicEntity, QFilterCondition> {
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdEqualTo(String value, {bool caseSensitive = true}) {
+  assistantIdsElementEqualTo(String value, {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
         FilterCondition.equalTo(
-          property: r'assistantId',
+          property: r'assistantIds',
           value: value,
           caseSensitive: caseSensitive,
         ),
@@ -680,7 +570,7 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdGreaterThan(
+  assistantIdsElementGreaterThan(
     String value, {
     bool include = false,
     bool caseSensitive = true,
@@ -689,7 +579,7 @@ extension TopicEntityQueryFilter
       return query.addFilterCondition(
         FilterCondition.greaterThan(
           include: include,
-          property: r'assistantId',
+          property: r'assistantIds',
           value: value,
           caseSensitive: caseSensitive,
         ),
@@ -698,7 +588,7 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdLessThan(
+  assistantIdsElementLessThan(
     String value, {
     bool include = false,
     bool caseSensitive = true,
@@ -707,7 +597,7 @@ extension TopicEntityQueryFilter
       return query.addFilterCondition(
         FilterCondition.lessThan(
           include: include,
-          property: r'assistantId',
+          property: r'assistantIds',
           value: value,
           caseSensitive: caseSensitive,
         ),
@@ -716,7 +606,7 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdBetween(
+  assistantIdsElementBetween(
     String lower,
     String upper, {
     bool includeLower = true,
@@ -726,7 +616,7 @@ extension TopicEntityQueryFilter
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
         FilterCondition.between(
-          property: r'assistantId',
+          property: r'assistantIds',
           lower: lower,
           includeLower: includeLower,
           upper: upper,
@@ -738,11 +628,11 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdStartsWith(String value, {bool caseSensitive = true}) {
+  assistantIdsElementStartsWith(String value, {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
         FilterCondition.startsWith(
-          property: r'assistantId',
+          property: r'assistantIds',
           value: value,
           caseSensitive: caseSensitive,
         ),
@@ -751,11 +641,11 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdEndsWith(String value, {bool caseSensitive = true}) {
+  assistantIdsElementEndsWith(String value, {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
         FilterCondition.endsWith(
-          property: r'assistantId',
+          property: r'assistantIds',
           value: value,
           caseSensitive: caseSensitive,
         ),
@@ -764,11 +654,11 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdContains(String value, {bool caseSensitive = true}) {
+  assistantIdsElementContains(String value, {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
         FilterCondition.contains(
-          property: r'assistantId',
+          property: r'assistantIds',
           value: value,
           caseSensitive: caseSensitive,
         ),
@@ -777,11 +667,11 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdMatches(String pattern, {bool caseSensitive = true}) {
+  assistantIdsElementMatches(String pattern, {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
         FilterCondition.matches(
-          property: r'assistantId',
+          property: r'assistantIds',
           wildcard: pattern,
           caseSensitive: caseSensitive,
         ),
@@ -790,19 +680,72 @@ extension TopicEntityQueryFilter
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdIsEmpty() {
+  assistantIdsElementIsEmpty() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
-        FilterCondition.equalTo(property: r'assistantId', value: ''),
+        FilterCondition.equalTo(property: r'assistantIds', value: ''),
       );
     });
   }
 
   QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
-  assistantIdIsNotEmpty() {
+  assistantIdsElementIsNotEmpty() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
-        FilterCondition.greaterThan(property: r'assistantId', value: ''),
+        FilterCondition.greaterThan(property: r'assistantIds', value: ''),
+      );
+    });
+  }
+
+  QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
+  assistantIdsLengthEqualTo(int length) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(r'assistantIds', length, true, length, true);
+    });
+  }
+
+  QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
+  assistantIdsIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(r'assistantIds', 0, true, 0, true);
+    });
+  }
+
+  QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
+  assistantIdsIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(r'assistantIds', 0, false, 999999, true);
+    });
+  }
+
+  QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
+  assistantIdsLengthLessThan(int length, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(r'assistantIds', 0, true, length, include);
+    });
+  }
+
+  QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
+  assistantIdsLengthGreaterThan(int length, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(r'assistantIds', length, include, 999999, true);
+    });
+  }
+
+  QueryBuilder<TopicEntity, TopicEntity, QAfterFilterCondition>
+  assistantIdsLengthBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'assistantIds',
+        lower,
+        includeLower,
+        upper,
+        includeUpper,
       );
     });
   }
@@ -1389,18 +1332,6 @@ extension TopicEntityQueryLinks
 
 extension TopicEntityQuerySortBy
     on QueryBuilder<TopicEntity, TopicEntity, QSortBy> {
-  QueryBuilder<TopicEntity, TopicEntity, QAfterSortBy> sortByAssistantId() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'assistantId', Sort.asc);
-    });
-  }
-
-  QueryBuilder<TopicEntity, TopicEntity, QAfterSortBy> sortByAssistantIdDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'assistantId', Sort.desc);
-    });
-  }
-
   QueryBuilder<TopicEntity, TopicEntity, QAfterSortBy> sortByCreatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'createdAt', Sort.asc);
@@ -1477,18 +1408,6 @@ extension TopicEntityQuerySortBy
 
 extension TopicEntityQuerySortThenBy
     on QueryBuilder<TopicEntity, TopicEntity, QSortThenBy> {
-  QueryBuilder<TopicEntity, TopicEntity, QAfterSortBy> thenByAssistantId() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'assistantId', Sort.asc);
-    });
-  }
-
-  QueryBuilder<TopicEntity, TopicEntity, QAfterSortBy> thenByAssistantIdDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'assistantId', Sort.desc);
-    });
-  }
-
   QueryBuilder<TopicEntity, TopicEntity, QAfterSortBy> thenByCreatedAt() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'createdAt', Sort.asc);
@@ -1577,11 +1496,9 @@ extension TopicEntityQuerySortThenBy
 
 extension TopicEntityQueryWhereDistinct
     on QueryBuilder<TopicEntity, TopicEntity, QDistinct> {
-  QueryBuilder<TopicEntity, TopicEntity, QDistinct> distinctByAssistantId({
-    bool caseSensitive = true,
-  }) {
+  QueryBuilder<TopicEntity, TopicEntity, QDistinct> distinctByAssistantIds() {
     return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'assistantId', caseSensitive: caseSensitive);
+      return query.addDistinctBy(r'assistantIds');
     });
   }
 
@@ -1634,9 +1551,10 @@ extension TopicEntityQueryProperty
     });
   }
 
-  QueryBuilder<TopicEntity, String, QQueryOperations> assistantIdProperty() {
+  QueryBuilder<TopicEntity, List<String>, QQueryOperations>
+  assistantIdsProperty() {
     return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'assistantId');
+      return query.addPropertyName(r'assistantIds');
     });
   }
 

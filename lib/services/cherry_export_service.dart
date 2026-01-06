@@ -38,7 +38,7 @@ class CherryExportService {
       // 获取该 assistant 的所有 topics
       final topicEntities = await isar.topicEntitys
           .filter()
-          .assistantIdEqualTo(asst.assistantId)
+          .assistantIdsElementEqualTo(asst.assistantId)
           .sortByCreatedAt()
           .findAll();
 

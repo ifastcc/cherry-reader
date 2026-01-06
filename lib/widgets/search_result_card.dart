@@ -218,7 +218,7 @@ class SearchResultCard extends StatelessWidget {
         const SizedBox(width: 4),
         Flexible(
           child: Text(
-            result.assistantName,
+            result.assistantNames.join(', '),
             style: TextStyle(fontSize: 11, color: Colors.grey[500]),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,

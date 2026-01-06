@@ -120,7 +120,7 @@ class TopicIndexService {
         _topics[t.topicId] = TopicInfo(
           id: t.topicId,
           name: t.name,
-          assistantId: t.assistantId,
+          assistantId: t.assistantIds.isNotEmpty ? t.assistantIds.first : '',
           roundCount: t.roundCount,
           messageCount: t.messageCount,
           createdAt: DateTime.fromMillisecondsSinceEpoch(t.createdAt),

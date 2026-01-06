@@ -23,6 +23,7 @@ import 'settings_screen.dart';
 import 'search_screen.dart';
 import 'insight_screen.dart';
 import 'package:intl/intl.dart';
+import '../widgets/status_badge.dart';
 
 /// 同步阶段
 enum SyncStage {
@@ -45,10 +46,10 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   CherryExtractor? _extractor;
   bool _isLoading = false;  // 仅用于首次加载无缓存时
   DataLoadMode _loadMode = DataLoadMode.manual;
@@ -1349,12 +1350,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// 处理主按钮点击 (Floating Dock Center Action)
+  void handleMainAction() {
+    if (_loadMode == DataLoadMode.manual && _topicIndex == null) {
+      _pickAndLoadFile();
+    } else if (_topicIndex != null) {
+       Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const InsightScreen(),
+          ),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Cherry Reader'),
         actions: [
+          // 状态徽章
+          _buildStatusBadge(),
+          
           // 视图模式切换按钮
           IconButton(
             icon: Icon(
@@ -1376,20 +1394,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             tooltip: '搜索',
           ),
-          // 同步中显示取消按钮
-          if (_isSyncing)
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: _cancelDownload,
-              tooltip: '取消同步',
-            ),
-          // 刷新按钮
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: (_isLoading || _isSyncing) ? null : _refreshData,
-            tooltip: _loadMode == DataLoadMode.webdav ? '从 WebDAV 刷新' : '重新加载',
-          ),
-          IconButton(
+          // 设置按钮
+           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _isLoading ? null : () async {
               await Navigator.push(
@@ -1402,17 +1408,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             tooltip: '设置',
           ),
-        ],
-        // 进度显示已移至底部状态栏
-      ),
-      body: Column(
-        children: [
-          Expanded(child: _buildBody()),
-          // 状态栏始终显示
-          _buildStatusBar(),
+          const SizedBox(width: 8),
         ],
       ),
-      floatingActionButton: _buildFloatingActionButton(),
+      body: _buildBody(),
+    );
+  }
+
+  /// 构建状态徽章
+  Widget _buildStatusBadge() {
+    final state = _computeStatusBarState();
+    
+    // Map StatusBarState to StatusBadgeState
+    final badgeState = switch (state.phase) {
+      StatusBarPhase.idle => StatusBadgeState.idle,
+      StatusBarPhase.syncing => StatusBadgeState.syncing,
+      StatusBarPhase.hasUpdate => StatusBadgeState.hasUpdate,
+      StatusBarPhase.error => StatusBadgeState.error,
+    };
+
+    String? message;
+    if (badgeState == StatusBadgeState.syncing) {
+      message = state.syncMessage ?? '同步中...';
+    } else if (badgeState == StatusBadgeState.hasUpdate) {
+      message = '新版本';
+    } else if (badgeState == StatusBadgeState.error) {
+      message = '错误';
+    }
+
+    return StatusBadge(
+      state: badgeState,
+      message: message,
+      onTap: () => _onStatusBarTap(state),
     );
   }
 
@@ -1420,10 +1447,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget? _buildFloatingActionButton() {
     // 手动模式且无数据时，显示"加载数据"按钮
     if (_loadMode == DataLoadMode.manual && _topicIndex == null) {
-      return FloatingActionButton.extended(
-        onPressed: _isLoading ? null : _pickAndLoadFile,
-        icon: const Icon(Icons.folder_open),
-        label: const Text('加载数据'),
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 80),
+        child: FloatingActionButton.extended(
+          onPressed: _isLoading ? null : _pickAndLoadFile,
+          icon: const Icon(Icons.folder_open),
+          label: const Text('加载数据'),
+        ),
       );
     }
 
@@ -1433,17 +1463,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     // 有数据时显示"洞察"悬浮按钮
-    return FloatingActionButton(
-      onPressed: _isLoading ? null : () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const InsightScreen(),
-          ),
-        );
-      },
-      tooltip: '洞察',
-      child: const Icon(Icons.insights),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 80),
+      child: FloatingActionButton(
+        onPressed: _isLoading ? null : () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const InsightScreen(),
+            ),
+          );
+        },
+        tooltip: '洞察',
+        child: const Icon(Icons.insights),
+      ),
     );
   }
 
@@ -1510,79 +1543,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// 底部状态栏
-  Widget _buildStatusBar() {
-    final state = _computeStatusBarState();
 
-    return GestureDetector(
-      onTap: () => _onStatusBarTap(state),
-      child: SafeArea(
-        top: false,
-        child: Container(
-          height: state.showProgress ? 39 : 32,
-          decoration: BoxDecoration(
-            color: Colors.grey[50],
-            border: Border(top: BorderSide(color: Colors.grey[200]!)),
-          ),
-          child: Column(
-            children: [
-              // 进度条
-              if (state.showProgress)
-                LinearProgressIndicator(
-                  value: state.progress,
-                  backgroundColor: Colors.grey[200],
-                  minHeight: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[400]!),
-                ),
-              // 主内容
-              Expanded(
-                child: Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildStatusIcon(state),
-                      const SizedBox(width: 6),
-                      Text(
-                        _getStatusText(state),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _getStatusColor(state),
-                        ),
-                      ),
-                      // 进度百分比
-                      if (state.isSyncing && state.progress != null) ...[
-                        const SizedBox(width: 6),
-                        Text(
-                          '${(state.progress! * 100).toStringAsFixed(0)}%',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.blue[600],
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                      // 新版本小蓝点
-                      if (_hasNewVersion) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: const BoxDecoration(
-                            color: Colors.blue,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 
   /// 状态图标
   Widget _buildStatusIcon(StatusBarState state) {
