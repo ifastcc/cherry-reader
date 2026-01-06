@@ -571,7 +571,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
   Widget _buildStreamLayout() {
     return GestureDetector(
       // 双击展开/收缩
-      onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
+      // 双击展开/收缩 - 已移除，移动到 Header 以避免冲突
+      // onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         child: Column(
@@ -579,7 +580,10 @@ class _HighlightableCardState extends State<HighlightableCard> {
           mainAxisSize: MainAxisSize.min,
           children: [
             // 头部
-            _buildStreamHeader(),
+            GestureDetector(
+              onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
+              child: _buildStreamHeader(),
+            ),
             const SizedBox(height: 8),
             // 内容（自然撑开）
             _buildContent(),
@@ -617,7 +621,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
   Widget _buildCardLayout() {
     return GestureDetector(
       // 双击展开/收缩
-      onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
+      // 双击展开/收缩 - 已移除，移动到 Header 以避免冲突
+      // onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
       child: widget.maxHeight != null
           ? ConstrainedBox(
               constraints: BoxConstraints(maxHeight: widget.maxHeight!),
@@ -636,7 +641,11 @@ class _HighlightableCardState extends State<HighlightableCard> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // 头部 (固定)
-          _buildHeader(),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque, // 确保点击整个头部区域都能触发
+            onDoubleTap: widget.enableCollapse ? _toggleExpand : null,
+            child: _buildHeader(),
+          ),
           const SizedBox(height: 6),
           // 内容 (可滚动)
           widget.maxHeight != null

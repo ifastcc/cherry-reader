@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'dart:async';
+import 'dart:ui'; // For ImageFilter
 import '../services/cherry_extractor.dart';
 import '../services/analysis_cache_manager.dart';
 import '../services/highlight_service.dart';
@@ -1000,7 +1001,16 @@ $modelResponses''';
   /// 构建普通 AppBar
   AppBar _buildNormalAppBar() {
     return AppBar(
-      title: Text(widget.topicName),
+      title: GestureDetector(
+        onTap: () {
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeInOutCubic,
+          );
+        },
+        child: Text(widget.topicName),
+      ),
       actions: [
         // 页内搜索按钮
         IconButton(
@@ -1415,6 +1425,31 @@ $modelResponses''';
   }
 
 
+  /// 构建导航箭头按钮
+  Widget _buildNavArrowButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    required bool isDark,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.05),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          icon,
+          size: 28,
+          color: isDark ? Colors.grey[400] : Colors.grey[600],
+        ),
+      ),
+    );
+  }
+
   /// 构建滚动感知的进度导航（紧凑胶囊式）
   /// 【性能优化】使用 ValueListenableBuilder 避免整页重建
   Widget _buildFloatingNavigation() {
@@ -1458,70 +1493,98 @@ $modelResponses''';
                   ? List.generate(totalGroups, (i) => i)
                   : _getKeyIndices(totalGroups, currentVisibleGroup);
 
-              return Container(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-                decoration: BoxDecoration(
-                  color: (isDark ? Colors.grey[900] : Colors.white)?.withValues(alpha: 0.95),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+                    decoration: BoxDecoration(
+                      color: (isDark ? Colors.grey[900] : Colors.white)?.withValues(alpha: 0.75),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.1),
+                        width: 0.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: displayIndices.map((index) {
-                    final isActive = index == currentVisibleGroup;
-                    final isEllipsis = index < 0;
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                    // 上一个按钮
+                    if (currentVisibleGroup > 0)
+                      _buildNavArrowButton(
+                        icon: Icons.keyboard_arrow_up,
+                        onTap: () => _scrollToGroup(currentVisibleGroup - 1),
+                        isDark: isDark,
+                      ),
+                    
+                    ...displayIndices.map((index) {
+                      final isActive = index == currentVisibleGroup;
+                      final isEllipsis = index < 0;
 
-                    if (isEllipsis) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Text(
-                          '⋮',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: isDark ? Colors.grey[600] : Colors.grey[400],
+                      if (isEllipsis) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Text(
+                            '⋮',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: isDark ? Colors.grey[600] : Colors.grey[400],
+                            ),
+                          ),
+                        );
+                      }
+
+                      return GestureDetector(
+                        onTap: () => _scrollToGroup(index),
+                        behavior: HitTestBehavior.opaque,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOutCubic,
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: isActive ? 12 : 10,
+                            vertical: isActive ? 8 : 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? Theme.of(context).primaryColor
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Text(
+                            '${index + 1}',
+                            style: TextStyle(
+                              fontSize: isActive ? 16 : 14,
+                              fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                              color: isActive
+                                  ? Colors.white
+                                  : (isDark ? Colors.grey[500] : Colors.grey[600]),
+                            ),
                           ),
                         ),
                       );
-                    }
+                    }).toList(),
 
-                    return GestureDetector(
-                      onTap: () => _scrollToGroup(index),
-                      behavior: HitTestBehavior.opaque,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOutCubic,
-                        margin: const EdgeInsets.symmetric(vertical: 2),
-                        padding: EdgeInsets.symmetric(
-                          horizontal: isActive ? 8 : 6,
-                          vertical: isActive ? 4 : 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isActive
-                              ? Theme.of(context).primaryColor
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          '${index + 1}',
-                          style: TextStyle(
-                            fontSize: isActive ? 12 : 10,
-                            fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                            color: isActive
-                                ? Colors.white
-                                : (isDark ? Colors.grey[500] : Colors.grey[600]),
-                          ),
-                        ),
+                    // 下一个按钮
+                    if (currentVisibleGroup < totalGroups - 1)
+                      _buildNavArrowButton(
+                        icon: Icons.keyboard_arrow_down,
+                        onTap: () => _scrollToGroup(currentVisibleGroup + 1),
+                        isDark: isDark,
                       ),
-                    );
-                  }).toList(),
+                  ],
                 ),
-              );
+              ),
+            ),
+          );
             },
           ),
         ),
@@ -2091,10 +2154,10 @@ $modelResponses''';
             // 【UX优化】切换模型回复后滚动到 Tab 栏顶部，直接看到回复内容
             _scrollToTabTop(groupIndex);
           },
-          onDoubleTap: () {
-            // 【快速定位】双击内容区域滚动到本轮次顶部
-            _scrollToGroupTop(groupIndex);
-          },
+            // 【快速定位】双击功能已移除，以避免与文本选择冲突
+            // onDoubleTap: () {
+            //   _scrollToGroupTop(groupIndex);
+            // },
           itemBuilder: (index) => _buildExpandedContent(
             key: ValueKey('${groupIndex}_$index'),
             cardInfoList: cardInfoList,
@@ -3107,7 +3170,7 @@ class _SwipeableSwitcherState extends State<_SwipeableSwitcher> {
       onHorizontalDragStart: _onDragStart,
       onHorizontalDragUpdate: _onDragUpdate,
       onHorizontalDragEnd: _onDragEnd,
-      onDoubleTap: widget.onDoubleTap,
+      // onDoubleTap: widget.onDoubleTap, // 已移除避免冲突
       behavior: HitTestBehavior.opaque,
       child: Stack(
         children: [
@@ -3305,3 +3368,4 @@ class _EnergyBarWidget extends StatelessWidget {
     );
   }
 }
+
