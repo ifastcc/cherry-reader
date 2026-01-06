@@ -78,10 +78,22 @@ class _InsightScreenState extends State<InsightScreen> {
         // 设置默认选中的视角（优先内置分组，其次自定义分组）
         if (_selectedPerspectiveId == null && grouped.isNotEmpty) {
           // 优先从内置分组选择
-          for (final category in BuiltinPerspectives.categoryOrder) {
-            if (grouped.containsKey(category) && grouped[category]!.isNotEmpty) {
-              _selectedPerspectiveId = grouped[category]!.first.perspectiveId;
-              break;
+          // 1. 尝试默认选中 "朋友视角"
+          // ignore: unnecessary_cast
+          final friendPerspectives = grouped.values
+              .expand((list) => list)
+              .where((p) => p.perspectiveId == 'builtin_friend_perspective')
+              .toList();
+
+          if (friendPerspectives.isNotEmpty) {
+            _selectedPerspectiveId = friendPerspectives.first.perspectiveId;
+          } else {
+            // 2. 否则按默认顺序选择
+            for (final category in BuiltinPerspectives.categoryOrder) {
+              if (grouped.containsKey(category) && grouped[category]!.isNotEmpty) {
+                _selectedPerspectiveId = grouped[category]!.first.perspectiveId;
+                break;
+              }
             }
           }
           // 如果没有内置分组，从任意分组选择第一个
@@ -387,38 +399,28 @@ class _InsightScreenState extends State<InsightScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     
-    // 展平所有视角（内置分组优先，然后是自定义分组）
-    final allPerspectives = <PerspectiveEntity>[];
-    // 先添加内置分组的视角
-    for (final category in BuiltinPerspectives.categoryOrder) {
-      final perspectives = _groupedPerspectives[category];
-      if (perspectives != null) {
-        allPerspectives.addAll(perspectives);
-      }
-    }
-    // 再添加自定义分组的视角
-    for (final category in _groupedPerspectives.keys) {
-      if (!BuiltinPerspectives.categoryOrder.contains(category)) {
-        allPerspectives.addAll(_groupedPerspectives[category]!);
-      }
+    // 统计总视角数
+    int totalCount = 0;
+    for (final perspectives in _groupedPerspectives.values) {
+      totalCount += perspectives.length;
     }
     
     return DraggableScrollableSheet(
-      initialChildSize: 0.7,
+      initialChildSize: 0.75,
       minChildSize: 0.5,
-      maxChildSize: 0.9,
+      maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) => Container(
         decoration: BoxDecoration(
           color: colorScheme.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         ),
         child: Column(
           children: [
             // 拖动手柄
             Container(
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              width: 36,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 40,
               height: 4,
               decoration: BoxDecoration(
                 color: colorScheme.outline.withValues(alpha: 0.3),
@@ -427,15 +429,15 @@ class _InsightScreenState extends State<InsightScreen> {
             ),
             // 标题
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
               child: Row(
                 children: [
-                  Text('选择分析视角', style: theme.textTheme.titleMedium?.copyWith(
+                  Text('发现洞察视角', style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   )),
                   const Spacer(),
                   Text(
-                    '共 ${allPerspectives.length} 个',
+                    '共 $totalCount 个',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: colorScheme.outline,
                     ),
@@ -443,16 +445,33 @@ class _InsightScreenState extends State<InsightScreen> {
                 ],
               ),
             ),
-            // 视角列表
+            // 分类横向滚动列表
             Expanded(
-              child: ListView.separated(
+              child: ListView(
                 controller: scrollController,
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                itemCount: allPerspectives.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, index) {
-                  return _buildPerspectiveCard(allPerspectives[index], theme, colorScheme);
-                },
+                padding: const EdgeInsets.only(bottom: 24),
+                children: [
+                  // 按分类顺序构建横向滚动行
+                  for (final category in BuiltinPerspectives.categoryOrder)
+                    if (_groupedPerspectives.containsKey(category) &&
+                        _groupedPerspectives[category]!.isNotEmpty)
+                      _buildCategoryRow(
+                        category,
+                        _groupedPerspectives[category]!,
+                        theme,
+                        colorScheme,
+                      ),
+                  // 自定义分类
+                  for (final category in _groupedPerspectives.keys)
+                    if (!BuiltinPerspectives.categoryOrder.contains(category) &&
+                        _groupedPerspectives[category]!.isNotEmpty)
+                      _buildCategoryRow(
+                        category,
+                        _groupedPerspectives[category]!,
+                        theme,
+                        colorScheme,
+                      ),
+                ],
               ),
             ),
           ],
@@ -461,85 +480,127 @@ class _InsightScreenState extends State<InsightScreen> {
     );
   }
 
-  Widget _buildPerspectiveCard(
+  /// 构建分类行（标题 + 横向滚动卡片）
+  Widget _buildCategoryRow(
+    String category,
+    List<PerspectiveEntity> perspectives,
+    ThemeData theme,
+    ColorScheme colorScheme,
+  ) {
+    final displayName = BuiltinPerspectives.categoryOrder.contains(category)
+        ? BuiltinPerspectives.getCategoryDisplayName(category)
+        : category;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 分类标题
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+          child: Text(
+            displayName,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: colorScheme.onSurface,
+            ),
+          ),
+        ),
+        // 横向滚动卡片列表
+        SizedBox(
+          height: 140,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: perspectives.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, index) {
+              return _buildHorizontalCard(perspectives[index], theme, colorScheme);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 构建横向滚动卡片
+  Widget _buildHorizontalCard(
     PerspectiveEntity perspective,
     ThemeData theme,
     ColorScheme colorScheme,
   ) {
     final isSelected = perspective.perspectiveId == _selectedPerspectiveId;
     
-    return Material(
-      color: isSelected 
-          ? colorScheme.primary.withValues(alpha: 0.06)
-          : colorScheme.surfaceContainerLowest,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: () {
-          _onPerspectiveSelected(perspective);
-          Navigator.pop(context);
-        },
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isSelected 
-                  ? colorScheme.primary.withValues(alpha: 0.3)
-                  : colorScheme.outline.withValues(alpha: 0.1),
+    return GestureDetector(
+      onTap: () {
+        _onPerspectiveSelected(perspective);
+        Navigator.pop(context);
+      },
+      child: Container(
+        width: 160,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: isSelected 
+              ? colorScheme.primaryContainer.withValues(alpha: 0.5)
+              : colorScheme.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected 
+                ? colorScheme.primary.withValues(alpha: 0.5)
+                : colorScheme.outline.withValues(alpha: 0.1),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 图标 + 选中标记
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Center(
+                    child: Text(perspective.icon, style: const TextStyle(fontSize: 20)),
+                  ),
+                ),
+                const Spacer(),
+                if (isSelected)
+                  Icon(
+                    Icons.check_circle,
+                    size: 20,
+                    color: colorScheme.primary,
+                  ),
+              ],
             ),
-          ),
-          child: Row(
-            children: [
-              // 图标
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Center(
-                  child: Text(perspective.icon, style: const TextStyle(fontSize: 22)),
-                ),
+            const SizedBox(height: 10),
+            // 标题
+            Text(
+              perspective.name,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: isSelected ? colorScheme.primary : colorScheme.onSurface,
               ),
-              const SizedBox(width: 14),
-              // 标题和描述
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      perspective.name,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: isSelected ? colorScheme.primary : colorScheme.onSurface,
-                      ),
-                    ),
-                    if (perspective.description.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        perspective.description,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.outline,
-                          height: 1.3,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+            // 描述
+            Expanded(
+              child: Text(
+                perspective.description,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.outline,
+                  height: 1.3,
                 ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(width: 8),
-              // 箭头/勾选
-              Icon(
-                isSelected ? Icons.check_circle : Icons.chevron_right,
-                color: isSelected ? colorScheme.primary : colorScheme.outline.withValues(alpha: 0.5),
-                size: 22,
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

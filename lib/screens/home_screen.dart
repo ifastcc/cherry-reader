@@ -24,6 +24,7 @@ import 'search_screen.dart';
 import 'insight_screen.dart';
 import 'package:intl/intl.dart';
 import '../widgets/status_badge.dart';
+import '../widgets/topic_card.dart';
 
 /// 同步阶段
 enum SyncStage {
@@ -1367,55 +1368,122 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cherry Reader'),
-        actions: [
-          // 状态徽章
-          _buildStatusBadge(),
-          
-          // 视图模式切换按钮
-          IconButton(
-            icon: Icon(
-              _viewMode == HomeViewMode.tree ? Icons.view_timeline : Icons.account_tree,
-            ),
-            onPressed: (_isLoading || _topicIndex == null) ? null : _toggleViewMode,
-            tooltip: _viewMode == HomeViewMode.tree ? '切换到时间线视图' : '切换到分组视图',
-          ),
-          // 搜索按钮
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: (_isLoading || _extractor == null) ? null : () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => SearchScreen(extractor: _extractor!),
-                ),
-              );
-            },
-            tooltip: '搜索',
-          ),
-          // 设置按钮
-           IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _isLoading ? null : () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-              if (mounted) {
-                _initAndLoad();
-              }
-            },
-            tooltip: '设置',
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
       body: _buildBody(),
     );
   }
 
-  /// 构建状态徽章
+  Widget _buildBody() {
+    // 首次加载时显示加载动画
+    if (_isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('正在加载...'),
+          ],
+        ),
+      );
+    }
+
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        _buildSliverAppBar(),
+        
+        // 内容区域
+        if (_topicIndex == null)
+          SliverFillRemaining(
+            child: _isSyncing 
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.sync, size: 48, color: Colors.blue[300]),
+                      const SizedBox(height: 16),
+                      Text(
+                        _syncMessage ?? '同步中...',
+                        style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                )
+              : _buildEmptyState(),
+          )
+        else
+          _viewMode == HomeViewMode.tree 
+              ? _buildTopicListSliver() 
+              : _buildTimelineListSliver(),
+          
+        // 底部留白，防止被 Dock 遮挡
+        const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
+      ],
+    );
+  }
+
+  /// 构建 SliverAppBar (Immersive Header)
+  Widget _buildSliverAppBar() {
+    return SliverAppBar(
+      title: const Text(
+          'Cherry Reader', 
+          style: TextStyle(fontWeight: FontWeight.bold) 
+      ),
+      centerTitle: false,
+      pinned: false, // 不固定，随滚动滑出
+      floating: true, // 向上滚动立即出现
+      snap: true,
+      scrolledUnderElevation: 0,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      actions: [
+        // 状态徽章 (Action size)
+         Container(
+           margin: const EdgeInsets.only(right: 8),
+           alignment: Alignment.center,
+           child: _buildStatusBadge(),
+         ),
+        
+        // 视图模式切换按钮
+        IconButton(
+          icon: Icon(
+            _viewMode == HomeViewMode.tree ? Icons.view_timeline_outlined : Icons.account_tree_outlined,
+          ),
+          onPressed: (_isLoading || _topicIndex == null) ? null : _toggleViewMode,
+          tooltip: _viewMode == HomeViewMode.tree ? '切换到时间线视图' : '切换到分组视图',
+        ),
+        // 搜索按钮
+        IconButton(
+          icon: const Icon(Icons.search),
+          onPressed: (_isLoading || _extractor == null) ? null : () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => SearchScreen(extractor: _extractor!),
+              ),
+            );
+          },
+          tooltip: '搜索',
+        ),
+        // 设置按钮
+         IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          onPressed: _isLoading ? null : () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const SettingsScreen()),
+            );
+            if (mounted) {
+              _initAndLoad();
+            }
+          },
+          tooltip: '设置',
+        ),
+        const SizedBox(width: 8),
+      ],
+    );
+  }
+  
+  /// 构建状态徽章 (Mini version for AppBar Action)
   Widget _buildStatusBadge() {
     final state = _computeStatusBarState();
     
@@ -1427,59 +1495,16 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       StatusBarPhase.error => StatusBadgeState.error,
     };
 
-    String? message;
-    if (badgeState == StatusBadgeState.syncing) {
-      message = state.syncMessage ?? '同步中...';
-    } else if (badgeState == StatusBadgeState.hasUpdate) {
-      message = '新版本';
-    } else if (badgeState == StatusBadgeState.error) {
-      message = '错误';
-    }
-
+    String? message; // Actions area usually too small for text, maybe just icon or short text
+    // For the unified consistent look, we use the StatusBadge widget but maybe simpler
+    
     return StatusBadge(
       state: badgeState,
-      message: message,
+      message: null, // Hide message in AppBar to save space
       onTap: () => _onStatusBarTap(state),
     );
   }
-
-  /// 构建悬浮按钮
-  Widget? _buildFloatingActionButton() {
-    // 手动模式且无数据时，显示"加载数据"按钮
-    if (_loadMode == DataLoadMode.manual && _topicIndex == null) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 80),
-        child: FloatingActionButton.extended(
-          onPressed: _isLoading ? null : _pickAndLoadFile,
-          icon: const Icon(Icons.folder_open),
-          label: const Text('加载数据'),
-        ),
-      );
-    }
-
-    // 没有数据时不显示洞察按钮
-    if (_topicIndex == null) {
-      return null;
-    }
-
-    // 有数据时显示"洞察"悬浮按钮
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 80),
-      child: FloatingActionButton(
-        onPressed: _isLoading ? null : () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const InsightScreen(),
-            ),
-          );
-        },
-        tooltip: '洞察',
-        child: const Icon(Icons.insights),
-      ),
-    );
-  }
-
+  
   /// 计算当前状态栏状态
   StatusBarState _computeStatusBarState() {
     final topicCount = _topicIndex?.values.fold<int>(0, (sum, list) => sum + list.length);
@@ -1543,49 +1568,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-
-
-  /// 状态图标
-  Widget _buildStatusIcon(StatusBarState state) {
-    final (IconData icon, Color color) = switch (state.phase) {
-      StatusBarPhase.idle => (Icons.cloud_done_outlined, Colors.grey[400]!),
-      StatusBarPhase.syncing => (Icons.sync, Colors.blue[500]!),
-      StatusBarPhase.hasUpdate => (Icons.file_download_outlined, Colors.orange[600]!),
-      StatusBarPhase.error => (Icons.error_outline, Colors.red[500]!),
-    };
-
-    if (state.isSyncing) {
-      return SizedBox(
-        width: 12,
-        height: 12,
-        child: CircularProgressIndicator(
-          strokeWidth: 1.5,
-          valueColor: AlwaysStoppedAnimation<Color>(color),
-        ),
-      );
-    }
-
-    return Icon(icon, size: 14, color: color);
-  }
-
-  /// 获取状态文字
-  String _getStatusText(StatusBarState state) {
-    if (state.phase == StatusBarPhase.hasUpdate && _pendingLocalBackup != null) {
-      return '点击更新';
-    }
-    return state.statusText;
-  }
-
-  /// 获取状态颜色
-  Color _getStatusColor(StatusBarState state) {
-    return switch (state.phase) {
-      StatusBarPhase.idle => Colors.grey[500]!,
-      StatusBarPhase.syncing => Colors.blue[600]!,
-      StatusBarPhase.hasUpdate => Colors.orange[700]!,
-      StatusBarPhase.error => Colors.red[600]!,
-    };
-  }
-
   /// 状态栏点击处理
   void _onStatusBarTap(StatusBarState state) {
     // 清除蓝点（用户已看到更新提示）
@@ -1608,6 +1590,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _syncFromWebDav();
       }
       return;
+    }
+    
+    // 如果是 idle 状态，点击显示版本管理
+    if (state.phase == StatusBarPhase.idle) {
+         _showVersionManager();
     }
   }
 
@@ -1649,7 +1636,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
   }
-
+  
   /// 显示版本管理对话框
   Future<void> _showVersionManager() async {
     final versions = await VersionService.instance.listVersions();
@@ -1831,46 +1818,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Widget _buildBody() {
-    // 首次加载时显示加载动画
-    if (_isLoading) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('正在加载...'),
-          ],
-        ),
-      );
-    }
-
-    // 无数据时
-    if (_topicIndex == null) {
-      // 同步中显示简洁占位
-      if (_isSyncing) {
-        return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.sync, size: 48, color: Colors.blue[300]),
-              const SizedBox(height: 16),
-              Text(
-                _syncMessage ?? '同步中...',
-                style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-              ),
-            ],
-          ),
-        );
-      }
-      // 空状态
-      return _buildEmptyState();
-    }
-
-    return _viewMode == HomeViewMode.tree ? _buildTopicList() : _buildTimelineList();
-  }
-
   /// 格式化缓存版本时间
   String _formatSyncTime(DateTime? time) {
     if (time == null) return '未知';
@@ -1910,102 +1857,87 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return DateFormat('MM-dd HH:mm').format(time);
   }
 
-  Widget _buildTopicList() {
+  Widget _buildTopicListSliver() {
     if (_topicIndex == null || _topicIndex!.isEmpty) {
-      return const Center(child: Text('没有找到话题'));
+      return const SliverToBoxAdapter(child: Center(child: Text('没有找到话题')));
     }
 
     final assistantEntries = _topicIndex!.entries.toList();
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: assistantEntries.length,
-      itemBuilder: (context, index) {
-        final entry = assistantEntries[index];
-        final assistantId = entry.key;
-        final topics = entry.value;
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (context, index) {
+          final entry = assistantEntries[index];
+          final assistantId = entry.key;
+          final topics = entry.value;
 
-        // 获取 Assistant 信息
-        final assistantInfo =
-            _assistantMap?[assistantId] ?? {'id': assistantId, 'name': '未命名助手'};
+          // 获取 Assistant 信息
+          final assistantInfo =
+              _assistantMap?[assistantId] ?? {'id': assistantId, 'name': '未命名助手'};
 
-        return Card(
-          margin: const EdgeInsets.only(bottom: 16),
-          child: ExpansionTile(
-            leading: CircleAvatar(
-              child: Text(
-                (assistantInfo['name'] as String?)?.substring(0, 1) ?? '?',
-              ),
+          return Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            elevation: 0,
+            color: Theme.of(context).cardColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.1)),
             ),
-            title: Text(
-              assistantInfo['name'] as String? ?? '未命名助手',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text('${topics.length} 个话题'),
-            // 【性能优化】使用虚拟化列表替代 map().toList()
-            // 避免一次性创建大量 Widget，特别是当助手有很多话题时
-            children: [
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  // 限制最大高度：最多显示 6 个话题的高度，超出可滚动
-                  // 每个 ListTile 高度约 72px
-                  maxHeight: topics.length > 6 ? 432 : topics.length * 72.0,
-                ),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  physics: topics.length > 6
-                      ? const ClampingScrollPhysics()
-                      : const NeverScrollableScrollPhysics(),
-                  itemCount: topics.length,
-                  itemBuilder: (context, topicIndex) {
-                    final topic = topics[topicIndex];
-                    final topicName = topic['name'] as String? ?? '未命名话题';
-                    final topicId = topic['id'] as String;
-                    final messageCount = topic['messageCount'] as int? ?? 0;
-                    final roundCount = topic['roundCount'] as int? ?? 0;
-
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 8,
-                      ),
-                      title: Text(topicName),
-                      subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () async {
-                        if (_extractor == null) {
-                          ScaffoldMessenger.of(
-                            context,
-                          ).showSnackBar(const SnackBar(content: Text('数据加载器未就绪')));
-                          return;
-                        }
-
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => ConversationScreen(
-                              extractor: _extractor!,
-                              topicId: topicId,
-                              topicName: topicName,
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
+            child: ExpansionTile(
+              shape: const Border(), // Remove borders when expanded
+              leading: CircleAvatar(
+                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                child: Text(
+                  (assistantInfo['name'] as String?)?.substring(0, 1) ?? '?',
+                  style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
                 ),
               ),
-            ],
-          ),
-        );
-      },
+              title: Text(
+                assistantInfo['name'] as String? ?? '未命名助手',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text('${topics.length} 个话题'),
+              children: [
+                 ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: topics.length,
+                    itemBuilder: (context, topicIndex) {
+                      final topic = topics[topicIndex];
+                      // Use the new simplified item or card here? 
+                      // For tree view, keep it simple as list item for now, or reuse logic
+                      // Let's keep it simple ListTile for tree view as nesting cards is weird
+                      
+                      final topicName = topic['name'] as String? ?? '未命名话题';
+                      final topicId = topic['id'] as String;
+                      final messageCount = topic['messageCount'] as int? ?? 0;
+                      final roundCount = topic['roundCount'] as int? ?? 0;
+
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 4,
+                        ),
+                        title: Text(topicName),
+                        subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
+                        trailing: const Icon(Icons.chevron_right, size: 16),
+                        onTap: () => _openTopic(topicId, topicName),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          );
+        },
+        childCount: assistantEntries.length,
+      ),
     );
   }
 
-/// 时间线视图（按更新时间倒序，分组显示）
-  Widget _buildTimelineList() {
+  /// 时间线视图（按更新时间倒序，分组显示）
+  Widget _buildTimelineListSliver() {
     if (_topicIndex == null || _topicIndex!.isEmpty) {
-      return const Center(child: Text('没有找到话题'));
+      return const SliverToBoxAdapter(child: Center(child: Text('没有找到话题')));
     }
 
     // 将所有话题展平并按更新时间倒序排序
@@ -2041,29 +1973,43 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       groupedTopics.putIfAbsent(group, () => []).add(topic);
     }
 
-    // 构建分组列表
+    // 构建分组列表 - Use flat list approach
     final groups = [TimeGroup.today, TimeGroup.yesterday, TimeGroup.thisWeek, TimeGroup.earlier];
-    final items = <Widget>[];
-    bool isFirstGroup = true;
-
+    final flatItems = <Widget>[];
+    
     for (final group in groups) {
       final topics = groupedTopics[group];
       if (topics == null || topics.isEmpty) continue;
-
-      // 分组标题
-      items.add(_buildGroupHeader(_getGroupTitle(group), isFirst: isFirstGroup));
-      isFirstGroup = false;
-
-      // 话题列表
-      for (int i = 0; i < topics.length; i++) {
-        final topic = topics[i];
-        items.add(_buildTopicItem(topic, group, isLast: i == topics.length - 1));
+      
+      // Header
+      flatItems.add(
+         Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+            child: Text(
+              _getGroupTitle(group),
+              style: TextStyle(
+                fontSize: 18, // Bigger, cleaner header
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+          ),
+      );
+      
+      // Items
+      for (final topic in topics) {
+        flatItems.add(_buildTopicCard(topic, group));
       }
+      
+      // Group spacing
+      flatItems.add(const SizedBox(height: 16));
     }
 
-    return ListView(
-      padding: const EdgeInsets.only(top: 8, bottom: 24),
-      children: items,
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (context, index) => flatItems[index],
+        childCount: flatItems.length,
+      ),
     );
   }
 
@@ -2129,32 +2075,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return names[weekday];
   }
 
-  /// 构建分组标题
-  Widget _buildGroupHeader(String title, {bool isFirst = false}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (!isFirst)
-          Divider(height: 1, thickness: 1, color: Colors.grey[200]),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-          color: Colors.grey[50],
-          child: Text(
-            title,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[600],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// 构建话题项
-  Widget _buildTopicItem(Map<String, dynamic> topic, TimeGroup group, {bool isLast = false}) {
+  /// 构建话题卡片 (New Design)
+  Widget _buildTopicCard(Map<String, dynamic> topic, TimeGroup group) {
     final topicId = topic['id'] as String;
     final topicName = topic['name'] as String? ?? '未命名话题';
     final assistantId = topic['assistantId'] as String;
@@ -2221,155 +2143,34 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       } catch (_) {}
     }
 
-    return InkWell(
-      onTap: () async {
-        if (_extractor == null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('数据加载器未就绪')),
-          );
-          return;
-        }
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => ConversationScreen(
-              extractor: _extractor!,
-              topicId: topicId,
-              topicName: topicName,
-            ),
-          ),
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: isLast
-              ? null
-              : Border(
-                  bottom: BorderSide(
-                    color: Colors.grey[100]!,
-                    width: 1,
-                  ),
-                ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 第一行：标题 + 时间
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    topicName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  timeDisplay,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey[400],
-                  ),
-                ),
-              ],
-            ),
-            // 双行预览：用户问题 + AI 回答
-            if (userPreview != null || aiPreview != null) ...[
-              const SizedBox(height: 10),
-              // 用户问题预览
-              if (userPreview != null && userPreview.isNotEmpty)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.person_outline,
-                      size: 14,
-                      color: Colors.blue[400],
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        userPreview,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey[600],
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              // AI 回答预览
-              if (aiPreview != null && aiPreview.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.auto_awesome,
-                      size: 14,
-                      color: Colors.purple[300],
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        aiPreview,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey[500],
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-            // 底部：助手名称（左） + 轮数（右）
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    assistantName,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ),
-                if (roundCount > 0)
-                  Text(
-                    '$roundCount轮对话',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey[400],
-                    ),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
+    return TopicCard(
+      title: topicName,
+      date: timeDisplay,
+      assistantName: assistantName,
+      roundCount: roundCount,
+      userPreview: userPreview,
+      aiPreview: aiPreview,
+      onTap: () => _openTopic(topicId, topicName),
     );
+  }
+  
+  Future<void> _openTopic(String topicId, String topicName) async {
+      if (_extractor == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('数据加载器未就绪')),
+        );
+        return;
+      }
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ConversationScreen(
+            extractor: _extractor!,
+            topicId: topicId,
+            topicName: topicName,
+          ),
+        ),
+      );
   }
 
   /// 【优化】美观的空状态页面

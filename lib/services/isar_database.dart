@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/isar/ai_analysis_entity.dart';
 import '../models/isar/discussion_entity.dart';
 import '../models/isar/discussion_message_entity.dart';
@@ -538,38 +539,49 @@ class IsarDatabase {
     return getUnifiedConversations(contextType: ConversationContextType.topic);
   }
 
-  // ============ 洞察相关操作 ============
-
-  /// 初始化内置视角（确保每个内置视角都存在）
+  /// 初始化内置视角（带版本检查）
+  ///
+  /// 只在以下情况下更新数据库中的内置视角：
+  /// 1. 首次运行（没有任何视角数据）
+  /// 2. 代码中的视角版本号发生变化
   Future<void> initBuiltinPerspectives() async {
     final isar = await instance;
-    final builtins = BuiltinPerspectives.getAll();
-
-    // 获取已存在的内置视角 ID
-    final existingIds = <String>{};
-    final existingPerspectives = await isar.perspectiveEntitys
+    
+    // 检查当前已有的内置视角
+    final existingBuiltins = await isar.perspectiveEntitys
         .filter()
         .isBuiltinEqualTo(true)
         .findAll();
-    for (final p in existingPerspectives) {
-      existingIds.add(p.perspectiveId);
-    }
-
-    // 找出缺失的内置视角
-    final missing = builtins
-        .where((p) => !existingIds.contains(p.perspectiveId))
-        .toList();
-
-    if (missing.isNotEmpty) {
+    
+    // 获取存储的版本号（使用 SharedPreferences）
+    final prefs = await SharedPreferences.getInstance();
+    final storedVersion = prefs.getInt('builtin_perspectives_version') ?? 0;
+    final currentVersion = BuiltinPerspectives.version;
+    
+    // 需要更新的条件：没有内置视角 或 版本号发生变化
+    if (existingBuiltins.isEmpty || storedVersion < currentVersion) {
+      debugPrint('🔄 视角版本升级: $storedVersion → $currentVersion');
+      
+      // 删除所有内置视角
       await isar.writeTxn(() async {
-        await isar.perspectiveEntitys.putAll(missing);
+        await isar.perspectiveEntitys
+            .filter()
+            .isBuiltinEqualTo(true)
+            .deleteAll();
       });
-      print('✅ 已补充 ${missing.length} 个缺失的内置视角');
-    }
-
-    // 如果完全没有视角数据，说明是全新安装
-    if (existingPerspectives.isEmpty && missing.length == builtins.length) {
-      print('✅ 已初始化 ${builtins.length} 个内置视角（全新安装）');
+      
+      // 插入新的内置视角
+      final builtins = BuiltinPerspectives.getAll();
+      await isar.writeTxn(() async {
+        await isar.perspectiveEntitys.putAll(builtins);
+      });
+      
+      // 保存版本号
+      await prefs.setInt('builtin_perspectives_version', currentVersion);
+      
+      debugPrint('✅ 已重置 ${builtins.length} 个内置视角 (v$currentVersion)');
+    } else {
+      debugPrint('✅ 内置视角版本一致 (v$currentVersion)，跳过更新');
     }
   }
 }

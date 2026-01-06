@@ -49,7 +49,7 @@ class _MainScreenState extends State<MainScreen> {
                 setState(() => _currentIndex = index);
               },
               centerIcon: Icon(
-                _currentIndex == 0 ? Icons.add_circle_outline : Icons.add_circle,
+                _currentIndex == 0 ? Icons.auto_awesome : Icons.add_circle,
               ),
               onCenterAction: _handleCenterAction,
             ),

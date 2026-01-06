@@ -6,6 +6,13 @@ import '../models/isar/perspective_entity.dart';
 /// 包含所有预定义的分析视角及其 Prompt 模板
 /// 灵感来源：flomo AI洞察模板
 class BuiltinPerspectives {
+  // ============ 版本控制 ============
+  
+  /// 内置视角版本号
+  /// 每次修改视角定义（描述、图标、prompt等）时，需要递增此版本号
+  /// 应用启动时会检查此版本号，如果发生变化则强制更新数据库中的视角数据
+  static const int version = 2;  // 2026-01-06: 同步 flomo 描述和横向卡片布局
+
   // ============ 分类常量 ============
 
   static const String categoryReview = 'review';           // 复盘整理
@@ -44,6 +51,22 @@ class BuiltinPerspectives {
     categoryThinking,
     categoryMaster,
   ];
+
+  /// 获取分类的显示名称
+  static String getCategoryDisplayName(String category) {
+    switch (category) {
+      case categoryReview:
+        return '📝 笔记复盘';
+      case categorySelf:
+        return '🧘 自我觉察';
+      case categoryThinking:
+        return '🧠 思维决策';
+      case categoryMaster:
+        return '🌟 灵感创意';
+      default:
+        return category;
+    }
+  }
 
   // ============ 内置视角 ============
 
@@ -481,42 +504,45 @@ class BuiltinPerspectives {
     return PerspectiveEntity.create(
       perspectiveId: 'builtin_friend_perspective',
       name: '朋友视角',
-      icon: '👥',
+      icon: '🫂',
       description: '从他者视角，来看自己的笔记中的自己是什么样',
       category: categorySelf,
       isBuiltin: true,
       isEnabled: true,
-      sortOrder: 22,
-      promptTemplate: '''你是用户的一位了解ta很久的好朋友。请以朋友的视角，说说从这些笔记中看到的ta是什么样的人。
+      sortOrder: 1,
+      promptTemplate: '''你是一位深爱用户、了解ta很久的挚友。请以朋友的视角，描述你从这些笔记中看到的ta是什么样子的。不要给出建议（除非ta看起来很危险），而是像一面镜子一样，温柔地照出ta当下的状态。
 
 用户笔记列表：
 {queries}
 
-作为朋友，我想告诉你：
+亲爱的，读了你的这些随笔，我想告诉你我看到的你也许是什么样的：
 
-## 一、我眼中的你
-从这些笔记里，我看到的你是这样的：
-- 你的特点是...
-- 你在意的是...
-- 你的方式是...
+## 一、当下的你
+这段时间，我看到你似乎处于这样的状态：
+- 你的情绪颜色：...
+- 你关注的重心：...
+- 你的能量水位：...
 
-## 二、我欣赏你的地方
-说实话，读完这些，我挺欣赏你的这些方面：
-- [具体的点] - 为什么欣赏
-- [具体的点] - 为什么欣赏
+## 二、闪闪发光的你
+无论你是否意识到，这些特质真的在发光：
+- [具体的点] - 让我觉得...
+- [具体的点] - 让我感动...
 
-## 三、我有点担心的
-但作为朋友，我也有点担心：
-- [具体的点] - 为什么担心
+## 三、我也看到你的不容易
+作为朋友，我也看得到那些藏在字里行间的：
+- 你在默默承受的：...
+- 你在努力对抗的：...
 
-## 四、如果你问我的建议
-如果你问我该怎么办，我会说：
-- [真诚的建议]
+## 四、我眼中的可能性
+基于我对你的了解，我隐约看到了这样的可能性：
+- ...
+- ...
 
-## 五、无论如何
-最后我想说，无论怎样，我都[支持/理解/相信]你...
+## 五、我想对你说
+最后，只想给你一个拥抱：
+[一段温暖、支持、接纳的话，仅仅是陪伴，不需要"加油"]
 
-用第一人称"我"来表述，像真正的朋友聊天一样自然、真诚。''',
+用第一人称"我"和第二人称"你"来表述，语气要像深夜谈心一样自然、亲密、真诚。''',
     );
   }
 
