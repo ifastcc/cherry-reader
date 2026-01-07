@@ -2060,12 +2060,17 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 格式化时间显示（根据分组）
   String _formatTimeForGroup(DateTime dt, TimeGroup group) {
+    final now = DateTime.now();
     final timeStr = DateFormat('HH:mm').format(dt);
+    final isThisYear = dt.year == now.year;
+    
     return switch (group) {
       TimeGroup.today => timeStr,
       TimeGroup.yesterday => timeStr,
       TimeGroup.thisWeek => '${_getWeekdayName(dt.weekday)} $timeStr',
-      TimeGroup.earlier => '${DateFormat('MM-dd').format(dt)} $timeStr',
+      TimeGroup.earlier => isThisYear 
+          ? '${DateFormat('MM-dd').format(dt)} $timeStr'
+          : '${DateFormat('yyyy-MM-dd').format(dt)} $timeStr',
     };
   }
 

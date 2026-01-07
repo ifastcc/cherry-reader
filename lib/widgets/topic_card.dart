@@ -4,7 +4,7 @@ class TopicCard extends StatelessWidget {
   final String title;
   final String date;
   final String assistantName;
-  final int roundCount; // 0 means just started
+  final int roundCount;
   final String? userPreview;
   final String? aiPreview;
   final VoidCallback onTap;
@@ -20,143 +20,147 @@ class TopicCard extends StatelessWidget {
     required this.onTap,
   });
 
+  String _cleanPreview(String text) {
+    return text
+        .replaceAll(RegExp(r'^>\s*', multiLine: true), '') // 移除引用符号
+        .replaceAll(RegExp(r'\*\*'), '') // 移除加粗
+        .replaceAll(RegExp(r'`[^`]*`'), '') // 移除行内代码
+        .replaceAll(RegExp(r'[\r\n]+'), ' ') // 换行改空格
+        .replaceAll(RegExp(r'\s{2,}'), ' ') // 多空格合并
+        .replaceAll(RegExp(r'^\s*[-*]\s*'), '') // 移除列表符号
+        .trim();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    return Card(
-      elevation: 0,
-      color: theme.cardColor, // Use card color for a distinct "cell" background
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: colorScheme.outline.withOpacity(0.08), // Subtle border
-          width: 1,
-        ),
-      ),
-      margin: EdgeInsets.zero,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header: Title + Date
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: colorScheme.onSurface,
-                        fontSize: 16, 
+    final cleanUserPreview = userPreview != null ? _cleanPreview(userPreview!) : null;
+    final cleanAiPreview = aiPreview != null ? _cleanPreview(aiPreview!) : null;
+
+    return Padding(
+      // 外边距 - 让卡片之间有明显间隔
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Material(
+        color: colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Row 1: Title + Round count
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurface,
+                          fontSize: 16,
+                          height: 1.35,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    date,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.outline,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-              
-              const SizedBox(height: 12),
-
-              // Content Previews
-              if (userPreview != null) ...[
-                _buildPreviewLine(
-                  context,
-                  emoji: '🗣️', // Speaking head emoji
-                  text: userPreview!,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(height: 8),
-              ],
-              
-              if (aiPreview != null) ...[
-                _buildPreviewLine(
-                  context,
-                  emoji: '✨', // Sparkles emoji
-                  text: aiPreview!,
-                  color: colorScheme.secondary,
-                ),
-              ],
-
-              // Meta Footer (only if previews exist, adds spacing)
-              if (userPreview != null || aiPreview != null)
-                const SizedBox(height: 12),
-              
-              // Minimal Footer
-              Row(
-                children: [
-                  _buildTag(context, assistantName, isPrimary: false),
-                  if (roundCount > 0) ...[
-                    const SizedBox(width: 8),
-                    _buildTag(context, '$roundCount Rnds', isPrimary: false),
+                    if (roundCount > 0) ...[
+                      const SizedBox(width: 12),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.chat_bubble_outline,
+                            size: 14,
+                            color: colorScheme.outline.withOpacity(0.5),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '$roundCount',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colorScheme.outline.withOpacity(0.6),
+                              fontWeight: FontWeight.w500,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+                ),
 
-  Widget _buildPreviewLine(BuildContext context, {required String emoji, required String text, required Color color}) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 1, right: 8),
-          child: Text(
-            emoji,
-            style: const TextStyle(fontSize: 14), 
-          ),
-        ),
-        Expanded(
-          child: Text(
-            text,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: color,
-              height: 1.5, // slightly looser line height for readability
-              fontSize: 14,
+                // Row 2: User query - 单行副标题
+                if (cleanUserPreview != null && cleanUserPreview.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    cleanUserPreview,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant.withOpacity(0.65),
+                      height: 1.4,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+
+                // Row 3: AI response - 两行，无标记，略深一点
+                if (cleanAiPreview != null && cleanAiPreview.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    cleanAiPreview,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant.withOpacity(0.8),
+                      height: 1.5,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+
+                // Row 4: Meta info
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Text(
+                      assistantName,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.primary.withOpacity(0.7),
+                        fontWeight: FontWeight.w500,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 3,
+                      height: 3,
+                      decoration: BoxDecoration(
+                        color: colorScheme.outline.withOpacity(0.3),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      date,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.outline.withOpacity(0.6),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTag(BuildContext context, String text, {bool isPrimary = false}) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: isPrimary ? colorScheme.primaryContainer.withOpacity(0.3) : colorScheme.surfaceContainerHighest.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        text,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: isPrimary ? colorScheme.primary : colorScheme.onSurfaceVariant,
-          fontWeight: FontWeight.w500,
-          fontSize: 11,
         ),
       ),
     );
