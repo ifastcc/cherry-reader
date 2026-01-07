@@ -589,8 +589,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
             _buildContent(),
             // 展开/收缩提示
             if (_isLongContent) _buildExpandHint(),
-            // 标注标签
-            if (_highlights.isNotEmpty) _buildHighlightTags(),
+            // 标注标签 - 已移除，避免重复显示 (inline 高亮已足够)
+            // if (_highlights.isNotEmpty) _buildHighlightTags(),
             // 操作栏
             if (widget.actionBar != null) ...[
               const SizedBox(height: 4),
@@ -659,8 +659,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
                         _buildContent(),
                         // 展开/收缩提示
                         if (_isLongContent) _buildExpandHint(),
-                        // 标注标签
-                        if (_highlights.isNotEmpty) _buildHighlightTags(),
+                        // 标注标签 - 已移除
+                        // if (_highlights.isNotEmpty) _buildHighlightTags(),
                       ],
                     ),
                   ),
@@ -672,7 +672,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
                     _buildContent(),
                     // 展开/收缩提示
                     if (_isLongContent) _buildExpandHint(),
-                    if (_highlights.isNotEmpty) _buildHighlightTags(),
+                    // if (_highlights.isNotEmpty) _buildHighlightTags(),
                   ],
                 ),
           // 操作栏

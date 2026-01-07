@@ -2288,13 +2288,17 @@ $modelResponses''';
             selector: (_, tts) => tts.hasValidConfig,
             builder: (context, hasValidConfig, _) {
               return HighlightableCard.assistant(
-                key: ValueKey(messageId),
-                data: reply,
-                streamLayout: true,
-                maxHeight: null, // 自然撑开
-                actionBar: MessageActionBar(
-                  content: content,
-                  messageId: messageId,
+                  key: ValueKey(messageId),
+                  data: reply,
+                  streamLayout: true,
+                  maxHeight: null, // 自然撑开
+                  topicId: widget.topicId, // 【修复】传递 topicId
+                  contextData: {
+                    'topicName': widget.topicName, // 【修复】传递 topicName，解决"未知对话"问题
+                  },
+                  actionBar: MessageActionBar(
+                    content: content,
+                    messageId: messageId,
                   modelName: modelName,
                   onDiscuss: () => _openSingleMessageDiscussion(reply),
                   onRegenerate: null, // TODO: 实现重新生成
@@ -2304,7 +2308,7 @@ $modelResponses''';
                   discussionCount: discussionCount,
                 ),
                 // 传递上下文参数，使全屏阅读时能进行讨论
-                topicId: widget.topicId,
+                // topicId: widget.topicId, // 已在上方传递
                 roundIndex: groupIndex,
                 // 【搜索高亮】优先使用页内搜索关键词，否则使用外部传入的
                 searchKeyword: _searchKeyword.isNotEmpty ? _searchKeyword : widget.highlightKeyword,

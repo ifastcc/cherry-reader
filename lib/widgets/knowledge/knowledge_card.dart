@@ -14,6 +14,7 @@ class KnowledgeCard extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onSourceTap;
   final VoidCallback? onDelete;
+  final bool compact;
 
   const KnowledgeCard({
     super.key,
@@ -21,6 +22,7 @@ class KnowledgeCard extends StatelessWidget {
     this.onTap,
     this.onSourceTap,
     this.onDelete,
+    this.compact = false,
   });
 
   @override
@@ -407,7 +409,7 @@ class KnowledgeEmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '在对话中选中文本可添加记录，\n或点击右下角快速记下一条灵感。',
+              '选中对话文本或点击下方按钮即可开始',
               style: TextStyle(
                 fontSize: 14,
                 color: theme.colorScheme.onSurfaceVariant,

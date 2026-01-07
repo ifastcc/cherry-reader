@@ -213,6 +213,122 @@ class KnowledgeEntryService {
     return entries.take(count).toList();
   }
 
+  /// 按 Topic 分组获取条目
+  Future<Map<String, List<KnowledgeEntry>>> getEntriesGroupedByTopic() async {
+    final entries = await getAllEntries();
+    final grouped = <String, List<KnowledgeEntry>>{};
+    
+    // 无来源的条目放在「独立笔记」分组
+    const noSourceKey = '__no_source__';
+    
+    for (final entry in entries) {
+      final key = entry.topicId ?? noSourceKey;
+      grouped.putIfAbsent(key, () => []).add(entry);
+    }
+    
+    return grouped;
+  }
+
+  /// 获取需要回顾的条目（简化版遗忘曲线）
+  /// 
+  /// 算法：
+  /// - 从未回顾过的条目优先级最高
+  /// - 回顾次数少的优先
+  /// - 距离上次回顾时间越长优先级越高
+  Future<List<KnowledgeEntry>> getEntriesForReview({int count = 10}) async {
+    final entries = await getAllEntries();
+    if (entries.isEmpty) return [];
+    
+    final now = DateTime.now().millisecondsSinceEpoch;
+    
+    // 计算每个条目的「遗忘分数」，分数越高越需要回顾
+    final scored = entries.map((e) {
+      double score = 0;
+      
+      // 从未回顾过：高分
+      if (e.reviewCount == 0) {
+        score += 100;
+      } else {
+        // 距离上次回顾的天数
+        final daysSinceReview = e.lastReviewedAt != null
+            ? (now - e.lastReviewedAt!) / (1000 * 60 * 60 * 24)
+            : 30;
+        
+        // 回顾次数越少，遗忘越快
+        // 公式：天数 / (回顾次数 + 1) * 衰减因子
+        score = daysSinceReview / (e.reviewCount + 1) * 10;
+      }
+      
+      // 重要性加成
+      score += e.importance * 5;
+      
+      return MapEntry(e, score);
+    }).toList();
+    
+    // 按分数降序排序
+    scored.sort((a, b) => b.value.compareTo(a.value));
+    
+    return scored.take(count).map((e) => e.key).toList();
+  }
+
+  /// 记录一次回顾
+  Future<void> recordReview(String entryId) async {
+    final entry = await getEntry(entryId);
+    if (entry == null) return;
+    
+    entry.reviewCount += 1;
+    entry.lastReviewedAt = DateTime.now().millisecondsSinceEpoch;
+    
+    final isar = await _db.instance;
+    await isar.writeTxn(() async {
+      await isar.knowledgeEntrys.put(entry);
+    });
+    
+    debugPrint('[KnowledgeEntryService] 记录回顾: $entryId (第${entry.reviewCount}次)');
+  }
+
+  /// 获取置顶条目
+  Future<List<KnowledgeEntry>> getPinnedEntries() async {
+    final isar = await _db.instance;
+    return isar.knowledgeEntrys
+        .filter()
+        .isPinnedEqualTo(true)
+        .sortByCreatedAtDesc()
+        .findAll();
+  }
+
+  /// 切换置顶状态
+  Future<void> togglePin(String entryId) async {
+    final entry = await getEntry(entryId);
+    if (entry == null) return;
+    
+    entry.isPinned = !entry.isPinned;
+    entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    
+    final isar = await _db.instance;
+    await isar.writeTxn(() async {
+      await isar.knowledgeEntrys.put(entry);
+    });
+    
+    debugPrint('[KnowledgeEntryService] 切换置顶: $entryId -> ${entry.isPinned}');
+  }
+
+  /// 更新重要性评分
+  Future<void> updateImportance(String entryId, int importance) async {
+    final entry = await getEntry(entryId);
+    if (entry == null) return;
+    
+    entry.importance = importance.clamp(0, 5);
+    entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    
+    final isar = await _db.instance;
+    await isar.writeTxn(() async {
+      await isar.knowledgeEntrys.put(entry);
+    });
+    
+    debugPrint('[KnowledgeEntryService] 更新重要性: $entryId -> $importance');
+  }
+
   // ==================== 更新操作 ====================
 
   /// 更新条目

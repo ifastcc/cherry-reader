@@ -45,7 +45,10 @@ class GestureNavLayout extends LayoutScheme {
           ),
         ],
       ),
-      floatingActionButton: _buildFAB(colorScheme),
+      // 只在对话页面显示FAB，知识库页面由子页面自己处理
+      floatingActionButton: context.selectedIndex == 0 
+          ? _buildFAB(colorScheme)
+          : null,
     );
   }
 

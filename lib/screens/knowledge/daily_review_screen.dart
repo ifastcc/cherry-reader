@@ -31,7 +31,7 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
   @override
   void initState() {
     super.initState();
-    _loadRandomItems();
+    _loadReviewItems();
   }
 
   @override
@@ -40,23 +40,58 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
     super.dispose();
   }
 
-  Future<void> _loadRandomItems() async {
+  Future<void> _loadReviewItems() async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
-      final items = await _knowledgeService.getRandomItems(count: widget.count);
+      // 使用遗忘曲线算法获取回顾内容
+      final items = await _knowledgeService.getItemsForReview(count: widget.count);
+      
+      // 如果没有足够的回顾内容，补充随机内容
+      if (items.length < widget.count) {
+        final randomItems = await _knowledgeService.getRandomItems(
+            count: widget.count - items.length);
+        // 去重添加
+        for (var item in randomItems) {
+           if (!items.any((e) => e.id == item.id)) {
+             items.add(item);
+           }
+        }
+      }
+      
       setState(() {
         _items = items;
         _isLoading = false;
       });
+      
+      // 记录第一条的回顾
+      if (_items.isNotEmpty) {
+        _recordReview(_items[0]);
+      }
     } catch (e) {
+      if (mounted) // Check mounted
       setState(() {
         _error = e.toString();
         _isLoading = false;
       });
+    }
+  }
+
+  void _onPageChanged(int index) {
+    setState(() => _currentPage = index);
+    if (index < _items.length) {
+      _recordReview(_items[index]);
+    }
+  }
+
+  Future<void> _recordReview(KnowledgeItem item) async {
+    try {
+      await _knowledgeService.recordReview(item.id);
+    } catch (e) {
+      debugPrint('记录回顾失败: $e');
     }
   }
 
@@ -79,7 +114,7 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
-            onPressed: _loadRandomItems,
+            onPressed: _loadReviewItems,
             tooltip: '换一批',
           ),
         ],
@@ -108,7 +143,7 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton(
-              onPressed: _loadRandomItems,
+              onPressed: _loadReviewItems,
               child: const Text('重试'),
             ),
           ],
@@ -156,7 +191,7 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
           controller: _pageController,
           scrollDirection: Axis.vertical,
           itemCount: _items.length,
-          onPageChanged: (page) => setState(() => _currentPage = page),
+          onPageChanged: _onPageChanged,
           itemBuilder: (context, index) => _buildReviewCard(context, index),
         ),
         // 右侧进度指示器
@@ -461,7 +496,7 @@ class _DailyReviewScreenState extends State<DailyReviewScreen> {
       MaterialPageRoute(
         builder: (context) => KnowledgeEditorScreen(item: item),
       ),
-    ).then((_) => _loadRandomItems());
+    ).then((_) => _loadReviewItems());
   }
 
   void _handleSourceTap(KnowledgeItem item) {

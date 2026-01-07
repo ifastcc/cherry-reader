@@ -31,36 +31,52 @@ const KnowledgeEntrySchema = CollectionSchema(
     ),
     r'end': PropertySchema(id: 4, name: r'end', type: IsarType.long),
     r'entryId': PropertySchema(id: 5, name: r'entryId', type: IsarType.string),
-    r'messageId': PropertySchema(
+    r'importance': PropertySchema(
       id: 6,
+      name: r'importance',
+      type: IsarType.long,
+    ),
+    r'isPinned': PropertySchema(id: 7, name: r'isPinned', type: IsarType.bool),
+    r'lastReviewedAt': PropertySchema(
+      id: 8,
+      name: r'lastReviewedAt',
+      type: IsarType.long,
+    ),
+    r'messageId': PropertySchema(
+      id: 9,
       name: r'messageId',
       type: IsarType.string,
     ),
     r'plainText': PropertySchema(
-      id: 7,
+      id: 10,
       name: r'plainText',
       type: IsarType.string,
     ),
     r'quotedText': PropertySchema(
-      id: 8,
+      id: 11,
       name: r'quotedText',
       type: IsarType.string,
     ),
-    r'start': PropertySchema(id: 9, name: r'start', type: IsarType.long),
+    r'reviewCount': PropertySchema(
+      id: 12,
+      name: r'reviewCount',
+      type: IsarType.long,
+    ),
+    r'start': PropertySchema(id: 13, name: r'start', type: IsarType.long),
     r'styleType': PropertySchema(
-      id: 10,
+      id: 14,
       name: r'styleType',
       type: IsarType.string,
     ),
-    r'tags': PropertySchema(id: 11, name: r'tags', type: IsarType.stringList),
-    r'topicId': PropertySchema(id: 12, name: r'topicId', type: IsarType.string),
+    r'tags': PropertySchema(id: 15, name: r'tags', type: IsarType.stringList),
+    r'topicId': PropertySchema(id: 16, name: r'topicId', type: IsarType.string),
     r'topicName': PropertySchema(
-      id: 13,
+      id: 17,
       name: r'topicName',
       type: IsarType.string,
     ),
     r'updatedAt': PropertySchema(
-      id: 14,
+      id: 18,
       name: r'updatedAt',
       type: IsarType.long,
     ),
@@ -119,6 +135,19 @@ const KnowledgeEntrySchema = CollectionSchema(
       properties: [
         IndexPropertySchema(
           name: r'createdAt',
+          type: IndexType.value,
+          caseSensitive: false,
+        ),
+      ],
+    ),
+    r'isPinned': IndexSchema(
+      id: 7607338673446676027,
+      name: r'isPinned',
+      unique: false,
+      replace: false,
+      properties: [
+        IndexPropertySchema(
+          name: r'isPinned',
           type: IndexType.value,
           caseSensitive: false,
         ),
@@ -206,15 +235,19 @@ void _knowledgeEntrySerialize(
   writer.writeLong(offsets[3], object.createdAt);
   writer.writeLong(offsets[4], object.end);
   writer.writeString(offsets[5], object.entryId);
-  writer.writeString(offsets[6], object.messageId);
-  writer.writeString(offsets[7], object.plainText);
-  writer.writeString(offsets[8], object.quotedText);
-  writer.writeLong(offsets[9], object.start);
-  writer.writeString(offsets[10], object.styleType);
-  writer.writeStringList(offsets[11], object.tags);
-  writer.writeString(offsets[12], object.topicId);
-  writer.writeString(offsets[13], object.topicName);
-  writer.writeLong(offsets[14], object.updatedAt);
+  writer.writeLong(offsets[6], object.importance);
+  writer.writeBool(offsets[7], object.isPinned);
+  writer.writeLong(offsets[8], object.lastReviewedAt);
+  writer.writeString(offsets[9], object.messageId);
+  writer.writeString(offsets[10], object.plainText);
+  writer.writeString(offsets[11], object.quotedText);
+  writer.writeLong(offsets[12], object.reviewCount);
+  writer.writeLong(offsets[13], object.start);
+  writer.writeString(offsets[14], object.styleType);
+  writer.writeStringList(offsets[15], object.tags);
+  writer.writeString(offsets[16], object.topicId);
+  writer.writeString(offsets[17], object.topicName);
+  writer.writeLong(offsets[18], object.updatedAt);
 }
 
 KnowledgeEntry _knowledgeEntryDeserialize(
@@ -231,15 +264,19 @@ KnowledgeEntry _knowledgeEntryDeserialize(
   object.end = reader.readLongOrNull(offsets[4]);
   object.entryId = reader.readString(offsets[5]);
   object.id = id;
-  object.messageId = reader.readStringOrNull(offsets[6]);
-  object.plainText = reader.readStringOrNull(offsets[7]);
-  object.quotedText = reader.readStringOrNull(offsets[8]);
-  object.start = reader.readLongOrNull(offsets[9]);
-  object.styleType = reader.readStringOrNull(offsets[10]);
-  object.tags = reader.readStringList(offsets[11]) ?? [];
-  object.topicId = reader.readStringOrNull(offsets[12]);
-  object.topicName = reader.readStringOrNull(offsets[13]);
-  object.updatedAt = reader.readLong(offsets[14]);
+  object.importance = reader.readLong(offsets[6]);
+  object.isPinned = reader.readBool(offsets[7]);
+  object.lastReviewedAt = reader.readLongOrNull(offsets[8]);
+  object.messageId = reader.readStringOrNull(offsets[9]);
+  object.plainText = reader.readStringOrNull(offsets[10]);
+  object.quotedText = reader.readStringOrNull(offsets[11]);
+  object.reviewCount = reader.readLong(offsets[12]);
+  object.start = reader.readLongOrNull(offsets[13]);
+  object.styleType = reader.readStringOrNull(offsets[14]);
+  object.tags = reader.readStringList(offsets[15]) ?? [];
+  object.topicId = reader.readStringOrNull(offsets[16]);
+  object.topicName = reader.readStringOrNull(offsets[17]);
+  object.updatedAt = reader.readLong(offsets[18]);
   return object;
 }
 
@@ -263,22 +300,30 @@ P _knowledgeEntryDeserializeProp<P>(
     case 5:
       return (reader.readString(offset)) as P;
     case 6:
-      return (reader.readStringOrNull(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 7:
-      return (reader.readStringOrNull(offset)) as P;
+      return (reader.readBool(offset)) as P;
     case 8:
-      return (reader.readStringOrNull(offset)) as P;
-    case 9:
       return (reader.readLongOrNull(offset)) as P;
+    case 9:
+      return (reader.readStringOrNull(offset)) as P;
     case 10:
       return (reader.readStringOrNull(offset)) as P;
     case 11:
-      return (reader.readStringList(offset) ?? []) as P;
+      return (reader.readStringOrNull(offset)) as P;
     case 12:
-      return (reader.readStringOrNull(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 13:
-      return (reader.readStringOrNull(offset)) as P;
+      return (reader.readLongOrNull(offset)) as P;
     case 14:
+      return (reader.readStringOrNull(offset)) as P;
+    case 15:
+      return (reader.readStringList(offset) ?? []) as P;
+    case 16:
+      return (reader.readStringOrNull(offset)) as P;
+    case 17:
+      return (reader.readStringOrNull(offset)) as P;
+    case 18:
       return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -370,6 +415,14 @@ extension KnowledgeEntryQueryWhereSort
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(
         const IndexWhereClause.any(indexName: r'createdAt'),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterWhere> anyIsPinned() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(
+        const IndexWhereClause.any(indexName: r'isPinned'),
       );
     });
   }
@@ -748,6 +801,58 @@ extension KnowledgeEntryQueryWhere
           includeUpper: includeUpper,
         ),
       );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterWhereClause>
+  isPinnedEqualTo(bool isPinned) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(
+        IndexWhereClause.equalTo(indexName: r'isPinned', value: [isPinned]),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterWhereClause>
+  isPinnedNotEqualTo(bool isPinned) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(
+              IndexWhereClause.between(
+                indexName: r'isPinned',
+                lower: [],
+                upper: [isPinned],
+                includeUpper: false,
+              ),
+            )
+            .addWhereClause(
+              IndexWhereClause.between(
+                indexName: r'isPinned',
+                lower: [isPinned],
+                includeLower: false,
+                upper: [],
+              ),
+            );
+      } else {
+        return query
+            .addWhereClause(
+              IndexWhereClause.between(
+                indexName: r'isPinned',
+                lower: [isPinned],
+                includeLower: false,
+                upper: [],
+              ),
+            )
+            .addWhereClause(
+              IndexWhereClause.between(
+                indexName: r'isPinned',
+                lower: [],
+                upper: [isPinned],
+                includeUpper: false,
+              ),
+            );
+      }
     });
   }
 }
@@ -1452,6 +1557,143 @@ extension KnowledgeEntryQueryFilter
   }
 
   QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  importanceEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.equalTo(property: r'importance', value: value),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  importanceGreaterThan(int value, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.greaterThan(
+          include: include,
+          property: r'importance',
+          value: value,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  importanceLessThan(int value, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.lessThan(
+          include: include,
+          property: r'importance',
+          value: value,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  importanceBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.between(
+          property: r'importance',
+          lower: lower,
+          includeLower: includeLower,
+          upper: upper,
+          includeUpper: includeUpper,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  isPinnedEqualTo(bool value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.equalTo(property: r'isPinned', value: value),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  lastReviewedAtIsNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        const FilterCondition.isNull(property: r'lastReviewedAt'),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  lastReviewedAtIsNotNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        const FilterCondition.isNotNull(property: r'lastReviewedAt'),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  lastReviewedAtEqualTo(int? value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.equalTo(property: r'lastReviewedAt', value: value),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  lastReviewedAtGreaterThan(int? value, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.greaterThan(
+          include: include,
+          property: r'lastReviewedAt',
+          value: value,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  lastReviewedAtLessThan(int? value, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.lessThan(
+          include: include,
+          property: r'lastReviewedAt',
+          value: value,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  lastReviewedAtBetween(
+    int? lower,
+    int? upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.between(
+          property: r'lastReviewedAt',
+          lower: lower,
+          includeLower: includeLower,
+          upper: upper,
+          includeUpper: includeUpper,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
   messageIdIsNull() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
@@ -1924,6 +2166,61 @@ extension KnowledgeEntryQueryFilter
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(
         FilterCondition.greaterThan(property: r'quotedText', value: ''),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  reviewCountEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.equalTo(property: r'reviewCount', value: value),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  reviewCountGreaterThan(int value, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.greaterThan(
+          include: include,
+          property: r'reviewCount',
+          value: value,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  reviewCountLessThan(int value, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.lessThan(
+          include: include,
+          property: r'reviewCount',
+          value: value,
+        ),
+      );
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterFilterCondition>
+  reviewCountBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(
+        FilterCondition.between(
+          property: r'reviewCount',
+          lower: lower,
+          includeLower: includeLower,
+          upper: upper,
+          includeUpper: includeUpper,
+        ),
       );
     });
   }
@@ -2813,6 +3110,47 @@ extension KnowledgeEntryQuerySortBy
     });
   }
 
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  sortByImportance() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'importance', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  sortByImportanceDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'importance', Sort.desc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy> sortByIsPinned() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isPinned', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  sortByIsPinnedDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isPinned', Sort.desc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  sortByLastReviewedAt() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReviewedAt', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  sortByLastReviewedAtDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReviewedAt', Sort.desc);
+    });
+  }
+
   QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy> sortByMessageId() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'messageId', Sort.asc);
@@ -2850,6 +3188,20 @@ extension KnowledgeEntryQuerySortBy
   sortByQuotedTextDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'quotedText', Sort.desc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  sortByReviewCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'reviewCount', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  sortByReviewCountDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'reviewCount', Sort.desc);
     });
   }
 
@@ -3009,6 +3361,47 @@ extension KnowledgeEntryQuerySortThenBy
     });
   }
 
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  thenByImportance() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'importance', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  thenByImportanceDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'importance', Sort.desc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy> thenByIsPinned() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isPinned', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  thenByIsPinnedDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isPinned', Sort.desc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  thenByLastReviewedAt() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReviewedAt', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  thenByLastReviewedAtDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'lastReviewedAt', Sort.desc);
+    });
+  }
+
   QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy> thenByMessageId() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'messageId', Sort.asc);
@@ -3046,6 +3439,20 @@ extension KnowledgeEntryQuerySortThenBy
   thenByQuotedTextDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'quotedText', Sort.desc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  thenByReviewCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'reviewCount', Sort.asc);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QAfterSortBy>
+  thenByReviewCountDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'reviewCount', Sort.desc);
     });
   }
 
@@ -3158,6 +3565,26 @@ extension KnowledgeEntryQueryWhereDistinct
     });
   }
 
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QDistinct>
+  distinctByImportance() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'importance');
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QDistinct> distinctByIsPinned() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'isPinned');
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QDistinct>
+  distinctByLastReviewedAt() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'lastReviewedAt');
+    });
+  }
+
   QueryBuilder<KnowledgeEntry, KnowledgeEntry, QDistinct> distinctByMessageId({
     bool caseSensitive = true,
   }) {
@@ -3179,6 +3606,13 @@ extension KnowledgeEntryQueryWhereDistinct
   }) {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'quotedText', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, KnowledgeEntry, QDistinct>
+  distinctByReviewCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'reviewCount');
     });
   }
 
@@ -3270,6 +3704,25 @@ extension KnowledgeEntryQueryProperty
     });
   }
 
+  QueryBuilder<KnowledgeEntry, int, QQueryOperations> importanceProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'importance');
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, bool, QQueryOperations> isPinnedProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'isPinned');
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, int?, QQueryOperations>
+  lastReviewedAtProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'lastReviewedAt');
+    });
+  }
+
   QueryBuilder<KnowledgeEntry, String?, QQueryOperations> messageIdProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'messageId');
@@ -3285,6 +3738,12 @@ extension KnowledgeEntryQueryProperty
   QueryBuilder<KnowledgeEntry, String?, QQueryOperations> quotedTextProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'quotedText');
+    });
+  }
+
+  QueryBuilder<KnowledgeEntry, int, QQueryOperations> reviewCountProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'reviewCount');
     });
   }
 

@@ -77,6 +77,21 @@ class KnowledgeEntry {
   /// 更新时间戳
   late int updatedAt;
 
+  // ==================== 回顾与记忆 ====================
+
+  /// 回顾次数
+  int reviewCount = 0;
+
+  /// 上次回顾时间戳
+  int? lastReviewedAt;
+
+  /// 重要性评分 (0-5, 0=未评分)
+  int importance = 0;
+
+  /// 是否置顶
+  @Index()
+  bool isPinned = false;
+
   // ==================== 计算属性 ====================
 
   /// 推导类型

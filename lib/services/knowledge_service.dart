@@ -71,9 +71,47 @@ class KnowledgeService {
     return entries.map(KnowledgeItem.fromEntry).toList();
   }
 
+  /// 获取需要回顾的知识项（基于遗忘曲线）
+  Future<List<KnowledgeItem>> getItemsForReview({int count = 10}) async {
+    final entries = await _entryService.getEntriesForReview(count: count);
+    return entries.map(KnowledgeItem.fromEntry).toList();
+  }
+
+  /// 记录一次回顾
+  Future<void> recordReview(String entryId) async {
+    await _entryService.recordReview(entryId);
+  }
+
   /// 获取最近的知识项
   Future<List<KnowledgeItem>> getRecentItems({int count = 10}) async {
     return getAllItems(limit: count);
+  }
+
+  // ==================== 分组查询 ====================
+
+  /// 按 Topic 分组获取知识项
+  Future<Map<String?, List<KnowledgeItem>>> getItemsGroupedByTopic() async {
+    final grouped = await _entryService.getEntriesGroupedByTopic();
+    return grouped.map((key, entries) => MapEntry(
+      key == '__no_source__' ? null : key,
+      entries.map(KnowledgeItem.fromEntry).toList(),
+    ));
+  }
+
+  /// 获取置顶知识项
+  Future<List<KnowledgeItem>> getPinnedItems() async {
+    final entries = await _entryService.getPinnedEntries();
+    return entries.map(KnowledgeItem.fromEntry).toList();
+  }
+
+  /// 切换置顶状态
+  Future<void> togglePin(String entryId) async {
+    await _entryService.togglePin(entryId);
+  }
+
+  /// 更新重要性评分
+  Future<void> updateImportance(String entryId, int importance) async {
+    await _entryService.updateImportance(entryId, importance);
   }
 
   // ==================== 删除操作 ====================
