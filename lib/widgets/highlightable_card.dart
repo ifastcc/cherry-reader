@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:provider/provider.dart';
 import '../models/highlight_data.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../services/highlight_service.dart';
@@ -9,8 +8,8 @@ import '../screens/ai_chat_screen.dart';
 import 'unified_markdown_renderer.dart';
 import 'highlight_style_menu.dart';
 import 'knowledge/quick_capture_sheet.dart';
-import '../providers/tts_provider.dart';
-import '../models/tts_item.dart';
+import 'floating_selection_toolbar.dart';
+import 'package:flutter/services.dart';
 
 /// 统一的可高亮卡片组件
 ///
@@ -686,11 +685,6 @@ class _HighlightableCardState extends State<HighlightableCard> {
   }
 
   Widget _buildHeader() {
-    // 讨论按钮颜色：有讨论时紫色，无讨论时灰色
-    final discussionColor = _discussionCount > 0
-        ? const Color(0xFF8B5CF6)  // 紫色
-        : Colors.grey[400]!;
-
     return Row(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
@@ -702,137 +696,133 @@ class _HighlightableCardState extends State<HighlightableCard> {
           ),
           const Spacer(),
         ],
-
-        // TTS 朗读按钮
-        // 【性能优化】使用 Selector 只监听 hasValidConfig，避免 TTS 状态变化时重建
-        Selector<TtsProvider, bool>(
-          selector: (_, tts) => tts.hasValidConfig,
-          builder: (context, hasValidConfig, _) {
-            if (!hasValidConfig) return const SizedBox.shrink();
-            return GestureDetector(
-              onTap: () {
-                final tts = Provider.of<TtsProvider>(context, listen: false);
-                final item = TtsItem(
-                  id: widget.messageId,
-                  text: widget.content,
-                  title: widget.modelName,
-                  author: widget.modelName,
-                );
-                tts.setPlaylist([item]);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('开始朗读...'), duration: Duration(seconds: 1)),
-                );
-              },
-              child: Icon(Icons.volume_up_rounded, size: 16, color: Colors.grey[400]),
-            );
-          },
-        ),
-        // 间距
-        const SizedBox(width: 10),
-        // 讨论按钮（带数量角标）
-        GestureDetector(
-          onTap: _showDiscussionSheet,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Icon(
-                _discussionCount > 0
-                    ? Icons.chat_bubble  // 有讨论时实心
-                    : Icons.chat_bubble_outline,  // 无讨论时空心
-                size: 16,
-                color: discussionColor,
-              ),
-              // 数量角标（仅当数量 > 0 时显示）
-              if (_discussionCount > 0)
-                Positioned(
-                  right: -6,
-                  top: -6,
-                  child: Container(
-                    padding: const EdgeInsets.all(3),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF8B5CF6),
-                      shape: BoxShape.circle,
-                    ),
-                    constraints: const BoxConstraints(
-                      minWidth: 14,
-                      minHeight: 14,
-                    ),
-                    child: Text(
-                      '$_discussionCount',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
       ],
     );
   }
 
-  Widget _buildContent() {
-    return SelectionArea(
-      onSelectionChanged: (selection) {
-        if (selection != null && selection.plainText.isNotEmpty) {
-          if (_selectedText == selection.plainText) return;
+  // ... (existing state variables)
+  
+  // 【新增】浮动工具栏 Overlay
+  OverlayEntry? _toolbarOverlay;
+  Offset? _lastPointerPosition;
 
-          SchedulerBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              setState(() {
-                _selectedText = selection.plainText;
-                final start = widget.content.indexOf(_selectedText);
-                if (start != -1) {
-                  _selectionStart = start;
-                  _selectionEnd = start + _selectedText.length;
-                }
-              });
-            }
-          });
+  @override
+  void dispose() {
+    _hideFloatingToolbar();
+    super.dispose();
+  }
+
+  void _hideFloatingToolbar() {
+    _toolbarOverlay?.remove();
+    _toolbarOverlay = null;
+  }
+
+  void _showFloatingToolbar(Offset position) {
+    _hideFloatingToolbar();
+
+    _toolbarOverlay = OverlayEntry(
+      builder: (context) => FloatingSelectionToolbar(
+        position: position,
+        onCopy: () {
+          Clipboard.setData(ClipboardData(text: _selectedText));
+          _hideFloatingToolbar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('已复制到剪贴板'), duration: Duration(seconds: 1)),
+          );
+        },
+        onHighlight: () {
+          _addHighlightFromSelection(_selectedText, _selectionStart, _selectionEnd);
+          _hideFloatingToolbar();
+        },
+        highlightColor: _currentHighlightColor,
+      ),
+    );
+
+    Overlay.of(context).insert(_toolbarOverlay!);
+  }
+
+  // ...
+
+  Widget _buildContent() {
+    return Listener(
+      onPointerUp: (event) {
+        _lastPointerPosition = event.position;
+        // 如果松开鼠标时有选中文本，延迟显示工具栏（确保 selection 状态已更新）
+        if (_selectedText.isNotEmpty) {
+           // 稍微延迟以避免冲突
+           Future.delayed(const Duration(milliseconds: 100), () {
+             if (mounted && _selectedText.isNotEmpty) {
+               _showFloatingToolbar(event.position);
+             }
+           });
         }
       },
-      contextMenuBuilder: (context, selectableRegionState) {
-        final buttonItems = selectableRegionState.contextMenuButtonItems;
-
-        return AdaptiveTextSelectionToolbar.buttonItems(
-          anchors: selectableRegionState.contextMenuAnchors,
-          buttonItems: [
-            // 高亮按钮
-            ContextMenuButtonItem(
-              onPressed: () {
-                if (_selectedText.isNotEmpty) {
-                  _addHighlightFromSelection(
-                    _selectedText,
-                    _selectionStart,
-                    _selectionEnd,
-                  );
-                }
-                ContextMenuController.removeAny();
-              },
-              type: ContextMenuButtonType.custom,
-              label: '高亮',
-            ),
-            // 标注按钮（打开快速记录弹窗）
-            ContextMenuButtonItem(
-              onPressed: () {
-                if (_selectedText.isNotEmpty) {
+      // 也可以监听 onPointerDown 隐藏工具栏
+      onPointerDown: (_) => _hideFloatingToolbar(),
+      child: SelectionArea(
+        onSelectionChanged: (selection) {
+          if (selection != null) {
+            final newSelectedText = selection.plainText;
+            if (newSelectedText != _selectedText) {
+               // 状态更新逻辑保持不变
+               if (newSelectedText.isEmpty) {
+                  _hideFloatingToolbar();
+               }
+               
+                SchedulerBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    setState(() {
+                      _selectedText = newSelectedText;
+                      // ... index calculation
+                      final start = widget.content.indexOf(_selectedText);
+                      if (start != -1) {
+                         _selectionStart = start;
+                         _selectionEnd = start + _selectedText.length;
+                      }
+                    });
+                  }
+                });
+            }
+          }
+        },
+        // 保留原有的 contextMenuBuilder 作为备用（右键菜单）
+        contextMenuBuilder: (context, selectableRegionState) {
+          final buttonItems = selectableRegionState.contextMenuButtonItems;
+          return AdaptiveTextSelectionToolbar.buttonItems(
+            anchors: selectableRegionState.contextMenuAnchors,
+            buttonItems: [
+              ContextMenuButtonItem(
+                onPressed: () {
+                  if (_selectedText.isNotEmpty) {
+                    _addHighlightFromSelection(
+                      _selectedText,
+                      _selectionStart,
+                      _selectionEnd,
+                    );
+                  }
                   ContextMenuController.removeAny();
-                  _showQuickCaptureSheet();
-                }
-              },
-              type: ContextMenuButtonType.custom,
-              label: '标注',
-            ),
-            ...buttonItems,
-          ],
-        );
-      },
-      // 【性能优化】使用 memoized Markdown widget
-      child: _getMemoizedMarkdownWidget(),
+                  _hideFloatingToolbar(); 
+                },
+                type: ContextMenuButtonType.custom,
+                label: '高亮',
+              ),
+              ContextMenuButtonItem(
+                onPressed: () {
+                  if (_selectedText.isNotEmpty) {
+                    ContextMenuController.removeAny();
+                    _hideFloatingToolbar();
+                    _showQuickCaptureSheet();
+                  }
+                },
+                type: ContextMenuButtonType.custom,
+                label: '标注',
+              ),
+              ...buttonItems,
+            ],
+          );
+        },
+        child: _getMemoizedMarkdownWidget(),
+      ),
     );
   }
 
@@ -881,40 +871,4 @@ class _HighlightableCardState extends State<HighlightableCard> {
     );
   }
 
-  Widget _buildHighlightTags() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Wrap(
-        spacing: 6,
-        runSpacing: 6,
-        children: _highlights.map((h) {
-          final color = Color(h.color);
-          return GestureDetector(
-            onTap: () => _showHighlightMenu(h),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: color.withValues(alpha: 0.4)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.bookmark, size: 12, color: color),
-                  const SizedBox(width: 4),
-                  Text(
-                    h.text.length > 20
-                        ? '${h.text.substring(0, 20)}...'
-                        : h.text,
-                    style: TextStyle(fontSize: 11, color: color),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
 }

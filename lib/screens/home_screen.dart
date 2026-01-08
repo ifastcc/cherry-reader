@@ -677,18 +677,23 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// 保存到缓存
+  /// 保存到缓存 (创建新版本)
   Future<void> _saveToCache(CherryExtractor extractor, String filePath) async {
     try {
-      final importManager = DataImportManager(RepositoryProvider.instance.database);
-      await importManager.importData(
-        extractor,
-        onProgress: (progress, message) {
-          debugPrint('📦 导入进度: ${(progress * 100).toInt()}% - $message');
-        },
-      );
+      final file = File(filePath);
+      final modifiedAt = await file.lastModified();
+      final filename = filePath.split(Platform.pathSeparator).last;
+
+      debugPrint('📦 启动后台导入以创建版本: $filename');
+      // 不等待其完成，让它在后台运行，UI 通过 Stream 更新状态
+      BackgroundImportService.instance.importInBackground(
+        extractor: extractor,
+        sourceFileName: filename,
+        sourceModifiedAt: modifiedAt,
+      ).ignore();
+      
     } catch (e) {
-      debugPrint('⚠️ 保存缓存失败: $e');
+      debugPrint('⚠️ 保存缓存请求失败: $e');
     }
   }
 
@@ -997,24 +1002,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       // 保存数据到 Isar 数据库
       if (saveCache) {
+        await _saveToCache(extractor, filePath);
+        // 保存时间戳
         try {
-          final importManager = DataImportManager(RepositoryProvider.instance.database);
-          final result = await importManager.importData(
-            extractor,
-            onProgress: (progress, message) {
-              debugPrint('📦 导入进度: ${(progress * 100).toInt()}% - $message');
-            },
-          );
-
-          if (result.success) {
-            await DataPersistenceManager.saveFileTimestamp(filePath);
-            debugPrint('✅ 已保存话题缓存 (${result.importedTopics} 话题, ${result.importedMessages} 消息)');
-          } else {
-            debugPrint('⚠️ 导入失败: ${result.error}');
-          }
-        } catch (e) {
-          debugPrint('⚠️  保存缓存失败: $e');
-        }
+           await DataPersistenceManager.saveFileTimestamp(filePath);
+        } catch (_) {}
       }
       return true; // 加载成功
     } catch (e, stackTrace) {
@@ -1425,10 +1417,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 构建 SliverAppBar (Immersive Header)
   Widget _buildSliverAppBar() {
     return SliverAppBar(
-      title: const Text(
-          'Cherry Reader', 
-          style: TextStyle(fontWeight: FontWeight.bold) 
-      ),
+      title: _buildStatusBadge(),
       centerTitle: false,
       pinned: false, // 不固定，随滚动滑出
       floating: true, // 向上滚动立即出现
@@ -1436,21 +1425,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       scrolledUnderElevation: 0,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       actions: [
-        // 状态徽章 (Action size)
-         Container(
-           margin: const EdgeInsets.only(right: 8),
-           alignment: Alignment.center,
-           child: _buildStatusBadge(),
-         ),
-        
-        // 视图模式切换按钮
-        IconButton(
-          icon: Icon(
-            _viewMode == HomeViewMode.tree ? Icons.view_timeline_outlined : Icons.account_tree_outlined,
-          ),
-          onPressed: (_isLoading || _topicIndex == null) ? null : _toggleViewMode,
-          tooltip: _viewMode == HomeViewMode.tree ? '切换到时间线视图' : '切换到分组视图',
-        ),
+
         // 搜索按钮
         IconButton(
           icon: const Icon(Icons.search),
@@ -1464,6 +1439,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           },
           tooltip: '搜索',
         ),
+
         // 设置按钮
          IconButton(
           icon: const Icon(Icons.settings_outlined),
@@ -1473,6 +1449,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               MaterialPageRoute(builder: (context) => const SettingsScreen()),
             );
             if (mounted) {
+              await _loadViewMode();
               _initAndLoad();
             }
           },
@@ -1640,6 +1617,19 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 显示版本管理对话框
   Future<void> _showVersionManager() async {
     final versions = await VersionService.instance.listVersions();
+    
+    // 获取本地备份文件，找出未导入的
+    List<LocalBackupInfo> unimportedBackups = [];
+    try {
+      final config = await LocalFolderSyncService.loadConfig();
+      if (config.isValid) {
+        final backups = await LocalFolderSyncService.listBackupFiles(config);
+        final importedNames = versions.map((v) => v.sourceFileName).toSet();
+        unimportedBackups = backups.where((b) => !importedNames.contains(b.name)).toList();
+      }
+    } catch (e) {
+      debugPrint('⚠️ 获取备份文件失败: $e');
+    }
 
     if (!mounted) return;
 
@@ -1650,9 +1640,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.5,
+        initialChildSize: 0.6,
         minChildSize: 0.3,
-        maxChildSize: 0.8,
+        maxChildSize: 0.9,
         expand: false,
         builder: (context, scrollController) {
           return Column(
@@ -1676,26 +1666,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
-                    // 锁定开关
-                    if (_activeVersion != null)
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _activeVersion!.isLocked ? Icons.lock : Icons.lock_open,
-                            size: 16,
-                            color: _activeVersion!.isLocked ? Colors.orange : Colors.grey,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            _activeVersion!.isLocked ? '已锁定' : '自动更新',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _activeVersion!.isLocked ? Colors.orange : Colors.grey,
-                            ),
-                          ),
-                        ],
-                      ),
                     IconButton(
                       icon: const Icon(Icons.close),
                       onPressed: () => Navigator.pop(context),
@@ -1704,86 +1674,27 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
 
-              // 版本列表
+              // 列表内容
               Expanded(
-                child: versions.isEmpty
+                child: versions.isEmpty && unimportedBackups.isEmpty
                     ? const Center(child: Text('暂无版本数据'))
-                    : ListView.builder(
+                    : ListView(
                         controller: scrollController,
-                        itemCount: versions.length,
-                        itemBuilder: (context, index) {
-                          final version = versions[index];
-                          final isActive = version.status == VersionStatus.active;
-
-                          return ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: isActive
-                                  ? Colors.green[100]
-                                  : Colors.grey[100],
-                              child: Icon(
-                                isActive ? Icons.check : Icons.archive,
-                                color: isActive ? Colors.green : Colors.grey,
-                                size: 20,
-                              ),
+                        children: [
+                          if (versions.isNotEmpty) ...[
+                            _buildSectionHeader('已导入版本 (${versions.length})'),
+                            ...versions.map((version) => _buildVersionItem(version)),
+                          ],
+                          
+                          if (unimportedBackups.isNotEmpty) ...[
+                            _buildSectionHeader('未导入备份 (${unimportedBackups.length})', 
+                              action: '点击导入',
                             ),
-                            title: Row(
-                              children: [
-                                Text(version.displayName),
-                                if (isActive)
-                                  Container(
-                                    margin: const EdgeInsets.only(left: 8),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.green[50],
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      '当前',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.green[700],
-                                      ),
-                                    ),
-                                  ),
-                                if (version.isLocked)
-                                  Container(
-                                    margin: const EdgeInsets.only(left: 4),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.orange[50],
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      '锁定',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.orange[700],
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            subtitle: Text(
-                              '${version.topicCount} 话题 • ${version.formattedSize}',
-                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                            ),
-                            trailing: isActive
-                                ? null
-                                : TextButton(
-                                    onPressed: () async {
-                                      Navigator.pop(context);
-                                      await _activateVersion(version);
-                                    },
-                                    child: const Text('切换'),
-                                  ),
-                          );
-                        },
+                            ...unimportedBackups.map((backup) => _buildBackupItem(backup)),
+                          ],
+                          
+                          const SizedBox(height: 20),
+                        ],
                       ),
               ),
             ],
@@ -1791,6 +1702,146 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         },
       ),
     );
+  }
+
+  Widget _buildSectionHeader(String title, {String? action}) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[600],
+            ),
+          ),
+          if (action != null)
+             Text(
+              action,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.blue[600],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVersionItem(DataVersion version) {
+    final isActive = version.status == VersionStatus.active;
+    
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: isActive ? Colors.green[100] : Colors.grey[100],
+        child: Icon(
+          isActive ? Icons.check : Icons.archive_outlined,
+          color: isActive ? Colors.green : Colors.grey,
+          size: 20,
+        ),
+      ),
+      title: Row(
+        children: [
+          Expanded(child: Text(version.displayName, overflow: TextOverflow.ellipsis)),
+          if (isActive)
+            Container(
+              margin: const EdgeInsets.only(left: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '当前',
+                style: TextStyle(fontSize: 10, color: Colors.green[700]),
+              ),
+            ),
+          if (version.isLocked)
+            Container(
+              margin: const EdgeInsets.only(left: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                '锁定',
+                style: TextStyle(fontSize: 10, color: Colors.orange[700]),
+              ),
+            ),
+        ],
+      ),
+      subtitle: Text(
+        '${version.topicCount} 话题 · ${version.messageCount} 消息 · ${version.formattedSize}',
+        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+      ),
+      trailing: isActive
+          ? null
+          : TextButton(
+              onPressed: () async {
+                Navigator.pop(context); // 关闭弹窗
+                await _activateVersion(version);
+              },
+              child: const Text('切换'),
+            ),
+    );
+  }
+
+  Widget _buildBackupItem(LocalBackupInfo backup) {
+    return ListTile(
+        leading: CircleAvatar(
+          backgroundColor: Colors.blue[50],
+          child: Icon(Icons.file_upload_outlined, color: Colors.blue[400], size: 20),
+        ),
+        title: Text(backup.displayName, overflow: TextOverflow.ellipsis),
+        subtitle: Text(
+          '文件 · ${backup.formattedSize}',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+        ),
+        trailing: TextButton(
+          onPressed: () {
+            Navigator.pop(context);
+            _importBackupAsVersion(backup);
+          },
+          child: const Text('导入'),
+        ),
+      );
+  }
+
+  // 导入备份为新版本
+  Future<void> _importBackupAsVersion(LocalBackupInfo backup) async {
+    try {
+      // 1. 先异步加载 Extractor (快速)
+      // 使用 loadInBackground 在 Isolate 中解析，避免卡顿
+      // 注意：这里我们使用 zipPath 初始化
+      // BackgroundImportService 需要一个已加载的 extractor
+      
+      // 显示加载中提示
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('正在准备导入: ${backup.displayName}...')),
+      );
+
+      // 启动后台解析
+      final extractor = await CherryExtractor.loadInBackground(zipPath: backup.path);
+      
+      // 2. 启动后台导入
+      BackgroundImportService.instance.importInBackground(
+        extractor: extractor,
+        sourceFileName: backup.name,
+        sourceModifiedAt: backup.modifiedTime,
+      ).ignore();
+      
+    } catch (e) {
+      debugPrint('❌ 准备导入失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+           SnackBar(content: Text('无法导入: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   /// 激活指定版本

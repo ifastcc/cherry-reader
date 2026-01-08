@@ -65,6 +65,29 @@ typedef HighlightBuilder =
 /// A builder function for the image.
 typedef ImageBuilder = Widget Function(BuildContext context, String imageUrl);
 
+/// Callback for highlight range tap events.
+typedef HighlightRangeTapCallback = void Function(String id, Offset position);
+
+/// Data class for highlight ranges (used for render-layer highlighting).
+///
+/// This is used to apply highlights directly during rendering,
+/// avoiding Markdown syntax conflicts.
+class HighlightRangeData {
+  final String? id;
+  final int start;
+  final int end;
+  final Color color;
+  final String? styleType; // 'background' or 'underline'
+
+  const HighlightRangeData({
+    this.id,
+    required this.start,
+    required this.end,
+    required this.color,
+    this.styleType = 'background',
+  });
+}
+
 /// A configuration class for the GPT Markdown component.
 ///
 /// The [GptMarkdownConfig] class is used to configure the GPT Markdown component.
@@ -93,6 +116,8 @@ class GptMarkdownConfig {
     this.components,
     this.inlineComponents,
     this.tableBuilder,
+    this.highlightRanges,
+    this.onHighlightRangeTap,
   });
 
   /// The direction of the text.
@@ -155,6 +180,13 @@ class GptMarkdownConfig {
   /// The table builder.
   final TableBuilder? tableBuilder;
 
+  /// Highlight ranges for render-layer highlighting.
+  /// These are applied directly to TextSpans during rendering.
+  final List<HighlightRangeData>? highlightRanges;
+
+  /// Callback when a highlight range is tapped.
+  final HighlightRangeTapCallback? onHighlightRangeTap;
+
   /// A copy of the configuration with the specified parameters.
   GptMarkdownConfig copyWith({
     TextStyle? style,
@@ -177,6 +209,8 @@ class GptMarkdownConfig {
     final List<MarkdownComponent>? components,
     final List<MarkdownComponent>? inlineComponents,
     final TableBuilder? tableBuilder,
+    final List<HighlightRangeData>? highlightRanges,
+    final HighlightRangeTapCallback? onHighlightRangeTap,
   }) {
     return GptMarkdownConfig(
       style: style ?? this.style,
@@ -199,6 +233,8 @@ class GptMarkdownConfig {
       components: components ?? this.components,
       inlineComponents: inlineComponents ?? this.inlineComponents,
       tableBuilder: tableBuilder ?? this.tableBuilder,
+      highlightRanges: highlightRanges ?? this.highlightRanges,
+      onHighlightRangeTap: onHighlightRangeTap ?? this.onHighlightRangeTap,
     );
   }
 

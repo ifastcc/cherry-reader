@@ -26,6 +26,12 @@ export 'custom_highlight.dart';
 
 /// This widget create a full markdown widget as a column view.
 class GptMarkdown extends StatelessWidget {
+  /// The list of highlight ranges for render-layer highlighting.
+  final List<HighlightRangeData>? highlightRanges;
+
+  /// Callback when a highlight range is tapped.
+  final HighlightRangeTapCallback? onHighlightRangeTap;
+
   const GptMarkdown(
     this.data, {
     super.key,
@@ -50,6 +56,8 @@ class GptMarkdown extends StatelessWidget {
     this.components,
     this.inlineComponents,
     this.useDollarSignsForLatex = false,
+    this.highlightRanges,
+    this.onHighlightRangeTap,
   });
 
   /// The direction of the text.
@@ -213,6 +221,8 @@ class GptMarkdown extends StatelessWidget {
           components: components,
           inlineComponents: inlineComponents,
           tableBuilder: tableBuilder,
+          highlightRanges: highlightRanges,
+          onHighlightRangeTap: onHighlightRangeTap,
         ),
       ),
     );

@@ -8,7 +8,6 @@ class FloatingSelectionToolbar extends StatelessWidget {
   final Offset position;
   final VoidCallback? onCopy;
   final VoidCallback? onHighlight;
-  final VoidCallback? onShare;
   final Color? highlightColor;
   final bool showHighlightOptions;
 
@@ -17,7 +16,6 @@ class FloatingSelectionToolbar extends StatelessWidget {
     required this.position,
     this.onCopy,
     this.onHighlight,
-    this.onShare,
     this.highlightColor,
     this.showHighlightOptions = false,
   }) : super(key: key);
@@ -32,8 +30,8 @@ class FloatingSelectionToolbar extends StatelessWidget {
     double top = position.dy;
 
     // 工具栏宽度估算
-    const toolbarWidth = 200.0;
-    const toolbarHeight = 48.0;
+    const toolbarWidth = 180.0;
+    const toolbarHeight = 44.0;
 
     // 水平边界检查
     if (left + toolbarWidth > screenSize.width - 16) {
@@ -54,40 +52,61 @@ class FloatingSelectionToolbar extends StatelessWidget {
     return Positioned(
       left: left,
       top: top,
-      child: Material(
-        elevation: 8,
-        borderRadius: BorderRadius.circular(8),
-        color: const Color(0xFF2a2a34),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 复制按钮
-              if (onCopy != null)
-                _ToolbarButton(
-                  icon: Icons.copy,
-                  label: '复制',
-                  onPressed: onCopy!,
-                ),
-
-              // 高亮按钮
-              if (onHighlight != null)
-                _ToolbarButton(
-                  icon: Icons.highlight,
-                  label: '高亮',
-                  onPressed: onHighlight!,
-                  color: highlightColor,
-                ),
-
-              // 分享按钮 (可选)
-              if (onShare != null)
-                _ToolbarButton(
-                  icon: Icons.share,
-                  label: '分享',
-                  onPressed: onShare!,
-                ),
+      child: Container(
+        decoration: BoxDecoration(
+          // 渐变背景 - 更现代
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF3a3a48),
+              Color(0xFF2a2a34),
             ],
+          ),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+              spreadRadius: 2,
+            ),
+            BoxShadow(
+              color: Colors.white.withOpacity(0.05),
+              blurRadius: 1,
+              offset: const Offset(0, -1),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Material(
+            color: Colors.transparent,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 复制按钮
+                  if (onCopy != null)
+                    _ToolbarButton(
+                      icon: Icons.copy_rounded,
+                      label: '复制',
+                      onPressed: onCopy!,
+                    ),
+
+                  // 高亮按钮
+                  if (onHighlight != null)
+                    _ToolbarButton(
+                      icon: Icons.edit_rounded,
+                      label: '高亮',
+                      onPressed: onHighlight!,
+                      iconColor: const Color(0xFFFFD54F), // 明亮的金黄色
+                      labelColor: const Color(0xFFFFD54F),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -100,39 +119,45 @@ class _ToolbarButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
-  final Color? color;
+  final Color? iconColor;
+  final Color? labelColor;
 
   const _ToolbarButton({
     Key? key,
     required this.icon,
     required this.label,
     required this.onPressed,
-    this.color,
+    this.iconColor,
+    this.labelColor,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 18, color: color ?? Colors.white),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: color != null ? Colors.black87 : Colors.white,
-                ),
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(8),
+      splashColor: Colors.white.withOpacity(0.1),
+      highlightColor: Colors.white.withOpacity(0.05),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: iconColor ?? Colors.white.withOpacity(0.9),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: labelColor ?? Colors.white.withOpacity(0.9),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

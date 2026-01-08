@@ -88,6 +88,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _isLoading = true;
   bool _obscureWebdavPassword = true;
+  String _currentViewMode = 'timeline';
 
   @override
   void initState() {
@@ -196,6 +197,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         dotenv.env['OPENAI_MODEL'] ??
         'gpt-4-turbo-preview';
 
+    // 加载视图模式
+    final viewMode = prefs.getString('home_view_mode') ?? 'timeline';
+
     // 加载 WebDAV 配置
     final loadMode = await WebDavService.getLoadMode();
     final webdavConfig = await WebDavService.loadConfig();
@@ -213,6 +217,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     setState(() {
+      _currentViewMode = viewMode;
       _apiUrlController.text = apiUrl;
       _apiKeyController.text = apiKey;
       _modelController.text = model;
@@ -250,62 +255,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('设置'),
+        centerTitle: true,
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // ========== 数据源 ==========
-                    _buildSectionHeader('数据源', Icons.folder_open),
-                    _buildWebDavSection(),
+          : Form(
+              key: _formKey,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  // ========== 界面设置 ==========
+                  _buildSectionHeader('界面设置', Icons.dashboard_customize_outlined),
+                  _buildInterfaceSection(),
+                  const SizedBox(height: 24),
+
+                  // ========== 数据与同步 ==========
+                  _buildSectionHeader('数据与同步', Icons.cloud_sync_outlined),
+                  _buildWebDavSection(),
+                  const SizedBox(height: 12),
+                  _buildVersionManagementSection(),
+                  const SizedBox(height: 24),
+
+                  // ========== 知识管理 ==========
+                  _buildSectionHeader('知识管理', Icons.psychology),
+                  _buildPerspectiveManagementSection(),
+                  const SizedBox(height: 24),
+
+                  // ========== 智能模型 ==========
+                  _buildSectionHeader('智能模型', Icons.auto_awesome),
+                  _buildProviderManagementCard(),
+                  const SizedBox(height: 12),
+                  _buildAIPreferencesCard(),
+                  const SizedBox(height: 24),
+
+                  // ========== 语音服务 ==========
+                  _buildSectionHeader('语音服务', Icons.record_voice_over),
+                  _buildTtsSettingsSection(),
+                  const SizedBox(height: 24),
+
+                  // ========== 高级设置 ==========
+                  _buildSectionHeader('高级设置', Icons.build),
+                  if (PlatformUtils.isDesktop) ...[
+                    _buildMCPServerSection(),
                     const SizedBox(height: 12),
-                    _buildVersionManagementSection(),
-
-                    const SizedBox(height: 24),
-
-                    // ========== AI 服务 ==========
-                    _buildSectionHeader('AI 服务', Icons.auto_awesome),
-                    _buildProviderManagementCard(),
-                    const SizedBox(height: 12),
-                    _buildAIPreferencesCard(),
-
-                    const SizedBox(height: 24),
-
-                    // ========== 洞察视角 ==========
-                    _buildSectionHeader('洞察视角', Icons.psychology),
-                    _buildPerspectiveManagementSection(),
-
-                    const SizedBox(height: 24),
-
-                    // ========== 语音服务 ==========
-                    _buildSectionHeader('语音服务', Icons.record_voice_over),
-                    _buildTtsSettingsSection(),
-
-                    const SizedBox(height: 24),
-
-                    // ========== 高级 ==========
-                    _buildSectionHeader('高级', Icons.build),
-                    // MCP Server（仅桌面端）
-                    if (PlatformUtils.isDesktop) ...[
-                      _buildMCPServerSection(),
-                      const SizedBox(height: 12),
-                    ],
-                    _buildDataManagementSection(),
-
-                    const SizedBox(height: 24),
-
-                    // ========== 关于 ==========
-                    _buildSectionHeader('关于', Icons.info_outline),
-                    _buildAboutSection(),
-                    const SizedBox(height: 12),
-                    _buildFeedbackSection(),
                   ],
-                ),
+                  _buildDataManagementSection(),
+                  const SizedBox(height: 24),
+
+                  // ========== 关于 ==========
+                  _buildSectionHeader('关于', Icons.info_outline),
+                  _buildAboutSection(),
+                  const SizedBox(height: 12),
+                  _buildFeedbackSection(),
+                  
+                  const SizedBox(height: 48),
+                ],
               ),
             ),
     );
@@ -751,6 +755,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         );
       },
+    );
+  }
+
+  /// 构建界面设置部分
+  Widget _buildInterfaceSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('首页视图模式', style: TextStyle(fontWeight: FontWeight.w500)),
+            const SizedBox(height: 12),
+            SegmentedButton<String>(
+              segments: const [
+                 ButtonSegment(
+                   value: 'timeline', 
+                   label: Text('时间线'), 
+                   icon: Icon(Icons.view_timeline_outlined)
+                 ),
+                 ButtonSegment(
+                   value: 'tree', 
+                   label: Text('话题分组'), 
+                   icon: Icon(Icons.account_tree_outlined)
+                 ),
+              ],
+              selected: {_currentViewMode},
+              onSelectionChanged: (Set<String> newSelection) async {
+                 final mode = newSelection.first;
+                 setState(() => _currentViewMode = mode);
+                 final prefs = await SharedPreferences.getInstance();
+                 await prefs.setString('home_view_mode', mode);
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 

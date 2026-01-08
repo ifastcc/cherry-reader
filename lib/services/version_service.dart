@@ -93,9 +93,11 @@ class VersionService {
   }
 
   /// 加载上次活跃的版本
+  /// 加载上次活跃的版本
   Future<void> _loadActiveVersion() async {
     final prefs = await SharedPreferences.getInstance();
     final savedVersionId = prefs.getString(_activeVersionKey);
+    DataVersion? targetVersion;
 
     if (savedVersionId != null) {
       // 检查该版本是否存在且可用
@@ -103,24 +105,44 @@ class VersionService {
       if (version != null &&
           (version.status == VersionStatus.ready ||
               version.status == VersionStatus.active)) {
-        await _openVersionIsar(version);
-        _activeVersionId = savedVersionId;
-        return;
+        targetVersion = version;
       }
     }
 
-    // 尝试加载最新的可用版本
-    final versions = await listVersions();
-    final readyVersions = versions
-        .where((v) =>
-            v.status == VersionStatus.ready || v.status == VersionStatus.active)
-        .toList()
-      ..sort((a, b) => b.importedAt.compareTo(a.importedAt));
+    // 如果没找到保存的版本，尝试加载最新的可用版本
+    if (targetVersion == null) {
+      final versions = await listVersions();
+      final readyVersions = versions
+          .where((v) =>
+              v.status == VersionStatus.ready || v.status == VersionStatus.active)
+          .toList()
+        ..sort((a, b) => b.importedAt.compareTo(a.importedAt));
 
-    if (readyVersions.isNotEmpty) {
-      await _openVersionIsar(readyVersions.first);
-      _activeVersionId = readyVersions.first.versionId;
+      if (readyVersions.isNotEmpty) {
+        targetVersion = readyVersions.first;
+      }
+    }
+
+    if (targetVersion != null) {
+      await _openVersionIsar(targetVersion);
+      _activeVersionId = targetVersion.versionId;
       await prefs.setString(_activeVersionKey, _activeVersionId!);
+
+      // 关键修复：确保数据库状态与内存状态同步
+      // 1. 将当前版本标记为 active
+      // 2. 将其他所有 active 版本重置为 ready
+      final allVersions = await listVersions();
+      for (final v in allVersions) {
+        if (v.versionId == targetVersion.versionId) {
+          if (v.status != VersionStatus.active) {
+            await _saveVersionMetadata(
+                v.copyWith(status: VersionStatus.active));
+          }
+        } else if (v.status == VersionStatus.active) {
+          await _saveVersionMetadata(
+              v.copyWith(status: VersionStatus.ready));
+        }
+      }
     }
   }
 
@@ -185,7 +207,7 @@ class VersionService {
     final isar = await Isar.open(
       _importSchemas,
       directory: dirPath,
-      name: 'imported',
+      name: 'importing_$versionId',
       inspector: kDebugMode,
     );
 

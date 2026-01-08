@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
@@ -7,6 +8,7 @@ import 'cherry_extractor.dart';
 import 'insight_service.dart';
 import 'version_service.dart';
 import 'versioned_data_import_service.dart';
+import '../models/domain/data_version.dart';
 
 /// 导入阶段
 enum ImportPhase {
@@ -143,6 +145,52 @@ class BackgroundImportService {
     _updateStatus(ImportStatus.importing('准备导入...'));
 
     try {
+      // 0. 【去重检查】检查是否已存在相同的版本
+      // 如果存在且状态正常，直接复用，不创建新版本
+      final existingVersions = await VersionService.instance.listVersions();
+      // 容差 2 秒，避免文件系统时间精度差异
+      final existing = existingVersions.where((v) =>
+          v.sourceFileName == sourceFileName &&
+          v.sourceModifiedAt.difference(sourceModifiedAt).abs().inSeconds < 2 &&
+          (v.status == VersionStatus.ready || v.status == VersionStatus.active));
+
+      if (existing.isNotEmpty) {
+        final targetVersion = existing.first;
+        
+        // 【健壮性检查】确保目标版本的数据库文件有效
+        final dbFile = File(targetVersion.isarPath);
+        bool isValid = await dbFile.exists();
+        if (isValid) {
+          final size = await dbFile.length();
+          if (size < 1024) { // 小于 1KB 可能是空库或头部损坏
+            isValid = false;
+          }
+        }
+        
+        if (isValid) {
+          debugPrint('♻️ 发现已存在的版本，跳过导入直接复用: ${targetVersion.versionId}');
+          
+          _updateStatus(ImportStatus.importing('正在切换到已存在的版本...'));
+          
+          // 直接尝试激活
+          final activated = await VersionService.instance.activateVersion(
+            targetVersion.versionId,
+            force: false, // 尊重锁定设置
+          );
+          
+          if (activated) {
+            _updateStatus(ImportStatus.completed(targetVersion.versionId));
+          } else {
+            // 如果激活失败（如因为锁定），也视为完成
+            _updateStatus(ImportStatus.completed(targetVersion.versionId));
+          }
+          return;
+        } else {
+           debugPrint('⚠️ 发现已存在版本 ${targetVersion.versionId} 但数据库文件无效，将重新导入');
+           // 这里可以选择是否清理旧版本，但为了安全，直接创建新版本（ID是基于时间的，不会冲突）
+        }
+      }
+
       // 1. 创建新版本
       _updateStatus(ImportStatus.importing('创建新版本...'));
       final (version, isar) = await VersionService.instance.createVersion(
@@ -172,6 +220,51 @@ class BackgroundImportService {
         topicCount: result.importedTopics,
         messageCount: result.importedMessages,
       );
+
+      // 【关键修复】激活前必须关闭当前的 Isar 实例，否则会因为文件锁导致 "Instance has already been opened"
+      if (_importIsar != null && _importIsar!.isOpen) {
+        await _importIsar!.close();
+        _importIsar = null;
+      }
+
+      // 【关键修复】重命名数据库文件
+      // CreateVersion 使用 name='importing_$versionId'，生成 'importing_$versionId.isar'
+      // ActivateVersion 使用 name='imported'，期望 'imported.isar'
+      // 所以必须重命名文件
+      try {
+        final versionDir = Directory(version.isarPath).parent;
+        final importName = 'importing_${version.versionId}';
+        final targetName = 'imported';
+        
+        final importFile = File('${versionDir.path}/$importName.isar');
+        final importLockFile = File('${versionDir.path}/$importName.isar.lock');
+        
+        final targetFile = File('${versionDir.path}/$targetName.isar');
+        final targetLockFile = File('${versionDir.path}/$targetName.isar.lock');
+        
+        if (await importFile.exists()) {
+          // 如果目标文件已存在（可能有旧的残留），先删除
+          if (await targetFile.exists()) {
+            await targetFile.delete();
+          }
+           await importFile.rename(targetFile.path);
+        }
+        
+        // 锁文件处理：不要重命名，直接删除。
+        // MDBX 的锁文件包含了进程/线程信息，直接重命名可能导致新打开的实例认为数据库被锁定
+        // 让新的 Isar.open 自动创建新的锁文件
+        if (await importLockFile.exists()) {
+          await importLockFile.delete();
+        }
+        if (await targetLockFile.exists()) {
+            await targetLockFile.delete();
+        }
+        
+        debugPrint('✅ 数据库文件重命名完成');
+      } catch (e) {
+        debugPrint('❌ 数据库文件重命名失败: $e');
+         // 如果重命名失败，可能无法正确加载数据，但我们继续尝试激活，或者抛出异常
+      }
 
       // 4. 激活新版本（如果未锁定）
       final activated =

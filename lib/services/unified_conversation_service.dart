@@ -1,4 +1,5 @@
 import 'dart:developer' as developer;
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../models/isar/prompt_template_entity.dart';
@@ -27,7 +28,7 @@ class ConversationConfig {
 }
 
 /// 日志开关：控制是否打印 AI 请求的详细日志
-const bool kEnableAIRequestLog = true;
+const bool kEnableAIRequestLog = kDebugMode && true;
 
 /// 截断长文本，保留开头和结尾
 String _truncateText(
@@ -119,7 +120,7 @@ void _logContextStructure({
     final questionPreview = questionText.length > 50
         ? '${questionText.substring(0, 50).replaceAll('\n', ' ')}...'
         : questionText.replaceAll('\n', ' ');
-    buffer.writeln('║   Q: "${questionPreview}" (${_formatCharCount(questionLen)}字)$questionMark');
+    buffer.writeln('║   Q: "$questionPreview" (${_formatCharCount(questionLen)}字)$questionMark');
 
     if (isQuestionSelected) {
       totalSelectedChars += questionLen;
@@ -396,6 +397,26 @@ class UnifiedConversationService {
     }
     // 重新获取更新后的数据
     return _db.getUnifiedConversationsByContextId(contextId);
+  }
+
+  /// 批量获取讨论数量
+  Future<Map<String, int>> getDiscussionCounts(List<String> contextIds) async {
+    if (contextIds.isEmpty) return {};
+
+    final counts = <String, int>{};
+    
+    // 1. 批量查询所有相关对话
+    final conversations = await _db.getUnifiedConversationsByContextIds(contextIds);
+
+    // 2. 在内存中分组统计
+    for (final conv in conversations) {
+      final contextId = conv.contextId;
+      if (contextId.isNotEmpty) {
+        counts[contextId] = (counts[contextId] ?? 0) + 1;
+      }
+    }
+
+    return counts;
   }
 
   /// 获取同一话题下所有轮次的对话列表

@@ -492,20 +492,30 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     _expandedTopics.clear();
     _expandedRounds.clear();
 
+    debugPrint('🔍 [_initDefaultExpansion] currentAssistantId: ${widget.currentAssistantId}, currentTopicId: ${widget.currentTopicId}');
+    debugPrint('🔍 [_initDefaultExpansion] _assistants count: ${_assistants.length}');
+
     for (final assistant in _assistants) {
+      debugPrint('  - Assistant: ${assistant.name} (${assistant.id}), isCurrent: ${assistant.isCurrent}');
       if (assistant.isCurrent) {
         _expandedAssistants.add(assistant.id);
+        debugPrint('    ✅ 展开助手: ${assistant.name}');
         for (final topic in assistant.topics) {
+          debugPrint('    - Topic: ${topic.name} (${topic.id}), isCurrent: ${topic.isCurrent}');
           if (topic.isCurrent) {
             _expandedTopics.add(_getTopicKey(assistant.id, topic.id));
+            debugPrint('      ✅ 展开话题: ${topic.name}');
             final targetIndex = widget.currentRoundIndex ?? (topic.rounds.isNotEmpty ? topic.rounds.length - 1 : -1);
             if (targetIndex >= 0 && targetIndex < topic.rounds.length) {
               _expandedRounds.add(_getRoundKey(assistant.id, topic.id, targetIndex));
+              debugPrint('        ✅ 展开轮次: $targetIndex');
             }
           }
         }
       }
     }
+
+    debugPrint('🔍 [_initDefaultExpansion] 结果: expandedAssistants=${_expandedAssistants.length}, expandedTopics=${_expandedTopics.length}, expandedRounds=${_expandedRounds.length}');
   }
 
   String _getTopicKey(String assistantId, String topicId) => '$assistantId:$topicId';

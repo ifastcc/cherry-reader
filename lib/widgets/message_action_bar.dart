@@ -82,17 +82,7 @@ class MessageActionBar extends StatelessWidget {
           const SizedBox(width: 4),
 
           // 讨论（带数量角标）
-          _ActionButtonWithBadge(
-            icon: discussionCount > 0
-                ? Icons.chat_bubble
-                : Icons.chat_bubble_outline_rounded,
-            label: '讨论',
-            color: discussionCount > 0 ? activeColor : iconColor,
-            badgeCount: discussionCount,
-            badgeColor: activeColor,
-            onTap: onDiscuss,
-          ),
-          const SizedBox(width: 4),
+
 
           // 重新生成
           if (showRegenerate) ...[
@@ -181,15 +171,7 @@ class MessageActionBar extends StatelessWidget {
               const Divider(height: 1),
 
               // 操作列表
-              if (showSpeak && onSpeak != null)
-                _MoreActionItem(
-                  icon: Icons.volume_up_rounded,
-                  label: '朗读',
-                  onTap: () {
-                    Navigator.pop(context);
-                    onSpeak?.call();
-                  },
-                ),
+
 
               if (onTranslate != null)
                 _MoreActionItem(

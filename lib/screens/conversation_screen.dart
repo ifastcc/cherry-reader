@@ -17,7 +17,6 @@ import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
 import '../widgets/tts_mini_player.dart';
 import '../widgets/dual_fab.dart';
-import '../widgets/keep_alive_wrapper.dart';
 
 /// 页内搜索匹配结果
 class InPageSearchMatch {
@@ -52,7 +51,7 @@ class ConversationScreen extends StatefulWidget {
   /// 【搜索高亮】要高亮的搜索关键词
   final String? highlightKeyword;
 
-  const ConversationScreen({
+  ConversationScreen({
     Key? key,
     required this.extractor,
     required this.topicId,
@@ -96,10 +95,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
   // 【Sticky Tab 可见性】- 使用 ValueNotifier 优化
   final ValueNotifier<bool> _currentGroupTabVisibleNotifier = ValueNotifier(true);
 
-  // 【双 FAB】样式和可见性
   final ValueNotifier<DualFabStyle> _fabStyleNotifier = ValueNotifier(DualFabStyle.pill);
   final ValueNotifier<bool> _fabVisibleNotifier = ValueNotifier(true);
   int _fabHideCheckId = 0; // 用于取消过时的延迟显示
+
+  // 【边缘抽屉】状态
+  final ValueNotifier<bool> _edgeDrawerOpenNotifier = ValueNotifier(false);
 
 
   // 【内联 Tab 位置追踪】
@@ -264,9 +265,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
   /// 2. 判断该轮次的内联 Tab 是否可见
   /// 3. 计算滚动进度
   void _onScrollChanged() {
-    // 【性能优化】节流：限制计算频率
+    // 【性能优化】节流：限制计算频率（32ms ≈ 30fps，足够流畅且降低计算开销）
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastScrollUpdate < 16) return; // 约 60fps
+    if (now - _lastScrollUpdate < 32) return;
     _lastScrollUpdate = now;
 
     final groups = _getConversationGroups();
@@ -281,7 +282,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
     // 【性能优化】从上次可见位置开始搜索，减少遍历次数
     final lastVisible = _currentVisibleGroupNotifier.value;
-    final searchStart = (lastVisible - 2).clamp(0, groups.length - 1);
+    final searchStart = (lastVisible - 1).clamp(0, groups.length - 1);
 
     // 查找结果
     int visibleGroup = _currentVisibleGroupNotifier.value; // 保持上次值作为默认
@@ -734,13 +735,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
       contextIds.add('${widget.topicId}:$i');
     }
 
-    // 3. 批量查询讨论数量
-    for (final contextId in contextIds) {
-      final conversations = await conversationService.getConversationsByContext(contextId);
-      counts[contextId] = conversations.length;
-    }
-
-    _discussionCounts = counts;
+    // 3. 批量查询讨论数量 (Batch Query)
+    final discussionCounts = await conversationService.getDiscussionCounts(contextIds);
+    _discussionCounts = discussionCounts;
   }
 
   /// 打印 Topic 调试信息
@@ -1032,7 +1029,7 @@ $modelResponses''';
         ),
         // 导出完整对话按钮
         IconButton(
-          icon: const Icon(Icons.file_download),
+          icon: const Icon(Icons.menu_book_rounded),
           tooltip: '导出完整对话',
           onPressed: _conversation == null ? null : _exportFullConversation,
         ),
@@ -1137,107 +1134,524 @@ $modelResponses''';
                       _buildEnergyBarIndicator(),
                       // Sticky 模型 Tab（滚动时显示在顶部）
                       _buildStickyModelTabs(),
-                      // 浮动轮次导航器（滚动时显示）
-                      _buildFloatingNavigation(),
+                      // 浮动导航已融合到边缘抽屉
                       const Positioned(
                         left: 0,
                         right: 0,
                         bottom: 0,
                         child: TtsMiniPlayer(),
                       ),
+                      // 点击外部关闭抽屉的蒙层
+                      ValueListenableBuilder<bool>(
+                        valueListenable: _edgeDrawerOpenNotifier,
+                        builder: (context, isOpen, _) {
+                          if (!isOpen) return const SizedBox.shrink();
+                          return Positioned.fill(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque, // 拦截点击事件，防止误触底层内容
+                              onTap: () {
+                                _edgeDrawerOpenNotifier.value = false;
+                              },
+                              child: Container(color: Colors.transparent),
+                            ),
+                          );
+                        },
+                      ),
+                      // 边缘操作抽屉
+                      _buildEdgeActionDrawer(),
                     ],
                   ),
           ),
         ],
       ),
-      // 双 FAB：朗读 + 讨论
-      floatingActionButton: _conversation == null
-          ? null
-          : Selector<TtsProvider, bool>(
-              selector: (_, tts) => tts.hasValidConfig,
-              builder: (context, hasValidConfig, _) {
-                // 如果没有 TTS 配置，显示原来的单按钮
-                if (!hasValidConfig) {
-                  return ValueListenableBuilder<int>(
-                    valueListenable: _currentVisibleGroupNotifier,
-                    builder: (context, currentGroup, _) {
-                      final groups = _getConversationGroups();
-                      if (groups.isEmpty) return const SizedBox.shrink();
-                      final contextId = '${widget.topicId}:$currentGroup';
-                      final discussionCount = _discussionCounts[contextId] ?? 0;
-                      final hasDiscussion = discussionCount > 0;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 60),
-                        child: GestureDetector(
-                          // 长按：选中当前整轮对话
-                          onLongPress: () => _openAnalysisChat(currentGroup),
-                          child: FloatingActionButton.extended(
-                            // 单击：只选中当前回复
-                            onPressed: () => _openAnalysisChatForReply(currentGroup),
-                            backgroundColor: hasDiscussion
-                                ? const Color(0xFF8B5CF6)
-                                : Theme.of(context).colorScheme.primaryContainer,
-                            foregroundColor: hasDiscussion
-                                ? Colors.white
-                                : Theme.of(context).colorScheme.onPrimaryContainer,
-                            icon: Badge(
-                              isLabelVisible: discussionCount > 0,
-                              label: Text(
-                                discussionCount > 99 ? '99+' : '$discussionCount',
-                                style: const TextStyle(fontSize: 10),
-                              ),
-                              child: Icon(
-                                hasDiscussion ? Icons.chat_bubble : Icons.chat_bubble_outline,
-                              ),
+      // FAB 已移除，操作已融合到边缘抽屉
+    );
+  }
+
+  /// 边缘操作抽屉：右侧贴边小箭头，点击后滑出操作面板（融合导航和操作）
+  Widget _buildEdgeActionDrawer() {
+    final groups = _getConversationGroups();
+    final totalGroups = groups.length;
+    if (groups.isEmpty) return const SizedBox.shrink();
+
+    // 【性能优化】使用 AnimatedBuilder + Listenable.merge 合并两个 ValueNotifier
+    // 减少嵌套层级，提升更新效率
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        _currentVisibleGroupNotifier,
+        _edgeDrawerOpenNotifier,
+      ]),
+      builder: (context, _) {
+        final currentGroup = _currentVisibleGroupNotifier.value;
+        final isOpen = _edgeDrawerOpenNotifier.value;
+        
+        final contextId = '${widget.topicId}:$currentGroup';
+        final discussionCount = _discussionCounts[contextId] ?? 0;
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        final canGoUp = currentGroup > 0;
+        final canGoDown = currentGroup < totalGroups - 1;
+
+        return Positioned(
+          right: 0,
+          bottom: 100, // 避开 TtsMiniPlayer
+          child: AnimatedSlide(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            // 关闭时隐藏大部分，只露出触发箭头
+            offset: isOpen ? Offset.zero : const Offset(0.82, 0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 触发箭头
+                GestureDetector(
+                  onTap: () {
+                    _edgeDrawerOpenNotifier.value = !isOpen;
+                  },
+                  child: Container(
+                    width: 18,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? const Color(0xFF2D2D2D).withValues(alpha: 0.95)
+                          : Colors.white.withValues(alpha: 0.98),
+                      borderRadius: const BorderRadius.horizontal(
+                        left: Radius.circular(10),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 6,
+                          offset: const Offset(-2, 0),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: AnimatedRotation(
+                        duration: const Duration(milliseconds: 200),
+                        turns: isOpen ? 0.5 : 0,
+                        child: Icon(
+                          Icons.chevron_left,
+                          size: 14,
+                          color: isDark ? Colors.grey[500] : Colors.grey[500],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                // 操作面板（融合导航 + 操作）
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF2D2D2D).withValues(alpha: 0.98)
+                        : Colors.white.withValues(alpha: 0.99),
+                    borderRadius: const BorderRadius.horizontal(
+                      left: Radius.circular(14),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.12),
+                        blurRadius: 10,
+                        offset: const Offset(-3, 0),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ========== 导航区 ==========
+                      // 上一轮按钮
+                      _buildEdgeNavButton(
+                        icon: Icons.keyboard_arrow_up_rounded,
+                        enabled: canGoUp,
+                        onTap: () => _scrollToGroup(currentGroup - 1),
+                        isDark: isDark,
+                      ),
+                      const SizedBox(height: 4),
+                      // 当前轮次显示（可点击跳转）
+                      GestureDetector(
+                        onTap: _showRoundPicker,
+                        child: Container(
+                          width: 48,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF8B5CF6).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '${currentGroup + 1}/$totalGroups',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isDark
+                                  ? const Color(0xFFA78BFA)
+                                  : const Color(0xFF7C3AED),
                             ),
-                            label: Text('讨论 #${currentGroup + 1}'),
                           ),
                         ),
-                      );
-                    },
-                  );
-                }
+                      ),
+                      const SizedBox(height: 4),
+                      // 下一轮按钮
+                      _buildEdgeNavButton(
+                        icon: Icons.keyboard_arrow_down_rounded,
+                        enabled: canGoDown,
+                        onTap: () => _scrollToGroup(currentGroup + 1),
+                        isDark: isDark,
+                      ),
 
-                // 有 TTS 配置，显示双 FAB
-                return ValueListenableBuilder<DualFabStyle>(
-                  valueListenable: _fabStyleNotifier,
-                  builder: (context, fabStyle, _) {
-                    return ValueListenableBuilder<bool>(
-                      valueListenable: _fabVisibleNotifier,
-                      builder: (context, fabVisible, _) {
-                        return ValueListenableBuilder<int>(
-                          valueListenable: _currentVisibleGroupNotifier,
-                          builder: (context, currentGroup, _) {
-                            final groups = _getConversationGroups();
-                            if (groups.isEmpty) return const SizedBox.shrink();
+                      // 分隔线
+                      Container(
+                        width: 36,
+                        height: 1,
+                        margin: const EdgeInsets.symmetric(vertical: 10),
+                        color: isDark ? Colors.grey[700] : Colors.grey[300],
+                      ),
 
-                            final contextId = '${widget.topicId}:$currentGroup';
-                            final discussionCount = _discussionCounts[contextId] ?? 0;
+                      // ========== 操作区 ==========
+                      // 朗读按钮
+                      _buildEdgeActionButton(
+                        icon: Icons.headphones_rounded,
+                        label: '朗读',
+                        color: const Color(0xFF10B981),
+                        onTap: () {
+                          _edgeDrawerOpenNotifier.value = false;
+                          _playGroupAudio(currentGroup);
+                        },
+                        isDark: isDark,
+                      ),
+                      const SizedBox(height: 6),
+                      // 讨论按钮（本轮所有内容+话题）
+                      _buildEdgeActionButton(
+                        icon: Icons.chat_bubble_rounded,
+                        label: '讨论',
+                        color: const Color(0xFF8B5CF6),
+                        badgeCount: discussionCount,
+                        onTap: () {
+                          _edgeDrawerOpenNotifier.value = false;
+                          _openAnalysisChat(currentGroup);
+                        },
+                        isDark: isDark,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 60),
-                              child: DualFab(
-                                style: fabStyle,
-                                visible: fabVisible,
-                                discussionCount: discussionCount,
-                                isPlaying: false, // TODO: 连接 TTS 播放状态
-                                onPlayPressed: () => _playGroupAudio(currentGroup),
-                                // 单击：只选中当前回复
-                                onDiscussPressed: () => _openAnalysisChatForReply(currentGroup),
-                                // 长按：选中当前整轮对话（用户问题 + 回复）
-                                onDiscussLongPressed: () => _openAnalysisChat(currentGroup),
-                                onStyleChange: _showFabStylePicker,
+  /// 边缘导航按钮（上/下箭头）
+  Widget _buildEdgeNavButton({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+    required bool isDark,
+  }) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        width: 48,
+        height: 36,
+        decoration: BoxDecoration(
+          color: enabled
+              ? (isDark ? Colors.grey[800] : Colors.grey[100])
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(
+          icon,
+          size: 24,
+          color: enabled
+              ? (isDark ? Colors.grey[300] : Colors.grey[700])
+              : (isDark ? Colors.grey[700] : Colors.grey[300]),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEdgeActionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+    VoidCallback? onLongPress,
+    required bool isDark,
+    int badgeCount = 0,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: Container(
+        width: 52,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, size: 20, color: color),
+                ),
+                if (badgeCount > 0)
+                  Positioned(
+                    right: -6,
+                    top: -6,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 16,
+                        minHeight: 16,
+                      ),
+                      child: Text(
+                        badgeCount > 99 ? '99+' : '$badgeCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                color: isDark ? Colors.grey[400] : Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 显示轮次选择器（列表模式，带 query 预览）
+  void _showRoundPicker() {
+    final groups = _getConversationGroups();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final currentIndex = _currentVisibleGroupNotifier.value;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.6,
+          ),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 拖动条
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[400],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // 标题栏
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '跳转到对话',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white : Colors.grey[800],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF8B5CF6).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${currentIndex + 1} / ${groups.length}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: isDark
+                              ? const Color(0xFFA78BFA)
+                              : const Color(0xFF7C3AED),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // 分隔线
+              Divider(
+                height: 1,
+                color: isDark ? Colors.grey[800] : Colors.grey[200],
+              ),
+              // 轮次列表
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: groups.length,
+                  itemBuilder: (context, index) {
+                    final group = groups[index];
+                    final isSelected = index == currentIndex;
+
+                    // 提取用户问题预览（从 user_message 的 blocks 中提取）
+                    String queryPreview = '';
+                    final userMsg = group['user_message'] as Map<String, dynamic>?;
+                    if (userMsg != null) {
+                      final blocks = userMsg['blocks'] as List<dynamic>? ?? [];
+                      for (final block in blocks) {
+                        if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+                          queryPreview += block['content'] as String? ?? '';
+                        }
+                      }
+                      queryPreview = queryPreview.replaceAll('\n', ' ').trim();
+                    }
+                    
+                    // 截断并设置默认值
+                    if (queryPreview.isEmpty) {
+                      queryPreview = '无问题内容';
+                    } else if (queryPreview.length > 60) {
+                      queryPreview = '${queryPreview.substring(0, 60)}...';
+                    }
+
+                    return Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _scrollToGroup(index);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? (isDark
+                                    ? const Color(0xFF8B5CF6).withValues(alpha: 0.15)
+                                    : const Color(0xFF8B5CF6).withValues(alpha: 0.08))
+                                : Colors.transparent,
+                            border: Border(
+                              left: BorderSide(
+                                width: 3,
+                                color: isSelected
+                                    ? const Color(0xFF8B5CF6)
+                                    : Colors.transparent,
                               ),
-                            );
-                          },
-                        );
-                      },
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              // 轮次号
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? const Color(0xFF8B5CF6)
+                                      : (isDark
+                                          ? Colors.grey[800]
+                                          : Colors.grey[100]),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    '${index + 1}',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: isSelected
+                                          ? Colors.white
+                                          : (isDark
+                                              ? Colors.grey[300]
+                                              : Colors.grey[700]),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              // Query 预览
+                              Expanded(
+                                child: Text(
+                                  queryPreview,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    height: 1.4,
+                                    fontWeight: isSelected
+                                        ? FontWeight.w500
+                                        : FontWeight.normal,
+                                    color: isDark
+                                        ? Colors.grey[300]
+                                        : Colors.grey[700],
+                                  ),
+                                ),
+                              ),
+                              // 当前指示
+                              if (isSelected)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: Icon(
+                                    Icons.arrow_back_rounded,
+                                    size: 16,
+                                    color: const Color(0xFF8B5CF6),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
                     );
                   },
-                );
-              },
-            ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+                ),
+              ),
+              // 底部安全区
+              SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1272,7 +1686,7 @@ $modelResponses''';
         controller: _scrollController,
         padding: const EdgeInsets.only(left: 12, right: 12, top: 16, bottom: 80),
         // cacheExtent: 提前渲染视口外的内容，确保滚动流畅
-        cacheExtent: 500,
+        cacheExtent: 800,
         itemCount: groups.length,
         separatorBuilder: (context, index) => const SizedBox(height: 24),
         itemBuilder: (context, index) {
@@ -1281,10 +1695,10 @@ $modelResponses''';
             key: ValueKey(index),
             controller: _scrollController,
             index: index,
-            child: KeepAliveWrapper(
-              child: RepaintBoundary(
-                child: _buildConversationGroup(groups[index], index),
-              ),
+            // 【性能优化】移除 KeepAliveWrapper，减少内存占用
+            // cacheExtent 已增加到 800，滚动体验不受影响
+            child: RepaintBoundary(
+              child: _buildConversationGroup(groups[index], index),
             ),
           );
         },
@@ -1672,6 +2086,7 @@ $modelResponses''';
               children: [
                 // 内容区域（决定高度）
                 Container(
+                  width: double.infinity,
                   margin: const EdgeInsets.only(left: 4), // 为左侧色条留出空间
                   decoration: BoxDecoration(
                     color: isDark
@@ -1753,48 +2168,7 @@ $modelResponses''';
 
   /// 简洁布局：操作按钮（更紧凑）
   Widget _buildCleanActionButtons(int groupIndex) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    // 获取轮次级别的讨论数量
-    final contextId = '${widget.topicId}:$groupIndex';
-    final discussionCount = _discussionCounts[contextId] ?? 0;
-    final hasDiscussion = discussionCount > 0;
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // AI 讨论（带数量角标）
-        _buildIconWithBadge(
-          icon: hasDiscussion ? Icons.chat_bubble : Icons.chat_bubble_outline,
-          tooltip: 'AI 讨论（长按选整轮）',
-          color: hasDiscussion ? const Color(0xFF8B5CF6) : Colors.grey[400]!,
-          badgeCount: discussionCount,
-          // 单击：只选中当前回复
-          onPressed: () => _openAnalysisChatForReply(groupIndex),
-          // 长按：选中当前整轮对话
-          onLongPress: () => _openAnalysisChat(groupIndex),
-        ),
-        // TTS 朗读 - 【性能优化】使用 Selector 只监听 hasValidConfig
-        Selector<TtsProvider, bool>(
-          selector: (_, tts) => tts.hasValidConfig,
-          builder: (context, hasValidConfig, _) {
-            if (!hasValidConfig) return const SizedBox.shrink();
-            return _buildIconOnlyButton(
-              icon: Icons.volume_up_rounded,
-              tooltip: '朗读',
-              color: const Color(0xFF8B5CF6),
-              onPressed: () => _playGroupAudio(groupIndex),
-            );
-          },
-        ),
-        // 导出
-        _buildIconOnlyButton(
-          icon: Icons.menu_book_rounded,
-          tooltip: '导出',
-          color: isDark ? Colors.grey[400]! : Colors.grey[600]!,
-          onPressed: () => _exportToEpub(groupIndex),
-        ),
-      ],
-    );
+    return const SizedBox.shrink();
   }
 
   /// 简洁布局：图标按钮
@@ -2564,12 +2938,16 @@ $modelResponses''';
       });
     }
 
-    // 获取助手信息
+    // 获取助手信息（注意：assistantIds 是列表，取第一个）
     String? assistantId;
     String? assistantName;
     if (_conversation != null) {
-      assistantId = _conversation!['assistantId'] as String?;
-      // 尝试从 assistant 字段获取名称
+      // 从 assistantIds 列表取第一个
+      final assistantIds = _conversation!['assistantIds'] as List<dynamic>?;
+      if (assistantIds != null && assistantIds.isNotEmpty) {
+        assistantId = assistantIds.first as String?;
+      }
+      // 尝试从 assistant 字段获取名称（如果有的话）
       final assistant = _conversation!['assistant'] as Map<String, dynamic>?;
       assistantName = assistant?['name'] as String?;
     }
@@ -3116,9 +3494,32 @@ class _SwipeableSwitcherState extends State<_SwipeableSwitcher> {
   // 【性能优化】使用 ValueNotifier 替代 setState，拖动时只重绘必要部分
   final ValueNotifier<double> _dragOffsetNotifier = ValueNotifier(0);
   bool _isDragging = false;
+  
+  // 【性能优化】内容缓存，避免切换时重复构建 Widget
+  final Map<int, Widget> _contentCache = {};
+
+  // 获取或构建缓存内容
+  Widget _getOrBuildContent(int index) {
+    if (index < 0 || index >= widget.totalCount) {
+      return const SizedBox.shrink();
+    }
+    if (!_contentCache.containsKey(index)) {
+      _contentCache[index] = widget.itemBuilder(index);
+    }
+    return _contentCache[index]!;
+  }
+
+  @override
+  void didUpdateWidget(_SwipeableSwitcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 【性能优化】清理远离当前页的缓存（只保留当前页和相邻页）
+    _contentCache.removeWhere((key, _) => 
+      (key - widget.currentIndex).abs() > 1);
+  }
 
   @override
   void dispose() {
+    _contentCache.clear();
     _dragOffsetNotifier.dispose();
     super.dispose();
   }
@@ -3167,8 +3568,8 @@ class _SwipeableSwitcherState extends State<_SwipeableSwitcher> {
     final hasPrev = widget.currentIndex > 0;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // 【性能优化】内容区域不依赖 dragOffset，避免重建
-    final contentWidget = widget.itemBuilder(widget.currentIndex);
+    // 【性能优化】使用缓存获取内容，避免重复构建
+    final contentWidget = _getOrBuildContent(widget.currentIndex);
 
     return GestureDetector(
       onHorizontalDragStart: _onDragStart,

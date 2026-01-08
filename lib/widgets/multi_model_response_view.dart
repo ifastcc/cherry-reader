@@ -510,15 +510,7 @@ class _ModelResponseCardState extends State<_ModelResponseCard> {
                 widget.onSelect?.call();
               },
             ),
-            if (widget.onSpeak != null)
-              ListTile(
-                leading: const Icon(Icons.volume_up_outlined),
-                title: const Text('朗读'),
-                onTap: () {
-                  Navigator.pop(context);
-                  widget.onSpeak!();
-                },
-              ),
+
             ListTile(
               leading: const Icon(Icons.share_outlined),
               title: const Text('分享'),

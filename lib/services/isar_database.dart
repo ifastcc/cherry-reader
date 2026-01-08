@@ -430,6 +430,20 @@ class IsarDatabase {
         .findAll();
   }
 
+  /// 批量根据上下文 ID 获取对话列表 (Batch Query)
+  Future<List<UnifiedConversationEntity>> getUnifiedConversationsByContextIds(
+    List<String> contextIds,
+  ) async {
+    if (contextIds.isEmpty) return [];
+
+    final isar = await instance;
+    // 使用 anyOf 构建 OR 查询
+    return isar.unifiedConversationEntitys
+        .filter()
+        .anyOf(contextIds, (q, String id) => q.contextIdEqualTo(id))
+        .findAll();
+  }
+
   /// 根据话题 ID 前缀获取所有相关对话
   ///
   /// contextId 格式：topicId:groupIndex 或 messageId
