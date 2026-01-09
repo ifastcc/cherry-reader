@@ -317,17 +317,32 @@ class _HighlightableCardState extends State<HighlightableCard> {
 
     if (needsRebuild) {
       // 用户手动标注的高亮
+      // 【修复】使用完整内容长度进行验证，而不是折叠后的长度
       final userHighlights = _highlights
-          .where((h) => h.end <= currentContent.length)
-          .map(
-            (h) => HighlightRange(
+          .where((h) => h.end <= widget.content.length)
+          .map((h) {
+            // 【修复】如果内容被折叠，裁剪高亮范围到可见区域
+            int start = h.start;
+            int end = h.end;
+            if (currentContent.length < widget.content.length) {
+              // 折叠模式：只显示在可见范围内的高亮部分
+              final visibleLength = currentContent.length - 3; // 减去 "..." 的长度
+              if (start >= visibleLength) {
+                return null; // 高亮完全在折叠区域外，不显示
+              }
+              if (end > visibleLength) {
+                end = visibleLength; // 裁剪到可见区域边界
+              }
+            }
+            return HighlightRange(
               id: h.id,
-              start: h.start,
-              end: h.end,
+              start: start,
+              end: end,
               color: Color(h.color),
               styleType: h.styleType,
-            ),
-          )
+            );
+          })
+          .whereType<HighlightRange>()
           .toList();
 
       // 【搜索高亮】生成搜索关键词的高亮范围
@@ -702,7 +717,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
 
   // ... (existing state variables)
   
-  // 【新增】浮动工具栏 Overlay
+  // 浮动工具栏 Overlay
   OverlayEntry? _toolbarOverlay;
   Offset? _lastPointerPosition;
 
@@ -741,15 +756,11 @@ class _HighlightableCardState extends State<HighlightableCard> {
     Overlay.of(context).insert(_toolbarOverlay!);
   }
 
-  // ...
-
   Widget _buildContent() {
     return Listener(
       onPointerUp: (event) {
         _lastPointerPosition = event.position;
-        // 如果松开鼠标时有选中文本，延迟显示工具栏（确保 selection 状态已更新）
         if (_selectedText.isNotEmpty) {
-           // 稍微延迟以避免冲突
            Future.delayed(const Duration(milliseconds: 100), () {
              if (mounted && _selectedText.isNotEmpty) {
                _showFloatingToolbar(event.position);
@@ -757,23 +768,19 @@ class _HighlightableCardState extends State<HighlightableCard> {
            });
         }
       },
-      // 也可以监听 onPointerDown 隐藏工具栏
       onPointerDown: (_) => _hideFloatingToolbar(),
       child: SelectionArea(
         onSelectionChanged: (selection) {
           if (selection != null) {
             final newSelectedText = selection.plainText;
             if (newSelectedText != _selectedText) {
-               // 状态更新逻辑保持不变
                if (newSelectedText.isEmpty) {
                   _hideFloatingToolbar();
                }
-               
                 SchedulerBinding.instance.addPostFrameCallback((_) {
                   if (mounted) {
                     setState(() {
                       _selectedText = newSelectedText;
-                      // ... index calculation
                       final start = widget.content.indexOf(_selectedText);
                       if (start != -1) {
                          _selectionStart = start;
@@ -784,42 +791,6 @@ class _HighlightableCardState extends State<HighlightableCard> {
                 });
             }
           }
-        },
-        // 保留原有的 contextMenuBuilder 作为备用（右键菜单）
-        contextMenuBuilder: (context, selectableRegionState) {
-          final buttonItems = selectableRegionState.contextMenuButtonItems;
-          return AdaptiveTextSelectionToolbar.buttonItems(
-            anchors: selectableRegionState.contextMenuAnchors,
-            buttonItems: [
-              ContextMenuButtonItem(
-                onPressed: () {
-                  if (_selectedText.isNotEmpty) {
-                    _addHighlightFromSelection(
-                      _selectedText,
-                      _selectionStart,
-                      _selectionEnd,
-                    );
-                  }
-                  ContextMenuController.removeAny();
-                  _hideFloatingToolbar(); 
-                },
-                type: ContextMenuButtonType.custom,
-                label: '高亮',
-              ),
-              ContextMenuButtonItem(
-                onPressed: () {
-                  if (_selectedText.isNotEmpty) {
-                    ContextMenuController.removeAny();
-                    _hideFloatingToolbar();
-                    _showQuickCaptureSheet();
-                  }
-                },
-                type: ContextMenuButtonType.custom,
-                label: '标注',
-              ),
-              ...buttonItems,
-            ],
-          );
         },
         child: _getMemoizedMarkdownWidget(),
       ),

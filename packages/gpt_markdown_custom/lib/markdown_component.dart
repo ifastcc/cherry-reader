@@ -106,6 +106,10 @@ abstract class MarkdownComponent {
 
   RegExp get exp;
   bool get inline;
+
+  /// The index of the regex group that contains the content (safe to be highlighted/parsed recursively).
+  /// If null, the entire match is considered protected or opaque.
+  int? get contentGroup => null;
 }
 
 /// Inline component
@@ -516,6 +520,9 @@ class BoldMd extends InlineMd {
   RegExp get exp => RegExp(r"(?<!\*)\*\*(?<!\s)(.+?)(?<!\s)\*\*(?!\*)");
 
   @override
+  int? get contentGroup => 1;
+
+  @override
   InlineSpan span(
     BuildContext context,
     String text,
@@ -542,6 +549,9 @@ class BoldMd extends InlineMd {
 class StrikeMd extends InlineMd {
   @override
   RegExp get exp => RegExp(r"(?<!\*)\~\~(?<!\s)(.+?)(?<!\s)\~\~(?!\*)");
+
+  @override
+  int? get contentGroup => 1;
 
   @override
   InlineSpan span(
@@ -575,6 +585,9 @@ class ItalicMd extends InlineMd {
   @override
   RegExp get exp =>
       RegExp(r"(?:(?<!\*)\*(?<!\s)(.+?)(?<!\s)\*(?!\*))", dotAll: true);
+
+  @override
+  int? get contentGroup => 1;
 
   @override
   InlineSpan span(
@@ -1260,3 +1273,4 @@ class CustomTableRow {
 
   CustomTableRow({this.isHeader = false, required this.fields});
 }
+

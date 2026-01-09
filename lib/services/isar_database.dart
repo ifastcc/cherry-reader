@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
@@ -87,42 +88,81 @@ class IsarDatabase {
       return; // 已初始化，直接返回
     }
 
+    final schemas = [
+      // 基础功能
+      AIAnalysisEntitySchema,
+      DiscussionEntitySchema,
+      DiscussionMessageEntitySchema,
+      UnifiedConversationEntitySchema,
+      UnifiedMessageEntitySchema,
+      UserPreferenceEntitySchema,
+      TaskTemplateEntitySchema,
+      // 洞察功能
+      InsightEntitySchema,
+      PerspectiveEntitySchema,
+      // 统一知识条目（笔记、标注、高亮）
+      KnowledgeEntrySchema,
+      // 版本管理
+      VersionEntitySchema,
+      // 消息级存储
+      AssistantEntitySchema,
+      TopicEntitySchema,
+      MessageEntitySchema,
+      MessageBlockEntitySchema,
+      FileEntitySchema,
+    ];
+
     try {
       final dir = await getApplicationDocumentsDirectory();
 
-      _isar = await Isar.open(
-        [
-          // 基础功能
-          AIAnalysisEntitySchema,
-          DiscussionEntitySchema,
-          DiscussionMessageEntitySchema,
-          UnifiedConversationEntitySchema,
-          UnifiedMessageEntitySchema,
-          UserPreferenceEntitySchema,
-          TaskTemplateEntitySchema,
-          // 洞察功能
-          InsightEntitySchema,
-          PerspectiveEntitySchema,
-          // 统一知识条目（笔记、标注、高亮）
-          KnowledgeEntrySchema,
-          // 版本管理
-          VersionEntitySchema,
-          // 消息级存储
-          AssistantEntitySchema,
-          TopicEntitySchema,
-          MessageEntitySchema,
-          MessageBlockEntitySchema,
-          FileEntitySchema,
-        ],
-        directory: dir.path,
-        name: 'cherry_viewer',
-        inspector: kDebugMode, // 仅在调试模式启用 Isar Inspector
-      );
+      try {
+        _isar = await Isar.open(
+          schemas,
+          directory: dir.path,
+          name: 'cherry_viewer',
+          inspector: kDebugMode, // 仅在调试模式启用 Isar Inspector
+        );
+      } catch (e) {
+        print('❌ Isar 数据库初始化失败: $e');
+        print('⚠️ 尝试自动修复数据库...');
+
+        // 尝试关闭已存在的实例（如果有）
+        final existingInstance = Isar.getInstance('cherry_viewer');
+        if (existingInstance != null) {
+          await existingInstance.close();
+          print('🔒 已关闭残留的 Isar 实例');
+        }
+
+        // 尝试删除损坏的数据库文件
+        final dbPath = '${dir.path}/cherry_viewer.isar';
+        final lockPath = '${dir.path}/cherry_viewer.isar.lock';
+
+        final dbFile = File(dbPath);
+        if (await dbFile.exists()) {
+          await dbFile.delete();
+          print('🗑️ 已删除数据库文件: $dbPath');
+        }
+
+        final lockFile = File(lockPath);
+        if (await lockFile.exists()) {
+          await lockFile.delete();
+          print('🗑️ 已删除锁文件: $lockPath');
+        }
+
+        // 重试初始化
+        _isar = await Isar.open(
+          schemas,
+          directory: dir.path,
+          name: 'cherry_viewer',
+          inspector: kDebugMode,
+        );
+        print('✅ 数据库自动修复并重新初始化成功');
+      }
 
       _initialized = true;
       print('✅ Isar 数据库初始化成功: ${dir.path}/cherry_viewer.isar');
     } catch (e) {
-      print('❌ Isar 数据库初始化失败: $e');
+      print('❌ Isar 数据库初始化最终失败: $e');
       rethrow;
     }
   }

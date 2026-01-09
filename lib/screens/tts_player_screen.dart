@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/tts_provider.dart';
 import '../models/tts_segment.dart';
+import '../widgets/unified_markdown_renderer.dart';
 
 class TtsPlayerScreen extends StatefulWidget {
   const TtsPlayerScreen({Key? key}) : super(key: key);
@@ -200,9 +201,9 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        segment.text,
-                        style: TextStyle(
+                      UnifiedMarkdownRenderer(
+                        data: segment.displayText,
+                        textStyle: TextStyle(
                           fontSize: isCurrent ? 16 : 14,
                           fontWeight: isCurrent ? FontWeight.w500 : FontWeight.normal,
                           color: isPast
@@ -212,8 +213,6 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
                                   : Colors.grey[700],
                           height: 1.5,
                         ),
-                        maxLines: isCurrent ? null : 3,
-                        overflow: isCurrent ? null : TextOverflow.ellipsis,
                       ),
                       if (segment.duration != null)
                         Padding(
@@ -561,7 +560,7 @@ class _TtsPlayerScreenState extends State<TtsPlayerScreen> {
                           ),
                         ),
                         title: Text(
-                          segment.text,
+                          segment.displayText,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(

@@ -351,6 +351,10 @@ class BackgroundImportService {
 
     // 异步预加载，不等待完成
     Future.microtask(() async {
+      // 增加安全延迟，确保 VersionService 的清理和 TopicIndexService 的重建完全结束
+      // 避免 Isar 在高并发读写下出现 MdbxError
+      await Future.delayed(const Duration(milliseconds: 500));
+
       try {
         await InsightService.instance.preloadQueries();
       } catch (e) {

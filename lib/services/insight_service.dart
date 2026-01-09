@@ -341,8 +341,38 @@ class InsightService {
     try {
       final isar = await _db.importInstance;
 
+
       // 1. 加载助手列表并建立 ID->Name 映射
-      final assistants = await isar.assistantEntitys.where().findAll();
+      // 2. 加载全部话题
+      // 3. 批量加载全部用户消息
+      // 4. 批量加载全部 main_text 消息块
+      
+      late List<AssistantEntity> assistants;
+      late List<TopicEntity> topics;
+      late List<MessageEntity> messages;
+      late List<MessageBlockEntity> blocks;
+
+      // 使用显式事务一次性读取，避免多次隐式事务导致的 MDBX 崩溃风险 (txn_ro_end)
+      await isar.txn(() async {
+        assistants = await isar.assistantEntitys.where().findAll();
+        
+        topics = await isar.topicEntitys
+            .where()
+            .sortByUpdatedAtDesc()
+            .findAll();
+            
+        messages = await isar.messageEntitys
+            .filter()
+            .roleEqualTo('user')
+            .sortByCreatedAt()
+            .findAll();
+            
+        blocks = await isar.messageBlockEntitys
+            .filter()
+            .typeEqualTo('main_text')
+            .findAll();
+      });
+
       _assistantIdToNameCache = {
         for (final a in assistants) a.assistantId: a.name,
       };
@@ -350,25 +380,6 @@ class InsightService {
         'id': a.assistantId,
         'name': a.name,
       }).toList();
-
-      // 2. 加载全部话题
-      final topics = await isar.topicEntitys
-          .where()
-          .sortByUpdatedAtDesc()
-          .findAll();
-
-      // 3. 批量加载全部用户消息
-      final messages = await isar.messageEntitys
-          .filter()
-          .roleEqualTo('user')
-          .sortByCreatedAt()
-          .findAll();
-
-      // 4. 批量加载全部 main_text 消息块
-      final blocks = await isar.messageBlockEntitys
-          .filter()
-          .typeEqualTo('main_text')
-          .findAll();
 
       // 5. 构建消息块索引 messageId -> content
       final blockContentMap = <String, String>{};

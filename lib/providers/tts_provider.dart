@@ -143,6 +143,15 @@ class TtsProvider extends ChangeNotifier {
       _currentSession!.currentIndex++;
       _currentSession!.lastPlayedIndex = _currentSession!.currentIndex;
       await _sessionStorage.saveSession(_currentSession!);
+      
+      // 通知下载器播放位置变化，触发滑动窗口预加载
+      _getDownloader().updatePlayPosition(
+        currentIndex: _currentSession!.currentIndex,
+        voiceName: _settings.defaultVoiceName,
+        rate: _playbackSpeed,
+        style: 'general',
+      );
+      
       notifyListeners();
       await _playCurrentSegment();
     } else {
@@ -181,10 +190,18 @@ class TtsProvider extends ChangeNotifier {
       apiKeys: _settings.azureApiKeys,
       region: _settings.azureRegion,
       currentKeyIndex: _settings.currentKeyIndex,
-      maxConcurrent: 3,
+      prefetchConfig: const PrefetchConfig(
+        targetBufferChars: 1500,   // ~7分钟缓冲
+        refillThresholdChars: 500, // ~2.5分钟时开始补充
+        coldStartChars: 800,       // 冷启动~4分钟
+        maxConcurrent: 3,
+      ),
     );
     _downloader!.onSegmentStatusChanged = (index, status) {
       notifyListeners();
+    };
+    _downloader!.onBufferStatusChanged = (buffered, target) {
+      debugPrint('🔊 缓冲状态: $buffered / $target 字符');
     };
     return _downloader!;
   }
@@ -279,10 +296,11 @@ class TtsProvider extends ChangeNotifier {
           return;
         }
 
-        // 转换为 TtsSegment（带 SSML）
+        // 转换为 TtsSegment（带 SSML 和原始格式文本）
         final segments = segmentsWithSsml.map((s) => TtsSegment(
           index: s.index,
           text: s.plainText,
+          rawText: s.rawText,
           ssml: s.ssmlContent,
           startOffset: s.startOffset,
           endOffset: s.endOffset,
@@ -338,17 +356,17 @@ class TtsProvider extends ChangeNotifier {
     }
   }
 
-  /// 开始下载所有段落
+  /// 开始预加载段落（滑动窗口模式）
   void _startDownloadingAllSegments() {
     if (_currentSession == null) return;
 
     final downloader = _getDownloader();
-    downloader.downloadSession(
+    downloader.startPrefetch(
       session: _currentSession!,
       voiceName: _settings.defaultVoiceName,
       rate: _playbackSpeed,
       style: 'general',
-      priorityIndex: _currentSession!.currentIndex,
+      startIndex: _currentSession!.currentIndex,
     );
   }
 
@@ -432,6 +450,12 @@ class TtsProvider extends ChangeNotifier {
     if (_isOperating) return;
 
     if (_playerState == TtsState.paused) {
+      // 恢复播放时，触发预加载检查
+      _getDownloader().resume(
+        voiceName: _settings.defaultVoiceName,
+        rate: _playbackSpeed,
+        style: 'general',
+      );
       await _audioPlayer.play();
     } else if (_currentSession != null) {
       await _waitAndPlayCurrentSegment();
@@ -439,15 +463,20 @@ class TtsProvider extends ChangeNotifier {
   }
 
   /// 暂停
+  /// 
+  /// 注意：暂停不会取消预加载，用户可能很快恢复播放
   Future<void> pause() async {
     await _audioPlayer.pause();
     _playerState = TtsState.paused;
     notifyListeners();
+    // 不取消下载，保持缓冲
   }
 
   /// 停止
+  /// 
+  /// 使用优雅取消：让正在进行中的下载完成，只取消队列中的
   Future<void> stop() async {
-    _downloader?.cancel();
+    _downloader?.cancelPending(); // 优雅取消，不浪费已发起的请求
     await _audioPlayer.stop();
     _currentPosition = Duration.zero;
     _playerState = TtsState.stopped;
@@ -499,6 +528,14 @@ class TtsProvider extends ChangeNotifier {
         rate: _playbackSpeed,
       );
     }
+
+    // 更新播放位置，触发滑动窗口调整
+    _getDownloader().updatePlayPosition(
+      currentIndex: index,
+      voiceName: _settings.defaultVoiceName,
+      rate: _playbackSpeed,
+      style: 'general',
+    );
 
     notifyListeners();
     await _waitAndPlayCurrentSegment();

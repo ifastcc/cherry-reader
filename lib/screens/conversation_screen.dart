@@ -3091,8 +3091,11 @@ $modelResponses''';
 
       final blocks = reply['blocks'] as List<dynamic>? ?? [];
       var content = '';
+      // 包含多种内容类型：main_text, thinking, translation, text
+      // 这样 Claude 的思考过程（通常显示为引用块）也会被朗读
+      final contentTypes = ['main_text', 'thinking', 'translation', 'text'];
       for (final block in blocks) {
-        if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+        if (block is Map<String, dynamic> && contentTypes.contains(block['type'])) {
           content += block['content'] as String? ?? '';
         }
       }

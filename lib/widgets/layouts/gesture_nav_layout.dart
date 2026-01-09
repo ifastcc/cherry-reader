@@ -69,42 +69,52 @@ class GestureNavLayout extends LayoutScheme {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildDot(colorScheme, isActive: context.selectedIndex == 0, label: '对话'),
+          _buildDot(colorScheme, isActive: context.selectedIndex == 0, label: '对话', index: 0),
           const SizedBox(width: 16),
-          _buildDot(colorScheme, isActive: context.selectedIndex == 1, label: '知识库'),
+          _buildDot(colorScheme, isActive: context.selectedIndex == 1, label: '知识库', index: 1),
         ],
       ),
     );
   }
 
-  Widget _buildDot(ColorScheme colorScheme, {required bool isActive, required String label}) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: isActive 
-                ? colorScheme.primary 
-                : colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
-            shape: BoxShape.circle,
+  Widget _buildDot(ColorScheme colorScheme, {required bool isActive, required String label, required int index}) {
+    return GestureDetector(
+      onTap: () {
+        // Find the PageView controller via the context structure we built? 
+        // Actually layouts.dart context has onDestinationSelected.
+        // We need to access the callback passed to _GesturePageView or the one in LayoutSchemeContext.
+        // The _buildPageIndicator is inside GestureNavLayout which has access to `context` (LayoutSchemeContext).
+        context.onDestinationSelected(index);
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: isActive 
+                  ? colorScheme.primary 
+                  : colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
+              shape: BoxShape.circle,
+            ),
           ),
-        ),
-        const SizedBox(width: 4),
-        AnimatedDefaultTextStyle(
-          duration: const Duration(milliseconds: 200),
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
-            color: isActive 
-                ? colorScheme.primary 
-                : colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+          const SizedBox(width: 4),
+          AnimatedDefaultTextStyle(
+            duration: const Duration(milliseconds: 200),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+              color: isActive 
+                  ? colorScheme.primary 
+                  : colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+            ),
+            child: Text(label),
           ),
-          child: Text(label),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

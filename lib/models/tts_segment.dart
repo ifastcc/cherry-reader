@@ -9,7 +9,8 @@ enum SegmentStatus {
 /// TTS 单个段落
 class TtsSegment {
   final int index;
-  final String text;      // 纯文本（用于显示、缓存 key）
+  final String text;      // 处理后的纯文本（用于 TTS 合成、缓存 key）
+  final String? rawText;  // 原始格式文本（保留换行，用于显示）
   final String? ssml;     // SSML 内容（不含外层 speak/voice 标签）
   final int startOffset;  // 在原文中的起始位置
   final int endOffset;    // 在原文中的结束位置
@@ -29,6 +30,7 @@ class TtsSegment {
   TtsSegment({
     required this.index,
     required this.text,
+    this.rawText,
     this.ssml,
     required this.startOffset,
     required this.endOffset,
@@ -40,6 +42,9 @@ class TtsSegment {
     this.retryCount = 0,
     this.lastErrorTime,
   });
+
+  /// 获取显示用的文本（优先使用 rawText，回退到 text）
+  String get displayText => rawText ?? text;
 
   /// 是否有 SSML 内容
   bool get hasSsml => ssml != null && ssml!.isNotEmpty;
@@ -90,6 +95,7 @@ $content
     return TtsSegment(
       index: json['index'] as int,
       text: json['text'] as String,
+      rawText: json['rawText'] as String?,
       ssml: json['ssml'] as String?,
       startOffset: json['startOffset'] as int,
       endOffset: json['endOffset'] as int,
@@ -115,6 +121,7 @@ $content
     return {
       'index': index,
       'text': text,
+      'rawText': rawText,
       'ssml': ssml,
       'startOffset': startOffset,
       'endOffset': endOffset,
@@ -142,6 +149,7 @@ $content
     return TtsSegment(
       index: index,
       text: text,
+      rawText: rawText,
       ssml: ssml ?? this.ssml,
       startOffset: startOffset,
       endOffset: endOffset,

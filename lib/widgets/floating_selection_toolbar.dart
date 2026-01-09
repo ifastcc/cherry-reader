@@ -9,7 +9,6 @@ class FloatingSelectionToolbar extends StatelessWidget {
   final VoidCallback? onCopy;
   final VoidCallback? onHighlight;
   final Color? highlightColor;
-  final bool showHighlightOptions;
 
   const FloatingSelectionToolbar({
     Key? key,
@@ -17,7 +16,6 @@ class FloatingSelectionToolbar extends StatelessWidget {
     this.onCopy,
     this.onHighlight,
     this.highlightColor,
-    this.showHighlightOptions = false,
   }) : super(key: key);
 
   @override
@@ -25,11 +23,9 @@ class FloatingSelectionToolbar extends StatelessWidget {
     final screenSize = MediaQuery.of(context).size;
 
     // 计算工具栏应该显示的位置
-    // 确保不会超出屏幕边界
     double left = position.dx;
     double top = position.dy;
 
-    // 工具栏宽度估算
     const toolbarWidth = 180.0;
     const toolbarHeight = 44.0;
 
@@ -42,11 +38,10 @@ class FloatingSelectionToolbar extends StatelessWidget {
     }
 
     // 垂直边界检查 - 默认显示在选中文字上方
-    // 如果上方空间不足,显示在下方
     if (top < toolbarHeight + 60) {
-      top = top + 60; // 显示在下方
+      top = top + 60;
     } else {
-      top = top - toolbarHeight - 8; // 显示在上方
+      top = top - toolbarHeight - 8;
     }
 
     return Positioned(
@@ -54,7 +49,6 @@ class FloatingSelectionToolbar extends StatelessWidget {
       top: top,
       child: Container(
         decoration: BoxDecoration(
-          // 渐变背景 - 更现代
           gradient: const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -71,11 +65,6 @@ class FloatingSelectionToolbar extends StatelessWidget {
               offset: const Offset(0, 4),
               spreadRadius: 2,
             ),
-            BoxShadow(
-              color: Colors.white.withOpacity(0.05),
-              blurRadius: 1,
-              offset: const Offset(0, -1),
-            ),
           ],
         ),
         child: ClipRRect(
@@ -83,25 +72,22 @@ class FloatingSelectionToolbar extends StatelessWidget {
           child: Material(
             color: Colors.transparent,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // 复制按钮
                   if (onCopy != null)
                     _ToolbarButton(
                       icon: Icons.copy_rounded,
                       label: '复制',
                       onPressed: onCopy!,
                     ),
-
-                  // 高亮按钮
                   if (onHighlight != null)
                     _ToolbarButton(
                       icon: Icons.edit_rounded,
                       label: '高亮',
                       onPressed: onHighlight!,
-                      iconColor: const Color(0xFFFFD54F), // 明亮的金黄色
+                      iconColor: const Color(0xFFFFD54F),
                       labelColor: const Color(0xFFFFD54F),
                     ),
                 ],

@@ -1,222 +1,217 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:markdown/markdown.dart' as md;
+import 'package:gpt_markdown_custom/gpt_markdown.dart';
+import 'package:gpt_markdown_custom/markdown_component.dart';
 
-/// Markdown 语法高亮处理器
+/// Markdown Syntax Highlighter
 ///
-/// 核心思想 (第一性原理):
-/// 1. 识别所有 Markdown 语法标记的位置（Protected Ranges）
-/// 2. 将用户的高亮范围（Highlight Ranges）与语法标记范围进行"差集"运算
-/// 3. 仅在非语法标记的纯文本区域插入 HTML <span> 标签
-/// 4. 这样既实现了高亮，又绝对保证了 Markdown 语法的完整性
+/// Uses a "Safe Injection" strategy by traversing the text using the same
+/// regex components as the renderer. It identifies "Safe Text Nodes" (pure text
+/// outside of syntax markers) and injects <highlight> tags only there.
 class MarkdownSyntaxHighlighter {
   final String text;
   final List<HighlightRange> highlights;
 
   MarkdownSyntaxHighlighter(this.text, this.highlights);
 
-  /// 处理并返回带有高亮标签的文本
   String process() {
     if (highlights.isEmpty) return text;
 
-    // 1. 识别受保护的语法范围
-    final protectedRanges = _findProtectedRanges(text);
-
-    // 2. 计算安全的高亮范围 (从原始高亮范围中减去受保护范围)
-    final safeHighlights = _calculateSafeHighlights(
-      highlights,
-      protectedRanges,
-    );
-
-    // 3. 按照位置从后往前插入标签，避免破坏索引
-    return _applyHighlights(text, safeHighlights);
-  }
-
-  /// 识别 Markdown 语法标记范围
-  List<TextRange> _findProtectedRanges(String text) {
-    final ranges = <TextRange>[];
-
-    // 正则表达式定义 Markdown 语法标记
-    // 注意：我们只匹配"标记本身"，而不是标记包含的内容
-    final patterns = [
-      // 标题标记 (e.g. "## ")
-      RegExp(r'^#{1,6}\s', multiLine: true),
-
-      // 粗体/斜体标记 (e.g. "**", "__", "*", "_")
-      // 仅匹配边界标记
-      RegExp(r'(\*\*|__|\*|_)'),
-
-      // 代码块标记 (e.g. "```", "`")
-      RegExp(r'(`{1,3})'),
-
-      // 链接和图片语法结构: [, ], (, ), ![
-      // 我们不仅要保护括号本身，还要保护 URL 部分，因为如果在 URL 中插入 span 会破坏链接
-      // 匹配: [text](url) 或 ![alt](url)
-      // 策略: 保护 `[` `]` `(` `)` `![` 这些字符本身
-      // 以及 `(...)` 里面的内容 (URL)
-      RegExp(r'!\[|\[|\]'),
-      RegExp(r'\([^\)]+\)'), // 保护链接的 URL 部分 (content inside parens)
-      // HTML 标签 (e.g. <br>, <span>) - 避免在高亮标签内部再插入高亮
-      RegExp(r'<[^>]+>'),
-
-      // 引用标记
-      RegExp(r'^>\s', multiLine: true),
-
-      // 列表标记
-      RegExp(r'^(\s*[-*+]|\s*\d+\.)\s+', multiLine: true),
-
-      // 分割线
-      RegExp(r'^[\*\-_]{3,}\s*$', multiLine: true),
+    // Combine all components (Global + Inline) ensuring correct precedence
+    final components = [
+      ...MarkdownComponent.globalComponents,
+      ...MarkdownComponent.inlineComponents,
     ];
 
-    for (final pattern in patterns) {
-      final matches = pattern.allMatches(text);
-      for (final match in matches) {
-        ranges.add(TextRange(start: match.start, end: match.end));
-      }
-    }
-
-    // 合并重叠的范围并排序
-    return _mergeRanges(ranges);
+    // Build the mega-regex logic similar to gpt_markdown parser
+    // But since we need to know *which* component matched, we can't just join rules.
+    // We will use a scanner approach: find the earliest match among all components.
+    
+    final buffer = StringBuffer();
+    _processRecursive(text, 0, components, buffer);
+    return buffer.toString();
   }
 
-  /// 合并重叠或相邻的范围
-  List<TextRange> _mergeRanges(List<TextRange> ranges) {
-    if (ranges.isEmpty) return [];
-
-    // 按起始位置排序
-    ranges.sort((a, b) => a.start.compareTo(b.start));
-
-    final merged = <TextRange>[];
-    var current = ranges[0];
-
-    for (int i = 1; i < ranges.length; i++) {
-      final next = ranges[i];
-      if (next.start <= current.end) {
-        // 重叠或相邻，合并
-        current = TextRange(
-          start: current.start,
-          end: next.end > current.end ? next.end : current.end,
-        );
-      } else {
-        merged.add(current);
-        current = next;
-      }
-    }
-    merged.add(current);
-    return merged;
-  }
-
-  /// 计算安全的高亮范围
-  /// 算法: Safe = Highlight - Protected
-  List<HighlightRange> _calculateSafeHighlights(
-    List<HighlightRange> rawHighlights,
-    List<TextRange> protectedRanges,
+  /// Recursively process text, injecting highlights into safe zones.
+  void _processRecursive(
+    String currentText,
+    int globalOffset,
+    List<MarkdownComponent> components,
+    StringBuffer buffer,
   ) {
-    final safeHighlights = <HighlightRange>[];
+    if (currentText.isEmpty) return;
 
-    for (final highlight in rawHighlights) {
-      var currentStart = highlight.start;
-      final currentEnd = highlight.end;
-      final color = highlight.color;
-      final styleType = highlight.styleType;
+    // Find the first match across all components
+    Match? firstMatch;
+    MarkdownComponent? matchedComponent;
 
-      // 遍历所有受保护范围，切分高亮范围
-      for (final protected in protectedRanges) {
-        // 如果受保护范围在当前高亮范围之前，跳过
-        if (protected.end <= currentStart) continue;
+    // Optimization: we could combine regexes, but capturing groups would be messy.
+    // For now, iterate. The text chunks are usually small (paragraphs).
+    for (final component in components) {
+      final regExp = RegExp(
+        component.exp.pattern,
+        multiLine: component.exp.isMultiLine,
+        dotAll: component.exp.isDotAll,
+      );
+      
+      final match = regExp.firstMatch(currentText);
+      if (match != null) {
+        if (firstMatch == null || match.start < firstMatch.start) {
+          firstMatch = match;
+          matchedComponent = component;
+        }
+      }
+    }
 
-        // 如果受保护范围在当前高亮范围之后，结束检查
-        if (protected.start >= currentEnd) break;
+    if (firstMatch != null && matchedComponent != null) {
+      // 1. Process text BEFORE the match (Safe Text)
+      if (firstMatch.start > 0) {
+        final prefix = currentText.substring(0, firstMatch.start);
+        _processSafeText(prefix, globalOffset, buffer);
+      }
 
-        // 此时 protected 与 [currentStart, currentEnd] 有交集
+      // 2. Process the match
+      final matchStart = globalOffset + firstMatch.start;
+      final matchEnd = globalOffset + firstMatch.end;
 
-        // 1. 添加交集之前的高亮部分 (如果是有效文本)
-        if (currentStart < protected.start) {
-          safeHighlights.add(
-            HighlightRange(
-              id: highlight.id,
-              start: currentStart,
-              end: protected.start,
-              color: color,
-              styleType: styleType,
-            ),
-          );
+      if (matchedComponent.contentGroup != null) {
+        // This component has a "safe" content zone (e.g. ** content **)
+        // We need to preserve syntax markers but recurse into content.
+        
+        final content = firstMatch.group(matchedComponent.contentGroup!)!;
+        
+        // Find where title/content actually is in the full match string.
+        // Note: RegExp match indices are relative to the input string.
+        // But group indices are what we have.
+        // We need to find the offset of group relative to match.start.
+        
+        // Strategy: 
+        // We know the full match string: firstMatch.group(0)
+        // We know the content string: content
+        // We need to find `content` inside `fullMatch` CAREFULLY.
+        // Warning: `content` might appear multiple times or be empty.
+        
+        // A more robust way using `match.start` and `match.end` for groups is dependent on platform implementation,
+        // but Dart's Match doesn't expose group offsets easily in all versions.
+        // However, we can use `match.start(groupIndex)` if available? 
+        // Accessing group start indices is standard in Dart RegExp Match since forever.
+        
+        // Wait, Dart `Match` class DOES have `start(int group)` and `end(int group)`.
+        // Let's use that!
+        
+        try {
+          // Inner content range relative to currentText
+          // Dart RegExp Match doesn't support group offsets, so we have to find it manually.
+          final fullMatchText = firstMatch.group(0)!;
+          final contentText = firstMatch.group(matchedComponent.contentGroup!)!;
+          
+          // Find content start index relative to the match start
+          // We assume the first occurrence of content inside the match is the correct one.
+          // This is generally true for the markdown syntaxes we care about (surrounding markers).
+          final localContentStart = fullMatchText.indexOf(contentText);
+          
+          if (localContentStart != -1) {
+            final innerStart = firstMatch.start + localContentStart;
+            final innerEnd = innerStart + contentText.length;
+
+            // Text BEFORE content (Opening Syntax) - Opaque
+            buffer.write(currentText.substring(firstMatch.start, innerStart));
+            
+            // Text CONTENT - Recurse
+            _processRecursive(
+              currentText.substring(innerStart, innerEnd),
+              globalOffset + innerStart,
+              components, 
+              buffer
+            );
+            
+            // Text AFTER content (Closing Syntax) - Opaque
+            buffer.write(currentText.substring(innerEnd, firstMatch.end));
+          } else {
+             // Fallback: entire match opaque
+             buffer.write(firstMatch.group(0));
+          }
+        } catch (e) {
+           // Fallback on error
+           buffer.write(firstMatch.group(0));
         }
 
-        // 2. 跳过受保护部分，更新 currentStart
-        currentStart = protected.end > currentStart
-            ? protected.end
-            : currentStart;
-
-        // 如果已经超出了高亮范围，提前结束
-        if (currentStart >= currentEnd) break;
+      } else {
+        // Opaque component (e.g. Code Block, Image, Link?)
+        // Just write it as is.
+        buffer.write(firstMatch.group(0));
       }
 
-      // 添加剩余的高亮部分
-      if (currentStart < currentEnd) {
-        safeHighlights.add(
-          HighlightRange(
-            id: highlight.id,
-            start: currentStart,
-            end: currentEnd,
-            color: color,
-            styleType: styleType,
-          ),
-        );
-      }
+      // 3. Process remaining text
+      final remaining = currentText.substring(firstMatch.end);
+      _processRecursive(remaining, matchEnd, components, buffer);
+
+    } else {
+      // No match found: entire text is safe
+      _processSafeText(currentText, globalOffset, buffer);
     }
-
-    return safeHighlights;
   }
 
-  /// 应用高亮：从后往前插入 HTML 标签
-  String _applyHighlights(String text, List<HighlightRange> safeHighlights) {
-    // 按起始位置排序
-    safeHighlights.sort((a, b) => a.start.compareTo(b.start));
+  /// Inject highlight tags into safe text if it overlaps with defined highlights.
+  void _processSafeText(String text, int offset, StringBuffer buffer) {
+    if (text.isEmpty) return;
+    
+    final endOffset = offset + text.length;
+    
+    // Find relevant highlights for this range [offset, endOffset]
+    final relevantHighlights = highlights.where((h) {
+      return h.start < endOffset && h.end > offset;
+    }).toList();
 
-    final buffer = StringBuffer();
-    int currentPos = 0;
+    if (relevantHighlights.isEmpty) {
+      buffer.write(text);
+      return;
+    }
 
-    for (final range in safeHighlights) {
-      if (range.start < currentPos) continue; // 防止回退（理论上不会发生）
+    // Sort by start
+    relevantHighlights.sort((a, b) => a.start.compareTo(b.start));
 
-      // 添加未高亮的文本
-      if (range.start > currentPos) {
-        buffer.write(text.substring(currentPos, range.start));
+    int localCursor = 0; // Relative to `text` start
+
+    for (final h in relevantHighlights) {
+      // Calculate intersection in local coordinates
+      final hStartLocal = max(0, h.start - offset);
+      final hEndLocal = min(text.length, h.end - offset);
+
+      if (hStartLocal < localCursor) continue; // Skip overlapped parts (simplified)
+
+      // Write text before highlight
+      if (hStartLocal > localCursor) {
+        buffer.write(text.substring(localCursor, hStartLocal));
       }
 
-      // 生成高亮 HTML
-      // 将颜色转换为 8 位 ARGB Hex 字符串，保留透明度
-      final colorHex = range.color.value.toRadixString(16).padLeft(8, '0');
-
-      // c 属性存储颜色的 hex 值
-      // t 属性存储样式类型 (background/underline)
-      // i 属性存储 ID
-      final type = range.styleType ?? 'background';
-      final id = range.id ?? '';
-      buffer.write('<highlight c="$colorHex" t="$type" i="$id">');
-      buffer.write(text.substring(range.start, range.end));
+      // Write highlight
+      final highlightedContent = text.substring(hStartLocal, hEndLocal);
+      final colorHex = h.color.value.toRadixString(16).padLeft(8, '0');
+      
+      buffer.write('<highlight c="$colorHex" t="${h.styleType ?? 'background'}" i="${h.id ?? ''}">');
+      buffer.write(highlightedContent);
       buffer.write('</highlight>');
 
-      currentPos = range.end;
+      localCursor = hEndLocal;
     }
 
-    // 添加剩余文本
-    if (currentPos < text.length) {
-      buffer.write(text.substring(currentPos));
+    // Write remaining text
+    if (localCursor < text.length) {
+      buffer.write(text.substring(localCursor));
     }
-
-    return buffer.toString();
   }
 }
 
-/// 高亮范围数据模型
+/// Simple HighlightRange model re-definition to avoid circular deps if needed,
+/// but we should rely on the exported one if possible. 
+/// However, to keep this file cleaner, we assume it's imported.
 class HighlightRange {
-  final String? id; // 关联的高亮数据 ID
+  final String? id;
   final int start;
   final int end;
   final Color color;
-  final String? styleType; // 'background' 或 'underline'
+  final String? styleType;
 
   HighlightRange({
     this.id,
@@ -225,44 +220,4 @@ class HighlightRange {
     required this.color,
     this.styleType,
   });
-}
-
-/// 解析 <highlight> 标签的语法规则
-/// 匹配格式: <highlight c="RRGGBB" t="type" i="id">text</highlight>
-class HighlightSyntax extends md.InlineSyntax {
-  // 更新正则以匹配 i="id" 属性，支持 6 位或 8 位颜色 hex
-  HighlightSyntax()
-    : super(
-        r'<highlight c="([a-fA-F0-9]{6,8})" t="([^\"]+)" i="([^\"]*)">(.+?)</highlight>',
-      );
-
-  @override
-  bool onMatch(md.InlineParser parser, Match match) {
-    // Safety checks for null matches, although regex should prevent this
-    final content = match[4];
-    final colorHex = match[1];
-    final styleType = match[2];
-    final id = match[3];
-
-    if (content == null || colorHex == null || styleType == null) {
-      return false;
-    }
-
-    // 创建一个 Element，tag 为 'highlight'
-    final element = md.Element.text('highlight', content);
-
-    // 将捕获的属性存入 attributes
-    element.attributes['c'] = colorHex; // 颜色 hex
-    element.attributes['t'] = styleType; // 样式类型
-    if (id != null) {
-      element.attributes['i'] = id; // ID
-    }
-
-    // 内容是第四个捕获组
-    element.children!.clear();
-    element.children!.add(md.Text(content));
-
-    parser.addNode(element);
-    return true;
-  }
 }

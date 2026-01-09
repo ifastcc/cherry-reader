@@ -42,12 +42,57 @@ class DownloadRetryConfig {
   }
 }
 
-/// TTS 段落下载器
+/// 预加载配置
+class PrefetchConfig {
+  /// 目标缓冲字符数（达到此目标后停止预加载）
+  /// 按 200字/分钟 计算，1500字 ≈ 7.5 分钟缓冲
+  final int targetBufferChars;
+
+  /// 触发阈值字符数（缓冲低于此值时开始补充下载）
+  /// 500字 ≈ 2.5 分钟
+  final int refillThresholdChars;
+
+  /// 冷启动预加载字符数（首次播放时快速准备）
+  /// 800字 ≈ 4 分钟
+  final int coldStartChars;
+
+  /// 最大并发下载数
+  final int maxConcurrent;
+
+  const PrefetchConfig({
+    this.targetBufferChars = 1500,
+    this.refillThresholdChars = 500,
+    this.coldStartChars = 800,
+    this.maxConcurrent = 3,
+  });
+
+  /// 默认配置
+  static const PrefetchConfig defaultConfig = PrefetchConfig();
+
+  /// 激进预加载（更多缓冲，适合网络不稳定）
+  static const PrefetchConfig aggressiveConfig = PrefetchConfig(
+    targetBufferChars: 3000,
+    refillThresholdChars: 1000,
+    coldStartChars: 1500,
+    maxConcurrent: 4,
+  );
+
+  /// 保守预加载（更少缓冲，节省流量）
+  static const PrefetchConfig conservativeConfig = PrefetchConfig(
+    targetBufferChars: 800,
+    refillThresholdChars: 300,
+    coldStartChars: 500,
+    maxConcurrent: 2,
+  );
+}
+
+/// TTS 段落下载器（滑动窗口预加载版）
 ///
-/// 负责并发下载段落音频，支持：
-/// - 全局缓存池（跨场景复用）
-/// - 自动重试（3 次，指数退避）
-/// - 优先级调度
+/// 核心设计：
+/// 1. **按需下载**：不再一次性下载所有段落
+/// 2. **字符计数**：用缓冲字符数（而非段落数）控制预加载量
+/// 3. **滑动窗口**：播放位置变化时动态调整下载目标
+/// 4. **智能取消**：用户停止播放时取消后续下载
 class TtsSegmentDownloader {
   final List<String> apiKeys;
   int _currentKeyIndex;
@@ -61,27 +106,41 @@ class TtsSegmentDownloader {
   /// SSML 配置
   SsmlConfig ssmlConfig;
 
-  /// 最大并发下载数
-  final int maxConcurrent;
+  /// 预加载配置
+  PrefetchConfig prefetchConfig;
 
-  /// 当前下载任务
-  final Map<int, Future<void>> _downloadTasks = {};
+  /// 当前会话
+  TtsPlaySession? _currentSession;
+
+  /// 当前播放位置
+  int _currentPlayIndex = 0;
 
   /// 是否已取消
   bool _isCancelled = false;
 
+  /// 是否正在预加载
+  bool _isPrefetching = false;
+
+  /// 下载信号量
+  late _Semaphore _semaphore;
+
   /// 进度回调
   void Function(int segmentIndex, SegmentStatus status)? onSegmentStatusChanged;
+
+  /// 缓冲状态变化回调
+  void Function(int bufferedChars, int targetChars)? onBufferStatusChanged;
 
   TtsSegmentDownloader({
     String? apiKey,
     List<String>? apiKeys,
     required this.region,
     int currentKeyIndex = 0,
-    this.maxConcurrent = 3,
     this.ssmlConfig = const SsmlConfig(),
+    this.prefetchConfig = const PrefetchConfig(),
   })  : apiKeys = apiKeys ?? (apiKey != null ? [apiKey] : []),
-        _currentKeyIndex = currentKeyIndex;
+        _currentKeyIndex = currentKeyIndex {
+    _semaphore = _Semaphore(prefetchConfig.maxConcurrent);
+  }
 
   String get _ttsUrl =>
       'https://$region.tts.speech.microsoft.com/cognitiveservices/v1';
@@ -101,70 +160,111 @@ class TtsSegmentDownloader {
     return true;
   }
 
-  /// 开始下载会话的所有段落
+  // ========== 公开 API ==========
+
+  /// 开始预加载会话
   ///
-  /// [priorityIndex] 优先下载的段落索引（当前要播放的）
-  Future<void> downloadSession({
+  /// 只下载冷启动所需的段落，后续通过 [updatePlayPosition] 触发更多下载
+  Future<void> startPrefetch({
     required TtsPlaySession session,
     required String voiceName,
     required double rate,
     String? style,
-    int priorityIndex = 0,
+    int startIndex = 0,
   }) async {
+    _currentSession = session;
+    _currentPlayIndex = startIndex;
     _isCancelled = false;
-    debugPrint('🔊 开始下载会话: ${session.messageId}, ${session.segments.length} 段');
 
-    final pendingSegments = <int>[];
+    debugPrint('🔊 开始预加载会话: ${session.messageId}, 共 ${session.segments.length} 段');
+    debugPrint('🔊 预加载配置: 目标缓冲 ${prefetchConfig.targetBufferChars} 字符, '
+        '触发阈值 ${prefetchConfig.refillThresholdChars} 字符');
 
-    // 收集需要下载的段落
-    for (var i = 0; i < session.segments.length; i++) {
-      if (session.segments[i].status == SegmentStatus.pending) {
-        pendingSegments.add(i);
-      }
+    // 计算冷启动需要下载的段落
+    final segmentsToDownload = _calculateSegmentsToDownload(
+      fromIndex: startIndex,
+      targetChars: prefetchConfig.coldStartChars,
+    );
+
+    debugPrint('🔊 冷启动下载: ${segmentsToDownload.length} 段');
+
+    await _downloadSegments(
+      indices: segmentsToDownload,
+      voiceName: voiceName,
+      rate: rate,
+      style: style,
+    );
+
+    // 冷启动完成后，检查是否需要继续预加载
+    _checkAndContinuePrefetch(voiceName: voiceName, rate: rate, style: style);
+  }
+
+  /// 更新播放位置
+  ///
+  /// 当播放进度变化时调用，触发滑动窗口预加载
+  void updatePlayPosition({
+    required int currentIndex,
+    required String voiceName,
+    required double rate,
+    String? style,
+  }) {
+    if (_currentSession == null) return;
+
+    _currentPlayIndex = currentIndex;
+    
+    // 如果之前被取消了，恢复预加载（用户可能暂停后恢复播放）
+    if (_isCancelled) {
+      _isCancelled = false;
+      debugPrint('🔊 检测到播放位置更新，重新启用预加载');
     }
 
-    if (pendingSegments.isEmpty) {
-      debugPrint('🔊 所有段落已就绪');
-      return;
+    // 计算当前缓冲量
+    final bufferedChars = _calculateBufferedChars(fromIndex: currentIndex);
+    final targetChars = prefetchConfig.targetBufferChars;
+
+    debugPrint('🔊 播放位置更新: $currentIndex, 缓冲: $bufferedChars / $targetChars 字符');
+
+    onBufferStatusChanged?.call(bufferedChars, targetChars);
+
+    // 如果缓冲低于阈值，触发补充下载
+    if (bufferedChars < prefetchConfig.refillThresholdChars) {
+      debugPrint('🔊 缓冲不足，开始补充下载');
+      _checkAndContinuePrefetch(voiceName: voiceName, rate: rate, style: style);
     }
+  }
 
-    // 按优先级排序：priorityIndex 及其后的段落优先
-    pendingSegments.sort((a, b) {
-      final aPriority = a >= priorityIndex ? a - priorityIndex : 1000 + a;
-      final bPriority = b >= priorityIndex ? b - priorityIndex : 1000 + b;
-      return aPriority.compareTo(bPriority);
-    });
+  /// 取消队列中的下载（优雅停止）
+  ///
+  /// 让正在进行中的下载完成，只取消队列中还没开始的
+  void cancelPending() {
+    _isCancelled = true;
+    debugPrint('🔊 取消队列中的下载任务（进行中的会完成）');
+  }
 
-    debugPrint('🔊 下载顺序: $pendingSegments');
+  /// 取消所有下载（硬停止）
+  ///
+  /// 设置取消标志，所有任务在下一个检查点退出
+  void cancelAll() {
+    _isCancelled = true;
+    _isPrefetching = false;
+    debugPrint('🔊 取消所有下载任务');
+  }
 
-    // 使用信号量控制并发
-    final semaphore = _Semaphore(maxConcurrent);
-    final futures = <Future<void>>[];
-
-    for (final index in pendingSegments) {
-      if (_isCancelled) break;
-
-      final future = semaphore.acquire().then((_) async {
-        if (_isCancelled) return;
-
-        try {
-          await _downloadSegmentWithRetry(
-            session: session,
-            segmentIndex: index,
-            voiceName: voiceName,
-            rate: rate,
-            style: style,
-          );
-        } finally {
-          semaphore.release();
-        }
-      });
-
-      futures.add(future);
-    }
-
-    await Future.wait(futures);
-    debugPrint('🔊 会话下载完成: ${session.messageId}');
+  /// 恢复预加载（暂停后恢复播放时调用）
+  void resume({
+    required String voiceName,
+    required double rate,
+    String? style,
+  }) {
+    if (_currentSession == null) return;
+    
+    // 重置取消标志
+    _isCancelled = false;
+    
+    debugPrint('🔊 恢复预加载');
+    
+    // 检查缓冲并触发预加载
+    _checkAndContinuePrefetch(voiceName: voiceName, rate: rate, style: style);
   }
 
   /// 下载单个段落（公开 API，用于手动重试）
@@ -175,8 +275,8 @@ class TtsSegmentDownloader {
     required double rate,
     String? style,
   }) async {
+    _currentSession = session;
     await _downloadSegmentWithRetry(
-      session: session,
       segmentIndex: segmentIndex,
       voiceName: voiceName,
       rate: rate,
@@ -184,23 +284,204 @@ class TtsSegmentDownloader {
     );
   }
 
+  /// 释放资源
+  void dispose() {
+    cancelAll();
+    _dio.close();
+  }
+
+  // ========== 兼容旧 API ==========
+
+  /// 开始下载会话的所有段落（兼容旧代码，内部转为增量预加载）
+  @Deprecated('Use startPrefetch instead for better performance')
+  Future<void> downloadSession({
+    required TtsPlaySession session,
+    required String voiceName,
+    required double rate,
+    String? style,
+    int priorityIndex = 0,
+  }) async {
+    await startPrefetch(
+      session: session,
+      voiceName: voiceName,
+      rate: rate,
+      style: style,
+      startIndex: priorityIndex,
+    );
+  }
+
+  // ========== 内部方法 ==========
+
+  /// 计算需要下载的段落索引列表
+  ///
+  /// 从 [fromIndex] 开始，累计字符数直到达到 [targetChars]
+  List<int> _calculateSegmentsToDownload({
+    required int fromIndex,
+    required int targetChars,
+  }) {
+    if (_currentSession == null) return [];
+
+    final segments = _currentSession!.segments;
+    final result = <int>[];
+    int accumulatedChars = 0;
+
+    for (int i = fromIndex; i < segments.length; i++) {
+      final segment = segments[i];
+
+      // 跳过已下载的段落（但仍计入缓冲）
+      if (segment.status == SegmentStatus.ready) {
+        accumulatedChars += segment.text.length;
+        continue;
+      }
+
+      // 跳过正在下载的段落
+      if (segment.status == SegmentStatus.downloading) {
+        accumulatedChars += segment.text.length;
+        continue;
+      }
+
+      // 需要下载的段落
+      if (segment.status == SegmentStatus.pending ||
+          segment.status == SegmentStatus.error) {
+        result.add(i);
+        accumulatedChars += segment.text.length;
+      }
+
+      // 达到目标字符数，停止
+      if (accumulatedChars >= targetChars) {
+        break;
+      }
+    }
+
+    return result;
+  }
+
+  /// 计算从指定位置开始已缓冲的字符数
+  int _calculateBufferedChars({required int fromIndex}) {
+    if (_currentSession == null) return 0;
+
+    final segments = _currentSession!.segments;
+    int bufferedChars = 0;
+
+    for (int i = fromIndex; i < segments.length; i++) {
+      final segment = segments[i];
+      if (segment.status == SegmentStatus.ready) {
+        bufferedChars += segment.text.length;
+      } else {
+        // 遇到未就绪的段落，停止计算
+        // （只计算连续已缓冲的部分）
+        break;
+      }
+    }
+
+    return bufferedChars;
+  }
+
+  /// 检查并继续预加载
+  void _checkAndContinuePrefetch({
+    required String voiceName,
+    required double rate,
+    String? style,
+  }) {
+    if (_currentSession == null) return;
+    if (_isCancelled) return;
+    if (_isPrefetching) return;
+
+    final bufferedChars = _calculateBufferedChars(fromIndex: _currentPlayIndex);
+
+    // 如果缓冲已达标，不需要继续下载
+    if (bufferedChars >= prefetchConfig.targetBufferChars) {
+      debugPrint('🔊 缓冲已达标: $bufferedChars / ${prefetchConfig.targetBufferChars} 字符');
+      return;
+    }
+
+    // 计算需要补充的字符数
+    final neededChars = prefetchConfig.targetBufferChars - bufferedChars;
+    final segmentsToDownload = _calculateSegmentsToDownload(
+      fromIndex: _currentPlayIndex,
+      targetChars: neededChars + bufferedChars, // 总目标
+    );
+
+    if (segmentsToDownload.isEmpty) {
+      debugPrint('🔊 没有需要下载的段落');
+      return;
+    }
+
+    debugPrint('🔊 补充下载: ${segmentsToDownload.length} 段');
+
+    _downloadSegments(
+      indices: segmentsToDownload,
+      voiceName: voiceName,
+      rate: rate,
+      style: style,
+    );
+  }
+
+  /// 批量下载段落
+  Future<void> _downloadSegments({
+    required List<int> indices,
+    required String voiceName,
+    required double rate,
+    String? style,
+  }) async {
+    if (indices.isEmpty) return;
+    if (_isCancelled) return;
+
+    _isPrefetching = true;
+
+    final futures = <Future<void>>[];
+
+    for (final index in indices) {
+      if (_isCancelled) break;
+
+      final future = _semaphore.acquire().then((_) async {
+        if (_isCancelled) {
+          _semaphore.release();
+          return;
+        }
+
+        try {
+          await _downloadSegmentWithRetry(
+            segmentIndex: index,
+            voiceName: voiceName,
+            rate: rate,
+            style: style,
+          );
+        } finally {
+          _semaphore.release();
+        }
+      });
+
+      futures.add(future);
+    }
+
+    await Future.wait(futures);
+
+    _isPrefetching = false;
+
+    // 下载完成后，检查是否需要继续预加载
+    if (!_isCancelled) {
+      _checkAndContinuePrefetch(voiceName: voiceName, rate: rate, style: style);
+    }
+  }
+
   /// 内部下载方法（带自动重试）
   Future<void> _downloadSegmentWithRetry({
-    required TtsPlaySession session,
     required int segmentIndex,
     required String voiceName,
     required double rate,
     String? style,
   }) async {
+    if (_currentSession == null) return;
     if (_isCancelled) return;
+
+    final session = _currentSession!;
+    if (segmentIndex < 0 || segmentIndex >= session.segments.length) return;
 
     final segment = session.segments[segmentIndex];
 
-    // 检查是否已经在下载
-    if (_downloadTasks.containsKey(segmentIndex)) {
-      await _downloadTasks[segmentIndex];
-      return;
-    }
+    // 已经就绪，跳过
+    if (segment.status == SegmentStatus.ready) return;
 
     // 构建 SSML 和缓存 Key
     final ratePct = ((rate - 1.0) * 100).toStringAsFixed(0);
@@ -290,6 +571,8 @@ class TtsSegmentDownloader {
 
       } catch (e) {
         debugPrint('🔊 段落 $segmentIndex 下载失败: $e');
+        debugPrint('🔊 ❌ 失败 SSML内容 [Length: ${ssml.length}]:');
+        debugPrint(ssml);
 
         // 判断是否可重试
         if (DownloadRetryConfig.isRetryable(e) &&
@@ -329,12 +612,6 @@ class TtsSegmentDownloader {
       throw Exception('No API key configured');
     }
 
-    // DEBUG: 打印 SSML（详细调试模式）
-    debugPrint('🔊 ════════════════════════════════════════════════════════');
-    debugPrint('🔊 TTS 请求详情:');
-    debugPrint('🔊   Voice: $voiceName');
-    debugPrint('🔊   SSML 长度: ${ssml.length} 字符');
-
     // 检查是否包含可能导致 400 错误的内容
     final hasUnescapedAngleBracket = RegExp(r'<(?!/?(?:speak|voice|prosody|break|emphasis|lang|mstts:|s|p|sub|phoneme)[>\s/])').hasMatch(ssml);
     final hasControlChars = RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]').hasMatch(ssml);
@@ -345,14 +622,6 @@ class TtsSegmentDownloader {
     if (hasControlChars) {
       debugPrint('🔊 ⚠️ 警告: SSML 中包含控制字符!');
     }
-
-    // 打印 SSML 内容（分段显示）
-    debugPrint('🔊 SSML 内容:');
-    for (int i = 0; i < ssml.length; i += 500) {
-      final end = (i + 500 < ssml.length) ? i + 500 : ssml.length;
-      debugPrint('[SSML $i-$end] ${ssml.substring(i, end)}');
-    }
-    debugPrint('🔊 ═════════════���══════════════════════════════════════════');
 
     try {
       final response = await _dio.post<List<int>>(
@@ -391,18 +660,6 @@ class TtsSegmentDownloader {
       }
       rethrow;
     }
-  }
-
-  /// 取消所有下载
-  void cancel() {
-    _isCancelled = true;
-    debugPrint('🔊 取消所有下载任务');
-  }
-
-  /// 释放资源
-  void dispose() {
-    cancel();
-    _dio.close();
   }
 }
 

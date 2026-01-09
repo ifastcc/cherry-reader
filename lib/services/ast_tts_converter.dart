@@ -55,6 +55,7 @@ class TtsSsmlConfig {
   // ========== 语调控制 ==========
   final String h1Pitch;
   final String h2Pitch;
+  final String h3Pitch;
 
   // 引用块
   final String blockquoteRate;
@@ -85,6 +86,7 @@ class TtsSsmlConfig {
   // 有序列表
   final bool readListNumbers;
   final String listNumberFormat; // 'short' = "1、", 'long' = "第1点，"
+  final bool announceListCount;  // 预告列表项数 "下面有N点"
 
   // 英文处理
   final bool wrapEnglishWithLang;
@@ -93,57 +95,66 @@ class TtsSsmlConfig {
   const TtsSsmlConfig({
     // 全局节奏
     this.rhythmScale = 1.0,
-    // 标题停顿（基准值，会乘以 rhythmScale）
-    this.h1BreakBeforeMs = 800,   // 大标题前：长停顿
-    this.h1BreakAfterMs = 1000,   // 大标题后：更长停顿（让听众准备好）
-    this.h2BreakBeforeMs = 600,
-    this.h2BreakAfterMs = 800,
-    this.h3BreakBeforeMs = 400,
-    this.h3BreakAfterMs = 500,
-    // 段落和列表
-    this.paragraphBreakMs = 600,  // 段落间：明显停顿
-    this.listItemBreakMs = 300,
-    // 分隔线
-    this.hrBreakMs = 1000,
-    // 换行
+    
+    // ===== 层级5：话题切换（明确分隔） =====
+    this.h1BreakBeforeMs = 1000,
+    this.h1BreakAfterMs = 1200,
+    this.h2BreakBeforeMs = 800,
+    this.h2BreakAfterMs = 900,
+    this.h3BreakBeforeMs = 500,
+    this.h3BreakAfterMs = 600,
+    this.hrBreakMs = 1500,
+    
+    // ===== 层级4：段落节奏（思考间隙） =====
+    this.paragraphBreakMs = 700,
+    this.listItemBreakMs = 400,
     this.lineBreakMs = 200,
-    // 句内标点停顿（默认启用，模拟自然呼吸节奏）
+    
+    // ===== 层级3：句子节奏（完整呼吸） =====
     this.enablePunctuationBreaks = true,
-    this.commaBreakMs = 180,       // 逗号：短停顿，喘息点
-    this.enumBreakMs = 120,        // 顿号：更短，并列词项
-    this.semicolonBreakMs = 280,   // 分号：中停顿，分句
-    this.colonBreakMs = 220,       // 冒号：中停顿，引出内容
-    this.periodBreakMs = 450,      // 句号：长停顿，句子结束
-    this.questionBreakMs = 500,    // 问号：略长，疑问语调需要缓冲
-    this.exclamationBreakMs = 450, // 感叹号：长停顿，情感表达
-    this.ellipsisBreakMs = 350,    // 省略号：意犹未尽
-    this.dashBreakMs = 250,        // 破折号：解释性停顿
-    this.quoteEndBreakMs = 120,    // 引号结束：短停顿
-    this.enCommaBreakMs = 180,
-    this.enSemicolonBreakMs = 280,
-    this.enColonBreakMs = 220,
-    this.enPeriodBreakMs = 450,
-    this.enQuestionBreakMs = 500,
-    this.enExclamationBreakMs = 450,
-    // 语调
-    this.h1Pitch = '+5%',
-    this.h2Pitch = '+3%',
-    this.blockquoteRate = '-10%',
-    this.blockquotePitch = '-3%',
-    this.inlineCodeRate = '-10%',
+    this.periodBreakMs = 400,
+    this.questionBreakMs = 450,
+    this.exclamationBreakMs = 400,
+    this.ellipsisBreakMs = 350,
+    this.enPeriodBreakMs = 400,
+    this.enQuestionBreakMs = 450,
+    this.enExclamationBreakMs = 400,
+    
+    // ===== 层级2：子句节奏（短呼吸） =====
+    this.commaBreakMs = 150,
+    this.semicolonBreakMs = 250,
+    this.colonBreakMs = 200,
+    this.dashBreakMs = 220,
+    this.enCommaBreakMs = 150,
+    this.enSemicolonBreakMs = 250,
+    this.enColonBreakMs = 200,
+    
+    // ===== 层级1：词组节奏（微微停顿） =====
+    this.enumBreakMs = 80,
+    this.quoteEndBreakMs = 80,
+    
+    // ===== 语调设计 =====
+    this.h1Pitch = '+8%',
+    this.h2Pitch = '+5%',
+    this.h3Pitch = '+3%',
+    this.blockquoteRate = '-12%',
+    this.blockquotePitch = '-5%',
+    this.inlineCodeRate = '-15%',
     this.strongEmphasis = 'strong',
     this.emEmphasis = 'moderate',
-    // 功能开关
-    this.announceCodeBlocks = false,
-    this.codeBlockAnnouncement = '这里有一段代码',
+    
+    // ===== 内容策略 =====
+    this.announceCodeBlocks = true,
+    this.codeBlockAnnouncement = '接下来是一段代码',
     this.readShortInlineCode = true,
-    this.maxInlineCodeLength = 30,
+    this.maxInlineCodeLength = 20,
     this.announceLinks = false,
     this.linkAnnouncement = '链接',
     this.readImageAlt = true,
     this.imagePrefix = '图片：',
     this.readListNumbers = true,
     this.listNumberFormat = 'short',
+    this.announceListCount = true,
     this.wrapEnglishWithLang = false,
     this.englishLang = 'en-US',
   });
@@ -174,7 +185,6 @@ class TtsSsmlConfig {
       listItemBreakMs: listItemBreakMs,
       hrBreakMs: hrBreakMs,
       lineBreakMs: lineBreakMs,
-      // 句内标点停顿
       enablePunctuationBreaks: enablePunctuationBreaks,
       commaBreakMs: commaBreakMs,
       enumBreakMs: enumBreakMs,
@@ -192,9 +202,9 @@ class TtsSsmlConfig {
       enPeriodBreakMs: enPeriodBreakMs,
       enQuestionBreakMs: enQuestionBreakMs,
       enExclamationBreakMs: enExclamationBreakMs,
-      // 语调
       h1Pitch: h1Pitch,
       h2Pitch: h2Pitch,
+      h3Pitch: h3Pitch,
       blockquoteRate: blockquoteRate,
       blockquotePitch: blockquotePitch,
       inlineCodeRate: inlineCodeRate,
@@ -210,6 +220,7 @@ class TtsSsmlConfig {
       imagePrefix: imagePrefix,
       readListNumbers: readListNumbers,
       listNumberFormat: listNumberFormat,
+      announceListCount: announceListCount,
       wrapEnglishWithLang: wrapEnglishWithLang,
       englishLang: englishLang,
     );
@@ -222,14 +233,14 @@ class TtsSsmlConfig {
   /// 快速朗读（节奏更快，停顿更短，关闭句内停顿）
   static const TtsSsmlConfig fastConfig = TtsSsmlConfig(
     rhythmScale: 0.6,
-    enablePunctuationBreaks: false, // 快速模式关闭句内停顿
+    enablePunctuationBreaks: false,
   );
 
   /// 舒缓朗读（节奏更慢，停顿更长）
   static const TtsSsmlConfig relaxedConfig = TtsSsmlConfig(
     rhythmScale: 1.3,
-    commaBreakMs: 220,       // 更长的逗号停顿
-    periodBreakMs: 550,      // 更长的句号停顿
+    commaBreakMs: 220,
+    periodBreakMs: 550,
     questionBreakMs: 600,
     exclamationBreakMs: 550,
   );
@@ -246,16 +257,15 @@ class TtsSsmlConfig {
     paragraphBreakMs: 800,
     listItemBreakMs: 400,
     hrBreakMs: 1200,
-    // 有声书风格：更明显的句内停顿
-    commaBreakMs: 250,       // 更长的逗号停顿
-    enumBreakMs: 180,        // 更长的顿号停顿
-    semicolonBreakMs: 350,   // 更长的分号停顿
-    colonBreakMs: 300,       // 更长的冒号停顿
-    periodBreakMs: 600,      // 更长的句号停顿
-    questionBreakMs: 650,    // 更长的问号停顿
-    exclamationBreakMs: 600, // 更长的感叹号停顿
-    ellipsisBreakMs: 450,    // 更长的省略号停顿
-    dashBreakMs: 320,        // 更长的破折号停顿
+    commaBreakMs: 250,
+    enumBreakMs: 180,
+    semicolonBreakMs: 350,
+    colonBreakMs: 300,
+    periodBreakMs: 600,
+    questionBreakMs: 650,
+    exclamationBreakMs: 600,
+    ellipsisBreakMs: 450,
+    dashBreakMs: 320,
     h1Pitch: '+8%',
     h2Pitch: '+5%',
     blockquoteRate: '-15%',
@@ -268,7 +278,8 @@ class TtsSsmlConfig {
 /// TTS 段落（包含纯文本和 SSML）
 class TtsSegmentWithSsml {
   final int index;
-  final String plainText;  // 纯文本（用于显示、缓存 key）
+  final String plainText;  // 处理后的纯文本（用于 TTS 合成、缓存 key）
+  final String rawText;    // 原始格式文本（保留换行，用于显示）
   final String ssmlContent; // SSML 内容（不含外层 speak/voice 标签）
   final int startOffset;
   final int endOffset;
@@ -276,6 +287,7 @@ class TtsSegmentWithSsml {
   TtsSegmentWithSsml({
     required this.index,
     required this.plainText,
+    required this.rawText,
     required this.ssmlContent,
     required this.startOffset,
     required this.endOffset,
@@ -316,6 +328,7 @@ $ssmlContent
     return TtsSegment(
       index: index,
       text: plainText,
+      rawText: rawText,
       startOffset: startOffset,
       endOffset: endOffset,
     );
@@ -326,22 +339,22 @@ $ssmlContent
       'TtsSegmentWithSsml(index: $index, plainText: "${plainText.length > 30 ? '${plainText.substring(0, 30)}...' : plainText}")';
 }
 
-/// 基于 AST 的 TTS 转换器
+/// 基于 AST 的 TTS 转换器（原生分段版）
 ///
-/// 遍历 Markdown AST 的同时：
-/// 1. 生成 SSML 标签
-/// 2. 累计可朗读文本长度
-/// 3. 在块级节点边界智能分段
+/// 核心设计原则：
+/// 1. **原生分段**：在 AST 块级节点边界自然分段，而非事后切割
+/// 2. **语义完整**：每个段落包含完整的 AST 子树，SSML 标签天然闭合
+/// 3. **不可分割单元**：段落(p)、列表项(li)、引用块(blockquote) 等是最小分段粒度
 class AstBasedTtsConverter {
   final TtsSsmlConfig config;
 
   /// 目标段落长度（可朗读文本字符数）
   final int targetSegmentLength;
 
-  /// 最小段落长度
+  /// 最小段落长度（低于此值会尝试与下一个节点合并）
   final int minSegmentLength;
 
-  /// 最大段落长度
+  /// 最大段落长度（超过此值会在下一个节点边界强制分段）
   final int maxSegmentLength;
 
   AstBasedTtsConverter({
@@ -370,7 +383,7 @@ class AstBasedTtsConverter {
     );
     final nodes = document.parse(preprocessed);
 
-    // 遍历 AST，同时分段和生成 SSML
+    // 遍历 AST，在节点边界自然分段
     final context = _ConversionContext(
       config: config,
       targetLength: targetSegmentLength,
@@ -379,9 +392,9 @@ class AstBasedTtsConverter {
     );
 
     _visitNodes(nodes, context);
-    context.flush(); // 保存最后一个段落
+    context.finalFlush(); // 保存最后一个段落
 
-    debugPrint('🎯 AST 分段完成: ${context.segments.length} 个段落');
+    debugPrint('🎯 AST 原生分段完成: ${context.segments.length} 个段落');
     for (var i = 0; i < context.segments.length; i++) {
       final seg = context.segments[i];
       debugPrint('  段落 $i: ${seg.plainText.length} 字符');
@@ -390,30 +403,22 @@ class AstBasedTtsConverter {
     return context.segments;
   }
 
-  /// 预处理：移除不适合朗读的内容 + 修复 Markdown 解析问题
+  /// 预处理：只做 AST 解析必需的修复
   String _preprocess(String text) {
     var result = text;
 
-    // === 修复 markdown 包对中文标点的解析问题 ===
-    // 问题：**"引号"** 无法正确解析，因为中文引号紧贴 ** 不满足 CommonMark 规则
-    // 原因：CommonMark 的 left-flanking/right-flanking 规则对中文标点判断有问题
-    // 解决：在 ** 和中文标点之间插入零宽空格 (U+200B)
-    const zwsp = '\u200B'; // 零宽空格，不影响显示但帮助解析
-    const cnPuncts = '""''「」『』（）【】'; // 中文引号和括号
+    // 修复 markdown 包对中文标点的解析问题
+    const zwsp = '\u200B';
+    const cnPuncts = '""''「」『』（）【】';
 
-    // ** 后面紧跟中文引号/括号 → 插入零宽空格
     result = result.replaceAllMapped(
       RegExp('\\*\\*([$cnPuncts])'),
       (m) => '**$zwsp${m.group(1)}',
     );
-
-    // 中文引号/括号后面紧跟 ** → 插入零宽空格
     result = result.replaceAllMapped(
       RegExp('([$cnPuncts])\\*\\*'),
       (m) => '${m.group(1)}$zwsp**',
     );
-
-    // 同样处理单个 * (斜体)
     result = result.replaceAllMapped(
       RegExp('(?<!\\*)\\*(?!\\*)([$cnPuncts])'),
       (m) => '*$zwsp${m.group(1)}',
@@ -422,24 +427,6 @@ class AstBasedTtsConverter {
       RegExp('([$cnPuncts])\\*(?!\\*)'),
       (m) => '${m.group(1)}$zwsp*',
     );
-
-    // === 原有的预处理 ===
-
-    // 移除 LaTeX 块级公式 $$...$$
-    result = result.replaceAll(RegExp(r'\$\$[\s\S]*?\$\$'), ' ');
-
-    // 移除 LaTeX 行内公式 $...$
-    result = result.replaceAll(RegExp(r'\$([^\s$][^$]*?[^\s$]|[^\s$])\$'), ' ');
-
-    // 移除 HTML 标签
-    result = result.replaceAll(RegExp(r'<[^>]+>'), ' ');
-
-    // 移除 HTML 实体
-    result = result.replaceAll(RegExp(r'&[a-zA-Z]+;'), ' ');
-    result = result.replaceAll(RegExp(r'&#\d+;'), ' ');
-
-    // 清理多余空格
-    result = result.replaceAll(RegExp(r' {2,}'), ' ');
 
     return result;
   }
@@ -465,96 +452,88 @@ class AstBasedTtsConverter {
     var text = node.text;
     if (text.isEmpty) return;
 
-    // 清理 markdown 包未正确解析的残留标记
-    text = _cleanMarkdownResiduals(text);
+    // 保存原始文本（用于显示）
+    var rawText = text;
+
+    // 移除预处理插入的零宽空格
+    text = text.replaceAll('\u200B', '');
+    rawText = rawText.replaceAll('\u200B', '');
     if (text.isEmpty) return;
 
-    // 处理文本（可选：英文包裹）
+    // 移除控制字符
+    text = text.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '');
+    rawText = rawText.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '');
+    if (text.isEmpty) return;
+
+    // 处理换行符（仅对 TTS 文本）
+    text = text.replaceAll(RegExp(r'[\r\n]+'), ' ');
+    text = text.replaceAll(RegExp(r' {2,}'), ' ');
+    // rawText 保留换行符，只做基本清理
+    rawText = rawText.replaceAll(RegExp(r'\r\n'), '\n');
+    rawText = rawText.replaceAll(RegExp(r'\r'), '\n');
+    if (text.trim().isEmpty) return;
+
+    // 跳过 LaTeX 内容
+    if (_isLaTeXContent(text)) {
+      debugPrint('🔊 跳过 LaTeX 内容');
+      return;
+    }
+
+    // 跳过纯符号
+    if (_isPureMarkup(text)) {
+      return;
+    }
+
+    // 生成 SSML
     final processedSsml = _processText(text, context);
-    context.ssmlBuffer.write(processedSsml);
-    context.plainTextBuffer.write(text);
-    context.currentTextLength += text.length;
+    context.appendContent(text, processedSsml, rawText: rawText);
   }
 
-  /// 清理 markdown 解析残留的标记
-  String _cleanMarkdownResiduals(String text) {
-    var result = text;
-
-    // 移除预处理时插入的零宽空格
-    result = result.replaceAll('\u200B', '');
-
-    // 移除残留的加粗/斜体标记 ** 和 *
-    // 注意：要小心不要误删乘号等
-    result = result.replaceAll(RegExp(r'\*{2,}'), ''); // ** 或更多
-    result = result.replaceAll(RegExp(r'(?<![a-zA-Z0-9])\*(?![a-zA-Z0-9])'), ''); // 独立的 *
-
-    // 移除残留的删除线标记 ~~
-    result = result.replaceAll('~~', '');
-
-    // 移除残留的行内代码标记 `
-    result = result.replaceAll(RegExp(r'`+'), '');
-
-    // 移除残留的下划线标记 __ (用于斜体/加粗)
-    result = result.replaceAll(RegExp(r'_{2,}'), '');
-
-    return result;
+  /// 检测是否为 LaTeX 内容
+  bool _isLaTeXContent(String text) {
+    final trimmed = text.trim();
+    if (trimmed.startsWith(r'$$') || trimmed.startsWith(r'\[')) {
+      return true;
+    }
+    if (RegExp(r'^\$[^\$]+\$$').hasMatch(trimmed)) {
+      return true;
+    }
+    if (trimmed.startsWith(r'\(') && trimmed.endsWith(r'\)')) {
+      return true;
+    }
+    if (RegExp(r'^\\(?:frac|sqrt|sum|int|lim|begin|end|text|mathrm)\b').hasMatch(trimmed)) {
+      return true;
+    }
+    return false;
   }
 
-  /// 处理文本内容（英文、数字等）
+  /// 检测是否为纯标记符号
+  bool _isPureMarkup(String text) {
+    final trimmed = text.trim();
+    if (RegExp(r'^[*_~`#>|\-+=\[\](){}]+$').hasMatch(trimmed)) {
+      return true;
+    }
+    return trimmed.isEmpty;
+  }
+
+  /// 处理文本内容（XML 转义 + 可选 SSML 停顿）
   String _processText(String text, _ConversionContext context) {
-    // 如果启用句内标点停顿，先处理标点
     if (config.enablePunctuationBreaks) {
-      return _processTextWithPunctuation(text, context);
+      return _processTextWithPunctuation(text);
     }
-
-    if (!config.wrapEnglishWithLang) {
-      // 不包裹英文，直接转义返回
-      return _escapeXml(text);
-    }
-
-    // 将文本分成中文和英文片段，英文用 <lang> 包裹
-    final buffer = StringBuffer();
-    final regex = RegExp(r'[a-zA-Z][a-zA-Z0-9\s\-_\.]*[a-zA-Z0-9]|[a-zA-Z]');
-
-    int lastEnd = 0;
-    for (final match in regex.allMatches(text)) {
-      // 添加匹配前的中文部分
-      if (match.start > lastEnd) {
-        buffer.write(_escapeXml(text.substring(lastEnd, match.start)));
-      }
-      // 添加英文部分（用 lang 包裹）
-      buffer.write('<lang xml:lang="${config.englishLang}">');
-      buffer.write(_escapeXml(match.group(0)!));
-      buffer.write('</lang>');
-      lastEnd = match.end;
-    }
-    // 添加剩余部分
-    if (lastEnd < text.length) {
-      buffer.write(_escapeXml(text.substring(lastEnd)));
-    }
-
-    return buffer.toString();
+    return _escapeXml(text);
   }
 
   /// 处理文本并在标点处插入停顿
-  ///
-  /// 这是控制朗读节奏的核心方法：
-  /// - 在逗号、顿号处插入短停顿（呼吸点）
-  /// - 在分号、冒号处插入中停顿（分句点）
-  /// - 在句号、问号、感叹号处插入长停顿（句末）
-  String _processTextWithPunctuation(String text, _ConversionContext context) {
+  String _processTextWithPunctuation(String text) {
     final buffer = StringBuffer();
 
     for (int i = 0; i < text.length; i++) {
       final char = text[i];
-
-      // 先写入字符（转义）
       buffer.write(_escapeXmlChar(char));
 
-      // 根据标点决定是否插入停顿
       final breakMs = _getPunctuationBreakMs(char, text, i);
       if (breakMs > 0) {
-        // 应用全局节奏倍率
         final scaledMs = (breakMs * config.rhythmScale).round();
         buffer.write('<break time="${scaledMs}ms"/>');
       }
@@ -563,305 +542,333 @@ class AstBasedTtsConverter {
     return buffer.toString();
   }
 
-  /// 获取标点符号对应的停顿时间（毫秒）
-  ///
-  /// 返回 0 表示不需要停顿
+  /// 获取标点符号对应的停顿时间
   int _getPunctuationBreakMs(String char, String fullText, int index) {
     switch (char) {
-      // ========== 中文标点 ==========
-      case '，':
-        return config.commaBreakMs;
-      case '、':
-        return config.enumBreakMs;
-      case '；':
-        return config.semicolonBreakMs;
-      case '：':
-        return config.colonBreakMs;
-      case '。':
-        return config.periodBreakMs;
-      case '？':
-        return config.questionBreakMs;
-      case '！':
-        return config.exclamationBreakMs;
+      case '，': return config.commaBreakMs;
+      case '、': return config.enumBreakMs;
+      case '；': return config.semicolonBreakMs;
+      case '：': return config.colonBreakMs;
+      case '。': return config.periodBreakMs;
+      case '？': return config.questionBreakMs;
+      case '！': return config.exclamationBreakMs;
       case '…':
-        // 省略号：只在最后一个 … 处停顿（避免 …… 两次停顿）
         if (index + 1 < fullText.length && fullText[index + 1] == '…') {
           return 0;
         }
         return config.ellipsisBreakMs;
       case '—':
-        // 破折号：只在最后一个 — 处停顿（避免 —— 两次停顿）
         if (index + 1 < fullText.length && fullText[index + 1] == '—') {
           return 0;
         }
         return config.dashBreakMs;
-      // 中文引号结束（短停顿）
       case '"':
-      case "'":  // 中文右单引号
+      case "'":
       case '」':
       case '』':
       case '）':
       case '】':
         return config.quoteEndBreakMs;
-
-      // ========== 英文标点 ==========
-      case ',':
-        return config.enCommaBreakMs;
-      case ';':
-        return config.enSemicolonBreakMs;
-      case ':':
-        return config.enColonBreakMs;
+      case ',': return config.enCommaBreakMs;
+      case ';': return config.enSemicolonBreakMs;
+      case ':': return config.enColonBreakMs;
       case '.':
-        // 判断是否是句末句号（而非缩写如 Mr. Dr. etc.）
-        // 简单规则：后面是空格、换行、结尾，或后面是大写字母
         if (index + 1 >= fullText.length) {
-          return config.enPeriodBreakMs; // 文本结尾
+          return config.enPeriodBreakMs;
         }
         final nextChar = fullText[index + 1];
         if (nextChar == ' ' || nextChar == '\n' || nextChar == '\r') {
-          // 检查空格后是否是大写字母（新句子开始）
-          if (index + 2 < fullText.length) {
-            final afterSpace = fullText[index + 2];
-            if (afterSpace.toUpperCase() == afterSpace &&
-                afterSpace.toLowerCase() != afterSpace) {
-              return config.enPeriodBreakMs;
-            }
-          }
-          // 段落末尾
           return config.enPeriodBreakMs;
         }
-        // 可能是缩写，不停顿
         return 0;
-      case '!':
-        return config.enExclamationBreakMs;
-      case '?':
-        return config.enQuestionBreakMs;
-
-      default:
-        return 0;
+      case '!': return config.enExclamationBreakMs;
+      case '?': return config.enQuestionBreakMs;
+      default: return 0;
     }
   }
 
   /// 单字符 XML 转义
   String _escapeXmlChar(String char) {
     switch (char) {
-      case '&':
-        return '&amp;';
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
-      case '"':
-        return '&quot;';
-      case "'":
-        return '&apos;';
-      default:
-        return char;
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      case "'": return '&apos;';
+      default: return char;
     }
+  }
+
+  /// XML 转义
+  String _escapeXml(String text) {
+    return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
   }
 
   /// 处理元素节点
   void _visitElement(md.Element element, _ConversionContext context) {
     switch (element.tag) {
-      // ========== 标题 ==========
+      // ========== 标题（块级，强制分段点） ==========
       case 'h1':
-        _handleHeading(element, context, config.h1BreakBefore,
-            config.h1BreakAfter, config.h1Pitch, forceSegmentBefore: true);
+        _handleBlockElement(
+          element,
+          context,
+          beforeBreak: config.h1BreakBefore,
+          afterBreak: config.h1BreakAfter,
+          pitch: config.h1Pitch,
+          markdownPrefix: '# ',
+          forceSegmentBefore: true,
+          forceSegmentAfter: true,
+        );
         break;
 
       case 'h2':
-        _handleHeading(element, context, config.h2BreakBefore,
-            config.h2BreakAfter, config.h2Pitch, forceSegmentBefore: true);
+        _handleBlockElement(
+          element,
+          context,
+          beforeBreak: config.h2BreakBefore,
+          afterBreak: config.h2BreakAfter,
+          pitch: config.h2Pitch,
+          markdownPrefix: '## ',
+          forceSegmentBefore: true,
+          forceSegmentAfter: true,
+        );
         break;
 
       case 'h3':
       case 'h4':
       case 'h5':
       case 'h6':
-        _handleHeading(
-            element, context, config.h3BreakBefore, config.h3BreakAfter, null,
-            forceSegmentBefore: true);
+        _handleBlockElement(
+          element,
+          context,
+          beforeBreak: config.h3BreakBefore,
+          afterBreak: config.h3BreakAfter,
+          pitch: config.h3Pitch,
+          markdownPrefix: '### ', // 简化处理，h3-h6 统一用 ###
+          forceSegmentBefore: true,
+        );
         break;
 
-      // ========== 段落 ==========
+      // ========== 段落（块级，自然分段点） ==========
       case 'p':
-        _visitChildren(element, context);
-        context.ssmlBuffer.write('<break time="${config.paragraphBreak}"/>');
-        // 段落结束检查分段
-        context.checkAndFlushIfNeeded();
+        _handleBlockElement(
+          element,
+          context,
+          afterBreak: config.paragraphBreak,
+          forceSegmentAfter: true,
+        );
         break;
 
-      // ========== 列表 ==========
+      // ========== 列表（容器，不直接处理内容） ==========
       case 'ul':
+        if (config.announceListCount) {
+          final itemCount = _countListItems(element);
+          if (itemCount > 1) {
+            final announcement = '下面有$itemCount项。';
+            context.appendContent(announcement, '<break time="200ms"/>${_escapeXml(announcement)}<break time="150ms"/>', rawText: '');
+          }
+        }
         context.enterList(ordered: false);
         _visitChildren(element, context);
         context.exitList();
-        context.ssmlBuffer.write('<break time="${config.listItemBreak}"/>');
         break;
 
       case 'ol':
+        if (config.announceListCount) {
+          final itemCount = _countListItems(element);
+          if (itemCount > 1) {
+            final announcement = '下面有$itemCount个要点。';
+            context.appendContent(announcement, '<break time="200ms"/>${_escapeXml(announcement)}<break time="150ms"/>', rawText: '');
+          }
+        }
         context.enterList(ordered: true);
         _visitChildren(element, context);
         context.exitList();
-        context.ssmlBuffer.write('<break time="${config.listItemBreak}"/>');
         break;
 
+      // ========== 列表项（块级，自然分段点） ==========
       case 'li':
-        context.ssmlBuffer.write('<break time="${config.listItemBreak}"/>');
-
-        // 有序列表编号
+        // 编号前缀
+        String? numberPrefix;
         if (config.readListNumbers && context.isInOrderedList) {
           final number = context.nextListNumber();
-          String numberText;
-          if (config.listNumberFormat == 'long') {
-            numberText = '第$number点，';
-          } else {
-            numberText = '$number、';
-          }
-          context.ssmlBuffer.write(_escapeXml(numberText));
-          context.plainTextBuffer.write(numberText);
-          context.currentTextLength += numberText.length;
+          numberPrefix = config.listNumberFormat == 'long' ? '第$number点，' : '$number、';
         }
-
-        _visitChildren(element, context);
-        // 列表项结束检查分段
-        context.checkAndFlushIfNeeded();
+        
+        // Markdown 前缀（用于显示）
+        String? markdownPrefix;
+        if (context.isInOrderedList) {
+          // 尝试获取当前编号（但这很难完全准确，因为只有上下文知道）
+          // 简单起见，可以用 '1. ' 或者 '- '。Markdown 渲染器通常会自动处理列表编号。
+          // 只要是 '1. ' 开头，渲染器会重算。
+          markdownPrefix = '1. '; 
+        } else {
+          markdownPrefix = '- ';
+        }
+        
+        _handleBlockElement(
+          element,
+          context,
+          beforeBreak: config.listItemBreak,
+          prefix: numberPrefix,
+          markdownPrefix: markdownPrefix,
+          forceSegmentAfter: true,
+        );
         break;
 
-      // ========== 引用块 ==========
+      // ========== 引用块（块级，强制独立成段） ==========
       case 'blockquote':
-        // 引用块前强制分段（独立成段）
-        context.flushIfHasContent();
-
-        context.ssmlBuffer.write(
-            '<prosody rate="${config.blockquoteRate}" pitch="${config.blockquotePitch}">');
-        _visitChildren(element, context);
-        context.ssmlBuffer.write('</prosody>');
-        context.ssmlBuffer.write('<break time="${config.paragraphBreak}"/>');
-
-        // 引用块后强制分段
-        context.flushIfHasContent();
+        _handleBlockElement(
+          element,
+          context,
+          afterBreak: config.paragraphBreak,
+          rate: config.blockquoteRate,
+          pitch: config.blockquotePitch,
+          markdownPrefix: '> ',
+          repeatMarkdownPrefix: true, // 确保每一行都有引用符号
+          forceSegmentBefore: true,
+          forceSegmentAfter: true,
+        );
         break;
 
-      // ========== 强调 ==========
+      // ========== 强调（行内） ==========
       case 'strong':
       case 'b':
-        context.ssmlBuffer
-            .write('<emphasis level="${config.strongEmphasis}">');
-        _visitChildren(element, context);
-        context.ssmlBuffer.write('</emphasis>');
+        _handleInlineElement(
+          element,
+          context,
+          openTag: '<emphasis level="${config.strongEmphasis}">',
+          closeTag: '</emphasis>',
+          markdownOpen: '**',
+          markdownClose: '**',
+        );
         break;
 
       case 'em':
       case 'i':
-        context.ssmlBuffer.write('<emphasis level="${config.emEmphasis}">');
-        _visitChildren(element, context);
-        context.ssmlBuffer.write('</emphasis>');
+        _handleInlineElement(
+          element,
+          context,
+          openTag: '<emphasis level="${config.emEmphasis}">',
+          closeTag: '</emphasis>',
+          markdownOpen: '*',
+          markdownClose: '*',
+        );
         break;
 
       // ========== 代码 ==========
       case 'code':
         final text = _getTextContent(element);
         final isCodeBlock = element.attributes.containsKey('class');
-
+        
         if (isCodeBlock) {
-          // 代码块：独立处理
+          // 代码块通常由 pre 处理，但如果单独出现
           if (config.announceCodeBlocks) {
-            context.flushIfHasContent();
-            context.ssmlBuffer.write('<break time="200ms"/>');
-            context.ssmlBuffer.write(_escapeXml(config.codeBlockAnnouncement));
-            context.plainTextBuffer.write(config.codeBlockAnnouncement);
-            context.currentTextLength += config.codeBlockAnnouncement.length;
-            context.ssmlBuffer.write('<break time="200ms"/>');
-            context.flushIfHasContent();
+            context.flushSegment();
+            context.appendContent(
+              config.codeBlockAnnouncement,
+              '<break time="200ms"/>${_escapeXml(config.codeBlockAnnouncement)}<break time="200ms"/>',
+              rawText: '```\n$text\n```', // 修正：这里应该显示代码内容，不能设为空，之前是对的
+            );
+            context.flushSegment();
           }
         } else {
-          // 行内代码
-          if (config.readShortInlineCode &&
-              text.length <= config.maxInlineCodeLength) {
-            context.ssmlBuffer
-                .write('<prosody rate="${config.inlineCodeRate}">');
-            context.ssmlBuffer.write(_escapeXml(text));
-            context.ssmlBuffer.write('</prosody>');
-            context.plainTextBuffer.write(text);
-            context.currentTextLength += text.length;
+          if (config.readShortInlineCode && text.length <= config.maxInlineCodeLength) {
+            context.appendContent(
+              text,
+              '<prosody rate="${config.inlineCodeRate}">${_escapeXml(text)}</prosody>',
+              rawText: '`$text`',
+            );
+          } else {
+             // 不读但要显示
+             context.appendContent('', '', rawText: '`$text`');
           }
         }
         break;
 
       case 'pre':
-        // 代码块
+        final codeContent = _getTextContent(element);
         if (config.announceCodeBlocks) {
-          context.flushIfHasContent();
-          context.ssmlBuffer.write('<break time="300ms"/>');
-          context.ssmlBuffer.write(_escapeXml(config.codeBlockAnnouncement));
-          context.plainTextBuffer.write(config.codeBlockAnnouncement);
-          context.currentTextLength += config.codeBlockAnnouncement.length;
-          context.ssmlBuffer.write('<break time="300ms"/>');
-          context.flushIfHasContent();
+          context.flushSegment();
+          context.appendContent(
+            config.codeBlockAnnouncement,
+            '<break time="300ms"/>${_escapeXml(config.codeBlockAnnouncement)}<break time="300ms"/>',
+            rawText: '```\n$codeContent\n```',
+          );
+          context.flushSegment();
         }
         break;
 
-      // ========== 链接 ==========
+      // ========== 链接（行内） ==========
+      // ========== 链接（行内） ==========
       case 'a':
-        _visitChildren(element, context);
-        // 可选：提示这是链接
+        final href = element.attributes['href'] ?? '';
+        _handleInlineElement(
+          element,
+          context,
+          openTag: '',
+          closeTag: '',
+          markdownOpen: '[',
+          markdownClose: ']($href)',
+        );
         if (config.announceLinks) {
           final announcement = '，${config.linkAnnouncement}';
-          context.ssmlBuffer.write(_escapeXml(announcement));
-          context.plainTextBuffer.write(announcement);
-          context.currentTextLength += announcement.length;
+          context.appendContent(announcement, _escapeXml(announcement), rawText: ''); // 后缀不需要显示在 rawText 中
         }
         break;
 
       // ========== 图片 ==========
+      // ========== 图片 ==========
       case 'img':
         if (config.readImageAlt) {
-          final alt = element.attributes['alt'];
-          if (alt != null && alt.isNotEmpty) {
+          final alt = element.attributes['alt'] ?? '';
+          final src = element.attributes['src'] ?? '';
+          if (alt.isNotEmpty) {
             final imageText = '${config.imagePrefix}$alt';
-            context.ssmlBuffer.write('<break time="200ms"/>');
-            context.ssmlBuffer.write(_escapeXml(imageText));
-            context.plainTextBuffer.write(imageText);
-            context.currentTextLength += imageText.length;
-            context.ssmlBuffer.write('<break time="200ms"/>');
+            context.appendContent(
+              imageText,
+              '<break time="200ms"/>${_escapeXml(imageText)}<break time="200ms"/>',
+              rawText: '![$alt]($src)',
+            );
+          } else {
+             // 即使不读也要显示
+             context.appendContent('', '', rawText: '![]($src)');
           }
         }
         break;
 
-      // ========== 分隔线 ==========
-      // 分隔线（---）用于标记内容边界，必须强制分段
-      // 这对于多模型回复的分离至关重要
+      // ========== 分隔线（块级，强制分段） ==========
+      // ========== 分隔线（块级，强制分段） ==========
       case 'hr':
-        // 分隔线前强制分段（保证当前内容独立）
-        context.forceFlush();
-        // 添加停顿
-        context.ssmlBuffer.write('<break time="${config.hrBreak}"/>');
-        // 分隔线后也强制分段（保证后续内容独立）
-        context.forceFlush();
+        context.flushSegment();
+        context.appendContent('', '<break time="${config.hrBreak}"/>', rawText: '\n---\n');
+        context.flushSegment();
         break;
 
-      // ========== 删除线 ==========
+      // ========== 删除线（跳过） ==========
       case 'del':
       case 's':
       case 'strike':
-        // 被删除的内容不朗读
         break;
 
       // ========== 换行 ==========
       case 'br':
-        context.ssmlBuffer.write('<break time="150ms"/>');
+        context.appendContent(' ', '<break time="150ms"/>');
         break;
 
-      // ========== 表格 ==========
+      // ========== 表格（简化处理） ==========
       case 'table':
-        context.flushIfHasContent();
-        context.ssmlBuffer.write('<break time="300ms"/>');
-        context.ssmlBuffer.write('这里有一个表格');
-        context.plainTextBuffer.write('这里有一个表格');
-        context.currentTextLength += 6;
-        context.ssmlBuffer.write('<break time="300ms"/>');
-        context.flushIfHasContent();
+        context.flushSegment();
+        context.appendContent(
+          '这里有一个表格',
+          '<break time="300ms"/>这里有一个表格<break time="300ms"/>',
+        );
+        context.flushSegment();
         break;
 
       case 'thead':
@@ -869,7 +876,6 @@ class AstBasedTtsConverter {
       case 'tr':
       case 'th':
       case 'td':
-        // 表格内容跳过
         break;
 
       // ========== 其他 ==========
@@ -878,32 +884,178 @@ class AstBasedTtsConverter {
     }
   }
 
-  /// 处理标题
-  void _handleHeading(
+  /// 处理块级元素
+  /// 
+  /// 这是实现"原生分段"的核心方法。每个块级元素作为独立单元处理，
+  /// 在元素边界检查分段条件，保证 SSML 标签完整闭合。
+  void _handleBlockElement(
     md.Element element,
-    _ConversionContext context,
-    String breakBefore,
-    String breakAfter,
-    String? pitch, {
+    _ConversionContext context, {
+    String? beforeBreak,
+    String? afterBreak,
+    String? pitch,
+    String? rate,
+    String? prefix,         // 用于朗读的前缀（如"第1点，"）
+    String? markdownPrefix, // 用于显示的 Markdown 前缀（如"1. "或"> "）
+    bool repeatMarkdownPrefix = false, // 是否每行都重复 Markdown 前缀（用于 blockquote）
     bool forceSegmentBefore = false,
+    bool forceSegmentAfter = false,
+    bool isNaturalSegmentPoint = false,
   }) {
-    // 标题前强制分段（新章节开始）
+    // 元素前强制分段
     if (forceSegmentBefore) {
-      context.flushIfHasContent();
+      context.flushSegment();
     }
 
-    context.ssmlBuffer.write('<break time="$breakBefore"/>');
-    if (pitch != null) {
-      context.ssmlBuffer.write('<prosody pitch="$pitch">');
+    // 递归处理子节点到临时上下文
+    final tempContext = _ConversionContext(
+      config: config,
+      targetLength: targetSegmentLength,
+      minLength: minSegmentLength,
+      maxLength: maxSegmentLength,
+    );
+    _visitChildren(element, tempContext);
+    
+    // 合并子节点的所有内容（包括已 flush 的段落 + 当前缓冲区）
+    final allPlainText = StringBuffer();
+    final allSsml = StringBuffer();
+    final allRawText = StringBuffer();
+    
+    // 1. 先合并已 flush 的段落
+    for (final seg in tempContext.segments) {
+      allPlainText.write(seg.plainText);
+      allSsml.write(seg.ssmlContent);
+      allRawText.write(seg.rawText);
+      allRawText.write('\n\n'); // 段落之间添加换行
     }
-    _visitChildren(element, context);
-    if (pitch != null) {
-      context.ssmlBuffer.write('</prosody>');
+    
+    // 2. 再合并当前缓冲区中未 flush 的内容
+    allPlainText.write(tempContext.currentPlainText);
+    allSsml.write(tempContext.currentSsml);
+    final currentRaw = tempContext.currentRawText;
+    if (currentRaw.isNotEmpty) {
+      allRawText.write(currentRaw);
+    } // 只有非空才写入，避免末尾多余换行影响 split
+    
+    // 如果没有实际内容，跳过
+    if (allPlainText.toString().trim().isEmpty) {
+      return;
     }
-    context.ssmlBuffer.write('<break time="$breakAfter"/>');
 
-    // 标题后检查分段（短标题可以和后文合并）
-    context.checkAndFlushIfNeeded();
+    // 使用临时缓冲区构建完整的 SSML（保证标签闭合）
+    final ssmlBuffer = StringBuffer();
+    final plainBuffer = StringBuffer();
+    final rawBuffer = StringBuffer();
+
+    // 前置 break
+    if (beforeBreak != null) {
+      ssmlBuffer.write('<break time="$beforeBreak"/>');
+    }
+
+    // 开始标签
+    if (pitch != null || rate != null) {
+      ssmlBuffer.write('<prosody');
+      if (pitch != null) ssmlBuffer.write(' pitch="$pitch"');
+      if (rate != null) ssmlBuffer.write(' rate="$rate"');
+      ssmlBuffer.write('>');
+    }
+
+    // 前缀处理
+    if (prefix != null) {
+      ssmlBuffer.write(_escapeXml(prefix));
+      plainBuffer.write(prefix);
+    }
+    
+    // Raw Text 处理
+    if (markdownPrefix != null) {
+      if (repeatMarkdownPrefix) {
+        // 给每一行都加上前缀（特别是 blockquote）
+        final rawContent = allRawText.toString();
+        // 移除末尾可能的空白，防止多余的 > 行
+        final trimmedContent = rawContent.trimRight(); 
+        if (trimmedContent.isNotEmpty) {
+          final lines = trimmedContent.split('\n');
+          for (var i = 0; i < lines.length; i++) {
+            // 如果是空行，也加上前缀（> ）保持 block 连续性
+            rawBuffer.write('$markdownPrefix${lines[i]}');
+            if (i < lines.length - 1) {
+              rawBuffer.write('\n');
+            }
+          }
+        }
+      } else {
+        rawBuffer.write(markdownPrefix);
+        rawBuffer.write(allRawText);
+      }
+    } else {
+      // 降级策略
+      if (prefix != null) {
+         rawBuffer.write(prefix);
+      }
+      rawBuffer.write(allRawText);
+    }
+
+    // 添加合并后的子节点内容 (SSML/Plain)
+    ssmlBuffer.write(allSsml);
+    plainBuffer.write(allPlainText);
+    // rawBuffer 已在上面处理完毕
+
+    // 结束标签
+    if (pitch != null || rate != null) {
+      ssmlBuffer.write('</prosody>');
+    }
+
+    // 后置 break
+    if (afterBreak != null) {
+      ssmlBuffer.write('<break time="$afterBreak"/>');
+    }
+
+    // 将完整元素内容添加到主上下文
+    context.appendContent(plainBuffer.toString(), ssmlBuffer.toString(), rawText: rawBuffer.toString());
+
+    // 检查分段
+    if (forceSegmentAfter) {
+      context.flushSegment();
+    } else if (isNaturalSegmentPoint) {
+      context.flushIfNeeded();
+    }
+  }
+
+  /// 处理行内元素
+  void _handleInlineElement(
+    md.Element element,
+    _ConversionContext context, {
+    required String openTag,
+    required String closeTag,
+    String markdownOpen = '',  // 新增：Markdown 开始标记
+    String markdownClose = '', // 新增：Markdown 结束标记
+  }) {
+    final ssmlBuffer = StringBuffer();
+    final plainBuffer = StringBuffer();
+    final rawBuffer = StringBuffer();
+
+    ssmlBuffer.write(openTag);
+    // rawBuffer 写入 Markdown 标记
+    rawBuffer.write(markdownOpen);
+
+    // 递归处理子节点
+    final tempContext = _ConversionContext(
+      config: config,
+      targetLength: targetSegmentLength,
+      minLength: minSegmentLength,
+      maxLength: maxSegmentLength,
+    );
+    _visitChildren(element, tempContext);
+    
+    ssmlBuffer.write(tempContext.currentSsml);
+    plainBuffer.write(tempContext.currentPlainText);
+    rawBuffer.write(tempContext.currentRawText);
+    
+    ssmlBuffer.write(closeTag);
+    // rawBuffer 写入 Markdown 结束标记
+    rawBuffer.write(markdownClose);
+
+    context.appendContent(plainBuffer.toString(), ssmlBuffer.toString(), rawText: rawBuffer.toString());
   }
 
   /// 遍历子节点
@@ -911,6 +1063,15 @@ class AstBasedTtsConverter {
     if (element.children != null) {
       _visitNodes(element.children!, context);
     }
+  }
+
+  /// 计算列表项数量
+  int _countListItems(md.Element listElement) {
+    if (listElement.children == null) return 0;
+    return listElement.children!
+        .whereType<md.Element>()
+        .where((e) => e.tag == 'li')
+        .length;
   }
 
   /// 获取元素内的纯文本
@@ -929,19 +1090,9 @@ class AstBasedTtsConverter {
       }
     }
   }
-
-  /// XML 转义
-  String _escapeXml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&apos;');
-  }
 }
 
-/// 转换上下文（内部使用）
+/// 转换上下文（原生分段版）
 class _ConversionContext {
   final TtsSsmlConfig config;
   final int targetLength;
@@ -949,24 +1100,24 @@ class _ConversionContext {
   final int maxLength;
 
   /// 当前段落的 SSML 缓冲
-  final StringBuffer ssmlBuffer = StringBuffer();
+  final StringBuffer _ssmlBuffer = StringBuffer();
 
-  /// 当前段落的纯文本缓冲
-  final StringBuffer plainTextBuffer = StringBuffer();
+  /// 当前段落的纯文本缓冲（处理后，用于 TTS）
+  final StringBuffer _plainTextBuffer = StringBuffer();
 
-  /// 当前段落的文本长度
-  int currentTextLength = 0;
+  /// 当前段落的原始文本缓冲（保留格式，用于显示）
+  final StringBuffer _rawTextBuffer = StringBuffer();
 
   /// 当前段落的起始偏移
-  int currentStartOffset = 0;
+  int _currentStartOffset = 0;
 
-  /// 全局偏移（用于追踪位置）
-  int globalOffset = 0;
+  /// 全局偏移
+  int _globalOffset = 0;
 
   /// 已完成的段落列表
   final List<TtsSegmentWithSsml> segments = [];
 
-  /// 列表栈（支持嵌套列表）
+  /// 列表栈
   final List<_ListContext> _listStack = [];
 
   _ConversionContext({
@@ -975,6 +1126,18 @@ class _ConversionContext {
     required this.minLength,
     required this.maxLength,
   });
+
+  /// 获取当前 SSML 内容
+  String get currentSsml => _ssmlBuffer.toString();
+
+  /// 获取当前纯文本内容
+  String get currentPlainText => _plainTextBuffer.toString();
+
+  /// 获取当前原始文本内容
+  String get currentRawText => _rawTextBuffer.toString();
+
+  /// 获取当前文本长度
+  int get currentLength => _plainTextBuffer.length;
 
   /// 是否在有序列表中
   bool get isInOrderedList =>
@@ -998,42 +1161,45 @@ class _ConversionContext {
     return ++_listStack.last.currentNumber;
   }
 
-  /// 检查是否需要分段
-  void checkAndFlushIfNeeded() {
-    if (currentTextLength >= targetLength) {
-      flush();
-    } else if (currentTextLength >= maxLength) {
-      flush();
+  /// 添加内容到当前段落
+  /// [plainText] 处理后的纯文本（去掉换行等）
+  /// [ssml] SSML 内容
+  /// [rawText] 原始格式文本（可选，默认与 plainText 相同）
+  void appendContent(String plainText, String ssml, {String? rawText}) {
+    _plainTextBuffer.write(plainText);
+    _ssmlBuffer.write(ssml);
+    _rawTextBuffer.write(rawText ?? plainText);
+  }
+
+  /// 检查是否需要分段（在自然分段点调用）
+  void flushIfNeeded() {
+    if (currentLength >= targetLength) {
+      flushSegment();
     }
   }
 
-  /// 如果有内容就分段（用于自然分段点，如段落结束）
-  void flushIfHasContent() {
-    if (currentTextLength >= minLength) {
-      flush();
+  /// 强制分段
+  void flushSegment() {
+    if (currentLength > 0) {
+      _createSegment();
     }
   }
 
-  /// 强制分段（用于内容边界，如分隔线、回复切换）
-  /// 无论内容长短都会分段，确保不同内容块不会被合并
-  void forceFlush() {
-    if (currentTextLength > 0) {
-      debugPrint('🎯 强制分段: 当前 $currentTextLength 字符');
-      flush();
+  /// 最终分段（处理结束时调用）
+  void finalFlush() {
+    if (currentLength > 0) {
+      _createSegment();
     }
   }
 
-  /// 保存当前段落，开始新段落
-  void flush() {
-    final plainText = plainTextBuffer.toString().trim();
-    final ssmlContent = ssmlBuffer.toString().trim();
+  /// 创建段落
+  void _createSegment() {
+    final plainText = _plainTextBuffer.toString().trim();
+    final rawText = _rawTextBuffer.toString().trim();
+    final ssmlContent = _ssmlBuffer.toString().trim();
 
     if (plainText.isNotEmpty) {
-      // 清理 SSML
-      final cleanedSsml = _cleanSsml(ssmlContent);
-
       final segmentIndex = segments.length;
-      // 打印段落预览（前 50 字符）
       final preview = plainText.length > 50
           ? '${plainText.substring(0, 50)}...'
           : plainText;
@@ -1042,54 +1208,20 @@ class _ConversionContext {
       segments.add(TtsSegmentWithSsml(
         index: segmentIndex,
         plainText: plainText,
-        ssmlContent: cleanedSsml,
-        startOffset: currentStartOffset,
-        endOffset: currentStartOffset + currentTextLength,
+        rawText: rawText,
+        ssmlContent: ssmlContent,
+        startOffset: _currentStartOffset,
+        endOffset: _currentStartOffset + plainText.length,
       ));
 
-      currentStartOffset += currentTextLength;
+      _globalOffset += plainText.length;
+      _currentStartOffset = _globalOffset;
     }
 
     // 重置缓冲
-    ssmlBuffer.clear();
-    plainTextBuffer.clear();
-    currentTextLength = 0;
-  }
-
-  /// 清理 SSML
-  String _cleanSsml(String ssml) {
-    var result = ssml;
-
-    // 移除开头的闭合标签（如 </prosody>，这是分段导致的残留）
-    result = result.replaceFirst(RegExp(r'^(\s*</\w+>\s*)+'), '');
-
-    // 移除开头的 break 标签
-    result = result.replaceFirst(RegExp(r'^(<break[^>]*/>[\s]*)+'), '');
-
-    // 移除末尾未闭合的开始标签（如 <prosody ...> 没有对应的 </prosody>）
-    // 检测模式：<tag ...> 在末尾，且没有对应的闭合标签
-    final openTagMatch = RegExp(r'<(\w+)[^>]*>\s*$').firstMatch(result);
-    if (openTagMatch != null) {
-      final tagName = openTagMatch.group(1);
-      final closeTag = '</$tagName>';
-      // 如果没有对应的闭合标签，移除这个开始标签
-      if (!result.contains(closeTag)) {
-        result = result.replaceFirst(RegExp(r'<\w+[^>]*>\s*$'), '');
-      }
-    }
-
-    // 合并连续的 break 标签（保留时间较长的）
-    result = result.replaceAllMapped(
-      RegExp(r'<break time="(\d+)ms"/>\s*<break time="(\d+)ms"/>'),
-      (match) {
-        final time1 = int.parse(match.group(1)!);
-        final time2 = int.parse(match.group(2)!);
-        final maxTime = time1 > time2 ? time1 : time2;
-        return '<break time="${maxTime}ms"/>';
-      },
-    );
-
-    return result.trim();
+    _ssmlBuffer.clear();
+    _plainTextBuffer.clear();
+    _rawTextBuffer.clear();
   }
 }
 
