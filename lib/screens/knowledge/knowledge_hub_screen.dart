@@ -10,6 +10,7 @@ import '../../widgets/knowledge/knowledge_source_view.dart';
 import '../../widgets/knowledge/knowledge_tag_view.dart';
 import 'knowledge_editor_screen.dart';
 import 'daily_review_screen.dart';
+import '../conversation_screen.dart';
 
 /// 知识库主页
 ///
@@ -336,11 +337,24 @@ class KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
   }
 
   void _handleSourceTap(KnowledgeItem item) {
-    // 简单的 SnackBar 提示，实际应导航
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('跳转到来源: ${item.sourceTopicName ?? "未知对话"}'),
-        behavior: SnackBarBehavior.floating,
+    if (!item.hasSource || item.sourceTopicId == null) {
+       ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('无法跳转：无来源信息'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ConversationScreen(
+          topicId: item.sourceTopicId!,
+          topicName: item.sourceTopicName ?? '未知话题',
+          scrollToMessageId: item.sourceMessageId,
+        ),
       ),
     );
   }

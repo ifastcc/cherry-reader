@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+
+import 'package:flutter/foundation.dart'; 
+import 'dart:math';
 import 'package:flutter/scheduler.dart';
+import 'package:gpt_markdown_custom/gpt_markdown.dart' show PlainTextExtractor;
 import '../models/highlight_data.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../services/highlight_service.dart';
@@ -229,6 +233,9 @@ class _HighlightableCardState extends State<HighlightableCard> {
   String? _lastRenderedContent;
   int? _lastRenderedHighlightsHash;
 
+  // 【核心修复】缓存渲染后的纯文本，用于高亮匹配
+  String? _cachedPlainText;
+
   // 【新增】展开/收缩状态
   bool _expanded = false;
 
@@ -260,6 +267,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
         _expanded = !_expanded;
         // 展开/收缩时清除 Markdown 缓存，因为内容变化了
         _cachedMarkdownWidget = null;
+        _cachedPlainText = null;  // 同时清除纯文本缓存
       });
     }
   }
@@ -296,6 +304,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
         _highlights = highlights;
         // 高亮变化时清除 Markdown 缓存
         _cachedMarkdownWidget = null;
+        _cachedPlainText = null;  // 同时清除纯文本缓存
       });
     }
   }
@@ -304,8 +313,10 @@ class _HighlightableCardState extends State<HighlightableCard> {
   ///
   /// 只有在 content 或 highlights 变化时才重新创建
   Widget _getMemoizedMarkdownWidget() {
-    // 【优化】使用 highlights 长度和搜索关键词作为快速检查
-    final highlightsHash = _highlights.length + (widget.searchKeyword?.hashCode ?? 0);
+    // 【优化】计算更健壮的 hash，包含 ID、颜色、样式
+    final highlightsHash = Object.hashAll(
+      _highlights.map((h) => Object.hash(h.id, h.color, h.styleType, h.start, h.end)),
+    ) + (widget.searchKeyword?.hashCode ?? 0);
     // 【新增】使用 _displayContent 而不是 widget.content，支持折叠显示
     final currentContent = _displayContent;
 
@@ -316,37 +327,52 @@ class _HighlightableCardState extends State<HighlightableCard> {
         _lastRenderedHighlightsHash != highlightsHash;
 
     if (needsRebuild) {
+      // 【核心修复】首先提取渲染后的纯文本，用于高亮匹配
+      _cachedPlainText = PlainTextExtractor.extractPlainText(
+        currentContent,
+        useDollarSignsForLatex: true,
+      );
+      final plainText = _cachedPlainText!;
+
+      if (kDebugMode) {
+        print('DEBUG: Source content (len=${currentContent.length}): "${currentContent.substring(0, min(80, currentContent.length))}..."');
+        print('DEBUG: Plain text (len=${plainText.length}): "${plainText.substring(0, min(80, plainText.length))}..."');
+      }
+
       // 用户手动标注的高亮
-      // 【修复】使用完整内容长度进行验证，而不是折叠后的长度
+      // 【核心修复】在渲染后的纯文本中搜索匹配，而非源 Markdown
       final userHighlights = _highlights
-          .where((h) => h.end <= widget.content.length)
           .map((h) {
-            // 【修复】如果内容被折叠，裁剪高亮范围到可见区域
-            int start = h.start;
-            int end = h.end;
-            if (currentContent.length < widget.content.length) {
-              // 折叠模式：只显示在可见范围内的高亮部分
-              final visibleLength = currentContent.length - 3; // 减去 "..." 的长度
-              if (start >= visibleLength) {
-                return null; // 高亮完全在折叠区域外，不显示
-              }
-              if (end > visibleLength) {
-                end = visibleLength; // 裁剪到可见区域边界
-              }
+            // 1. 在渲染后纯文本中搜索该文本的所有出现位置
+            final matches = h.text.allMatches(plainText);
+            
+            if (kDebugMode) {
+               print('DEBUG: Highlight matching id=${widget.messageId}');
+               print('DEBUG: Highlight Text: "${h.text}"');
+               print('DEBUG: Matches found: ${matches.length}');
             }
-            return HighlightRange(
-              id: h.id,
-              start: start,
-              end: end,
-              color: Color(h.color),
-              styleType: h.styleType,
-            );
+
+            if (matches.isEmpty) {
+               // 尝试去空白匹配（容错）
+               final trimmedText = h.text.trim();
+               if (trimmedText.isNotEmpty && trimmedText != h.text) {
+                 final trimmedMatches = trimmedText.allMatches(plainText);
+                 if (trimmedMatches.isNotEmpty) {
+                    // 找到了去空白后的匹配
+                    return _findClosestMatch(trimmedMatches, h, plainText);
+                 }
+               }
+               return null;
+            }
+
+            // 2. 找到距离原存储位置 (h.start) 最近的一个匹配
+            return _findClosestMatch(matches, h, plainText);
           })
           .whereType<HighlightRange>()
           .toList();
 
-      // 【搜索高亮】生成搜索关键词的高亮范围
-      final searchHighlights = _generateSearchHighlights(currentContent);
+      // 【搜索高亮】生成搜索关键词的高亮范围（也在纯文本中匹配）
+      final searchHighlights = _generateSearchHighlights(plainText);
 
       // 合并高亮（搜索高亮 + 用户高亮）
       final allHighlights = [...searchHighlights, ...userHighlights];
@@ -381,6 +407,54 @@ class _HighlightableCardState extends State<HighlightableCard> {
     return _cachedMarkdownWidget!;
   }
 
+  /// 在多个匹配中找到距离原位置最近的一个
+  HighlightRange? _findClosestMatch(
+    Iterable<Match> matches,
+    HighlightData originalHighlight,
+    String currentContent,
+  ) {
+    if (matches.isEmpty) return null;
+
+    // 找到其实位置 (start) 最接近原 highlight.start 的匹配
+    // 这样做可以尽可能区分同一文本的多次出现
+    Match? bestMatch;
+    int minDistance = 999999999;
+
+    for (final match in matches) {
+      final distance = (match.start - originalHighlight.start).abs();
+      if (distance < minDistance) {
+        minDistance = distance;
+        bestMatch = match;
+      }
+    }
+
+    if (bestMatch == null) return null;
+
+    // 处理折叠内容可见性
+    int start = bestMatch.start;
+    int end = bestMatch.end;
+
+    // 如果内容被折叠（currentContent 长度小于原始 content）
+    if (currentContent.length < widget.content.length) {
+      final visibleLength = currentContent.length - 3; // 减去 "..." 的长度
+      if (start >= visibleLength) {
+        return null; // 完全在折叠区域外
+      }
+      if (end > visibleLength) {
+        end = visibleLength; // 裁剪
+      }
+    }
+
+    return HighlightRange(
+      id: originalHighlight.id,
+      start: start,
+      end: end,
+      color: Color(originalHighlight.color),
+      styleType: originalHighlight.styleType,
+      text: originalHighlight.text,
+    );
+  }
+
   /// 【搜索高亮】根据搜索关键词生成高亮范围
   List<HighlightRange> _generateSearchHighlights(String content) {
     final keyword = widget.searchKeyword;
@@ -403,6 +477,7 @@ class _HighlightableCardState extends State<HighlightableCard> {
         end: index + keyword.length,
         color: const Color(0xFFFFEB3B), // 黄色高亮
         styleType: 'background',
+        text: keyword,
       ));
 
       startIndex = index + keyword.length;
@@ -781,7 +856,12 @@ class _HighlightableCardState extends State<HighlightableCard> {
                   if (mounted) {
                     setState(() {
                       _selectedText = newSelectedText;
-                      final start = widget.content.indexOf(_selectedText);
+                      // 【核心修复】在渲染后的纯文本中查找位置，而不是源 Markdown
+                      _cachedPlainText ??= PlainTextExtractor.extractPlainText(
+                        _displayContent,
+                        useDollarSignsForLatex: true,
+                      );
+                      final start = _cachedPlainText!.indexOf(_selectedText);
                       if (start != -1) {
                          _selectionStart = start;
                          _selectionEnd = start + _selectedText.length;

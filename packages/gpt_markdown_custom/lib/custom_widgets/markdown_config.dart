@@ -78,6 +78,7 @@ class HighlightRangeData {
   final int end;
   final Color color;
   final String? styleType; // 'background' or 'underline'
+  final String? text; // 【新增】用于在渲染时动态匹配的文本
 
   const HighlightRangeData({
     this.id,
@@ -85,6 +86,7 @@ class HighlightRangeData {
     required this.end,
     required this.color,
     this.styleType = 'background',
+    this.text,
   });
 }
 

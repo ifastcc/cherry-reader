@@ -129,6 +129,7 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
           end: h.end,
           color: h.color,
           styleType: h.styleType,
+          text: h.text,
         )).toList(),
         // 高亮点击回调
         onHighlightRangeTap: onHighlightTap != null 

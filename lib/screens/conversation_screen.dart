@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'dart:async';
 import 'dart:ui'; // For ImageFilter
@@ -41,22 +42,26 @@ class InPageSearchMatch {
 }
 
 class ConversationScreen extends StatefulWidget {
-  final CherryExtractor extractor;
+  final CherryExtractor? extractor;
   final String topicId;
   final String topicName;
 
   /// 【搜索定位】初始滚动到的轮次索引（从 0 开始）
   final int? scrollToRoundIndex;
 
+  /// 【跳转定位】初始滚动到的消息 ID
+  final String? scrollToMessageId;
+
   /// 【搜索高亮】要高亮的搜索关键词
   final String? highlightKeyword;
 
   ConversationScreen({
     Key? key,
-    required this.extractor,
+    this.extractor,
     required this.topicId,
     required this.topicName,
     this.scrollToRoundIndex,
+    this.scrollToMessageId,
     this.highlightKeyword,
   }) : super(key: key);
 
@@ -472,6 +477,62 @@ class _ConversationScreenState extends State<ConversationScreen> {
     debugPrint('🎯 [搜索定位] 已滚动到第 ${groupIndex + 1} 轮');
   }
 
+  /// 【跳转定位】延迟滚动到指定消息
+  Future<void> _scrollToMessageWithDelay(String messageId) async {
+    // 等待 ListView 完全构建
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (!mounted) return;
+
+    final groups = _getConversationGroups();
+    int targetGroup = -1;
+    int targetCardIndex = 0;
+
+    for (int i = 0; i < groups.length; i++) {
+      final group = groups[i];
+      // Check user message
+      final userMsg = group['user_message'] as Map<String, dynamic>;
+      if (userMsg['id'] == messageId) {
+        targetGroup = i;
+        targetCardIndex = 0; // User message is usually visible or part of the group header/content
+        break;
+      }
+
+      // Check assistant replies
+      final replies = group['assistant_replies'] as List;
+      for (int j = 0; j < replies.length; j++) {
+        final reply = replies[j] as Map<String, dynamic>;
+        if (reply['id'] == messageId) {
+          targetGroup = i;
+          // Calculate card index (AI analyses + reply index)
+          final aiAnalyses = _aiAnalyses[i] ?? [];
+          targetCardIndex = aiAnalyses.length + j;
+          break;
+        }
+      }
+      if (targetGroup != -1) break;
+    }
+
+    if (targetGroup != -1) {
+      await _scrollToGroup(targetGroup);
+      
+      // If it's a specific card index (for replies), switch to it
+      // Note: User message usually doesn't need card switching as it's the main content or part of the flow.
+      // But if we are in card mode, we might want to ensure the right card is shown.
+      if (targetCardIndex > 0) {
+         _getCardPageNotifier(targetGroup).value = targetCardIndex;
+          // Sync PageController
+          final pageController = _pageControllers[targetGroup];
+          if (pageController != null && pageController.hasClients) {
+            pageController.jumpToPage(targetCardIndex);
+          }
+      }
+      
+      debugPrint('🎯 [跳转定位] 已滚动到消息 $messageId (所在第 ${targetGroup + 1} 轮)');
+    } else {
+        debugPrint('⚠️ [跳转定位] 未找到消息 $messageId');
+    }
+  }
+
   // ========== 【页内搜索】方法 ==========
 
   /// 进入搜索模式
@@ -643,9 +704,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
     debugPrint('⏱️ [ConversationScreen] 并行加载数据: ${sw.elapsedMilliseconds}ms');
 
     // 如果缓存中没有数据，使用 extractor（fallback）
-    if (conv == null) {
+    if (conv == null && widget.extractor != null) {
       sw.reset();
-      conv = widget.extractor.extractTopicConversation(widget.topicId);
+      conv = widget.extractor!.extractTopicConversation(widget.topicId);
       debugPrint('⏱️ [ConversationScreen] fallback到extractor: ${sw.elapsedMilliseconds}ms');
     }
 
@@ -688,6 +749,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
       // 【搜索定位】如果有指定的轮次，自动滚动到该位置
       if (widget.scrollToRoundIndex != null) {
         _scrollToGroupWithDelay(widget.scrollToRoundIndex!);
+      } else if (widget.scrollToMessageId != null) {
+        // 【跳转定位】如果指定了消息 ID，滚动到对应位置
+        _scrollToMessageWithDelay(widget.scrollToMessageId!);
       }
     });
 
@@ -750,14 +814,16 @@ class _ConversationScreenState extends State<ConversationScreen> {
     print('║ Topic 名称:  ${widget.topicName}');
 
     // 获取 Assistant 信息
-    final topic = widget.extractor.getTopic(widget.topicId);
-    if (topic != null) {
-      final assistantId = topic['assistantId'] as String?;
-      final assistant = assistantId != null
-          ? widget.extractor.getAssistantById(assistantId)
-          : null;
-      final assistantName = assistant?['name'] as String? ?? '未知助手';
-      print('║ Assistant:   $assistantName (ID: $assistantId)');
+    if (widget.extractor != null) {
+      final topic = widget.extractor!.getTopic(widget.topicId);
+      if (topic != null) {
+        final assistantId = topic['assistantId'] as String?;
+        final assistant = assistantId != null
+            ? widget.extractor!.getAssistantById(assistantId)
+            : null;
+        final assistantName = assistant?['name'] as String? ?? '未知助手';
+        print('║ Assistant:   $assistantName (ID: $assistantId)');
+      }
     }
 
     // 统计信息
@@ -2293,6 +2359,10 @@ $modelResponses''';
       final model = reply['model'] as Map<String, dynamic>?;
       final modelName = model?['name'] as String? ?? 'Assistant';
       final isMainline = reply['useful'] as bool? ?? false;
+      final msgId = reply['id'];
+      if (kDebugMode && groupIndex < 2) { // Log first few groups
+          print('DEBUG: Group $groupIndex Reply $i ($modelName): ID="$msgId"');
+      }
       cardInfoList.add({
         'type': 'assistant',
         'name': modelName,
@@ -3515,9 +3585,16 @@ class _SwipeableSwitcherState extends State<_SwipeableSwitcher> {
   @override
   void didUpdateWidget(_SwipeableSwitcher oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 【性能优化】清理远离当前页的缓存（只保留当前页和相邻页）
-    _contentCache.removeWhere((key, _) => 
-      (key - widget.currentIndex).abs() > 1);
+    // 【修复】父组件重绘时（可能因为数据更新），必须清理缓存
+    // 否则 item builder 闭包可能捕获旧数据，导致显示陈旧内容
+    if (widget.itemBuilder != oldWidget.itemBuilder ||
+        widget.currentIndex != oldWidget.currentIndex) {
+      _contentCache.clear();
+    } else {
+       // 常规清理
+       _contentCache.removeWhere((key, _) =>
+        (key - widget.currentIndex).abs() > 1);
+    }
   }
 
   @override

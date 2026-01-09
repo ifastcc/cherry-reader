@@ -212,6 +212,7 @@ class HighlightRange {
   final int end;
   final Color color;
   final String? styleType;
+  final String? text;
 
   HighlightRange({
     this.id,
@@ -219,5 +220,6 @@ class HighlightRange {
     required this.end,
     required this.color,
     this.styleType,
+    this.text,
   });
 }
