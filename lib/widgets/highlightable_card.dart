@@ -353,12 +353,20 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
            // 在此 Block 内搜索选中文本
            final textInBlock = block.text;
            
+           // 【调试】输出 Block 文本和选中文本的对比
+           print('🔎 [SelectionResolve] Block ${block.index}:');
+           print('   Block text: "${textInBlock.substring(0, min(50, textInBlock.length))}..."');
+           print('   Selected  : "${_selectedText.substring(0, min(50, _selectedText.length))}..."');
+           
            // 如果选中文本完全在这个 Block 内
            final idx = textInBlock.indexOf(_selectedText);
            if (idx != -1) {
              globalStart = block.globalStart + idx;
              globalEnd = globalStart + _selectedText.length;
+             print('   ✅ Found at idx=$idx, globalStart=$globalStart (block.globalStart=${block.globalStart})');
              break;
+           } else {
+             print('   ❌ Not found in block');
            }
            
            // 如果选中文本跨越多个 Block，需要在全文中搜索
@@ -390,41 +398,27 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
          }
        }
      }
-     
-     // 【回退路径】如果 HitTest 失败，使用全局搜索
-     if (globalStart == -1) {
-       // 优先使用单个 Block 的 HitTest 结果
-       final anyBlockIndex = startBlockIndex ?? endBlockIndex;
-       if (anyBlockIndex != null) {
-         try {
-           final block = registry.firstWhere((b) => b.index == anyBlockIndex);
-           // 在该 Block 附近搜索
-           final matches = _selectedText.allMatches(fullText);
-           int minDistance = 999999999;
-           
-           for (final match in matches) {
-             if (match.start < block.globalEnd && match.end > block.globalStart) {
-               // 重叠，优先选择
-               globalStart = match.start;
-               globalEnd = match.end;
-               break;
-             }
-             final dist = min((match.start - block.globalEnd).abs(), (block.globalStart - match.end).abs());
-             if (dist < minDistance) {
-               minDistance = dist;
-               globalStart = match.start;
-               globalEnd = match.end;
-             }
-           }
-         } catch (_) {}
-       }
-       
-       // 最终回退：全局搜索
-       if (globalStart == -1) {
-         globalStart = fullText.indexOf(_selectedText);
-         globalEnd = globalStart + _selectedText.length;
-       }
-     }
+          // 【回退路径】如果 HitTest 失败或在 Block 范围内未找到，使用全文搜索
+      if (globalStart == -1) {
+        print('⚠️ [HitTest] Block search failed, falling back to full text search');
+        
+        // 直接在全文中搜索选中文本
+        globalStart = fullText.indexOf(_selectedText);
+        if (globalStart != -1) {
+          globalEnd = globalStart + _selectedText.length;
+          print('🔍 [HitTest] Full text search found at [$globalStart, $globalEnd]');
+          
+          // 根据搜索结果更新 Block 索引
+          for (final block in registry) {
+            if (block.globalStart <= globalStart && globalStart < block.globalEnd) {
+              startBlockIndex = block.index;
+            }
+            if (block.globalStart < globalEnd && globalEnd <= block.globalEnd) {
+              endBlockIndex = block.index;
+            }
+          }
+        }
+      }
      
      if (globalStart == -1) return null;
      
@@ -761,18 +755,23 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
 
       // Filter out container blocks (keep only leaves)
       // If block A contains block B, and both are in the list, remove A.
+      // 【Bug Fix】修正过滤逻辑：只有当 A 真正"包裹"B（且 A != B）时才移除 A
+      // 注意：同级 Block（如连续的 li）不应被过滤，它们的范围不应重叠
       final leafBlocks = intersectingBlocks.where((bA) {
-          // Keep bA if no other block bB is strictly inside bA
-          // (Actually, we want to keep bA if it is NOT a container of another selected block)
-          // "Strictly inside" means bB.globalStart >= bA.globalStart && bB.globalEnd <= bA.globalEnd
-          // Check if bA contains any OTHER block in the list
+          // 检查 bA 是否是另一个 Block bB 的"真正容器"
+          // 条件: bB 完全在 bA 内部（严格包含）
           final containsOther = intersectingBlocks.any((bB) => 
-             bA != bB && 
+             bA.index != bB.index && 
              bB.globalStart >= bA.globalStart && 
-             bB.globalEnd <= bA.globalEnd
+             bB.globalEnd <= bA.globalEnd &&
+             (bB.globalStart > bA.globalStart || bB.globalEnd < bA.globalEnd) // 严格包含，不是完全重叠
           );
           return !containsOther;
       }).toList();
+      
+      // 【调试日志】输出过滤前后的 Block 信息
+      print('🔍 [AddHighlight] Intersecting: ${intersectingBlocks.map((b) => "B${b.index}[${b.globalStart}-${b.globalEnd}]").join(", ")}');
+      print('🔍 [AddHighlight] Leaf Blocks: ${leafBlocks.map((b) => "B${b.index}[${b.globalStart}-${b.globalEnd}]").join(", ")}');
       
       // Use leafBlocks for processing
       final blocksToProcess = leafBlocks.isNotEmpty ? leafBlocks : intersectingBlocks;

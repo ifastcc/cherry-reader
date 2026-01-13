@@ -66,21 +66,24 @@ class GptMarkdownVisitor implements md.NodeVisitor {
   void _registerBlock(String text, String type, int blockId, {int? globalStart}) {
     if (text.isEmpty) return;
     
-    // 计算哈希
-    final bytes = utf8.encode(text);
+    // 【Bug Fix】解码 HTML 实体，确保与用户选中文本一致
+    final decodedText = _unescape.convert(text);
+    
+    // 计算哈希（使用解码后的文本）
+    final bytes = utf8.encode(decodedText);
     final hash = md5.convert(bytes).toString().substring(0, 8);
     
     // 【Bug Fix】使用传入的 globalStart，或从 stack 获取，或回退到当前偏移
     final start = globalStart ?? 
         (_blockGlobalStartStack.isNotEmpty ? _blockGlobalStartStack.last : _currentGlobalOffset);
     
-    // 注册
+    // 注册（使用解码后的文本）
     blockRegistry.add(BlockInfo(
-      text: text,
+      text: decodedText,
       index: blockId,
       contentHash: hash,
       globalStart: start,
-      globalEnd: start + text.length,
+      globalEnd: start + decodedText.length,
       tag: type,
     ));
   }

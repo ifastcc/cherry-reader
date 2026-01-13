@@ -1,6 +1,7 @@
 import '../models/knowledge_item.dart';
 import '../models/isar/knowledge_entry.dart';
 import 'knowledge_entry_service.dart';
+import 'highlight_service.dart';
 
 /// 知识库服务（门面模式）
 ///
@@ -124,6 +125,11 @@ class KnowledgeService {
   /// 删除知识项
   Future<void> deleteItem(KnowledgeItem item) async {
     await _entryService.deleteEntry(item.id);
+    
+    // 【Bug Fix】清理高亮缓存（如果有 messageId）
+    if (item.sourceMessageId != null) {
+      HighlightService().clearCache(item.sourceMessageId);
+    }
   }
 
   // ==================== 统计信息 ====================
