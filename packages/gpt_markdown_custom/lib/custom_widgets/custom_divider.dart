@@ -21,10 +21,11 @@ class CustomDivider extends LeafRenderObjectWidget {
 
   @override
   RenderObject createRenderObject(BuildContext context) {
+    // 【样式优化】默认分割线更细 (0.5px)
     return RenderDivider(
-      color ?? Theme.of(context).colorScheme.outline,
+      color ?? Theme.of(context).colorScheme.outline.withValues(alpha: 0.3),
       MediaQuery.sizeOf(context).width,
-      height ?? 2,
+      height ?? 0.5,
     );
   }
 
@@ -33,8 +34,8 @@ class CustomDivider extends LeafRenderObjectWidget {
     BuildContext context,
     covariant RenderDivider renderObject,
   ) {
-    renderObject.color = color ?? Theme.of(context).colorScheme.outline;
-    renderObject.height = height ?? 2;
+    renderObject.color = color ?? Theme.of(context).colorScheme.outline.withValues(alpha: 0.3);
+    renderObject.height = height ?? 0.5;
     renderObject.width = MediaQuery.sizeOf(context).width;
   }
 }

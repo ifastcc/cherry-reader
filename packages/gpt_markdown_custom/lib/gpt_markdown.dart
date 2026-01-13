@@ -24,6 +24,9 @@ export 'md_widget.dart';
 export 'custom_widgets/markdown_config.dart';
 export 'custom_highlight.dart';
 export 'plain_text_extractor.dart';
+export 'v2/widget.dart' show GptMarkdownV2;
+export 'v2/highlight_locator.dart';
+export 'markdown_parse_result.dart';
 
 /// This widget create a full markdown widget as a column view.
 class GptMarkdown extends StatelessWidget {

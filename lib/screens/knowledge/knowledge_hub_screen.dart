@@ -354,6 +354,8 @@ class KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
           topicId: item.sourceTopicId!,
           topicName: item.sourceTopicName ?? '未知话题',
           scrollToMessageId: item.sourceMessageId,
+          // 【精确定位】传递高亮 ID，用于定位到具体高亮位置
+          scrollToHighlightId: item.type == KnowledgeType.highlight ? item.id : null,
         ),
       ),
     );

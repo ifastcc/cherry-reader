@@ -213,6 +213,14 @@ class HighlightRange {
   final Color color;
   final String? styleType;
   final String? text;
+  final String? prefix;
+  final String? suffix;
+  final int? blockIndex;
+  final String? blockContentHash; // 【新增】
+  final int? blockInternalStart; // 【新增】
+  final int? blockInternalEnd; // 【新增】
+  final String? groupId; // 【新增】
+  final bool isTarget; // 【精确定位】是否为目标高亮（用于闪烁效果）
 
   HighlightRange({
     this.id,
@@ -221,5 +229,13 @@ class HighlightRange {
     required this.color,
     this.styleType,
     this.text,
+    this.prefix,
+    this.suffix,
+    this.blockIndex,
+    this.blockContentHash,
+    this.blockInternalStart,
+    this.blockInternalEnd,
+    this.groupId,
+    this.isTarget = false,
   });
 }

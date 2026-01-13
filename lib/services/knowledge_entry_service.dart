@@ -18,6 +18,8 @@ class KnowledgeEntryService {
   // ==================== 创建操作 ====================
 
   /// 创建高亮
+
+  /// 【新架构】创建高亮 - 支持 selections
   Future<KnowledgeEntry> createHighlight({
     required String messageId,
     required String quotedText,
@@ -27,6 +29,15 @@ class KnowledgeEntryService {
     String styleType = 'background',
     String? topicId,
     String? topicName,
+    String? prefix,
+    String? suffix,
+    int? blockIndex,
+    String? blockContentHash,
+    int? blockInternalStart,
+    int? blockInternalEnd,
+    @Deprecated('使用 selections 替代')
+    String? groupId,
+    List<SelectionRange>? selections,
   }) async {
     final entry = KnowledgeEntry.createHighlight(
       messageId: messageId,
@@ -37,14 +48,26 @@ class KnowledgeEntryService {
       styleType: styleType,
       topicId: topicId,
       topicName: topicName,
-    );
+      prefix: prefix,
+      suffix: suffix,
+      groupId: groupId,
+    )
+      ..blockIndex = blockIndex
+      ..blockContentHash = blockContentHash
+      ..blockInternalStart = blockInternalStart
+      ..blockInternalEnd = blockInternalEnd;
+    
+    // 【新架构】设置 selections
+    if (selections != null && selections.isNotEmpty) {
+      entry.selectionRanges = selections;
+    }
 
     final isar = await _db.instance;
     await isar.writeTxn(() async {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 创建高亮: ${entry.entryId}');
+    debugPrint('[KnowledgeEntryService] 创建高亮: ${entry.entryId} (包含 ${selections?.length ?? 0} 个选区)');
     return entry;
   }
 
@@ -59,6 +82,8 @@ class KnowledgeEntryService {
     String styleType = 'background',
     String? topicId,
     String? topicName,
+    String? prefix,
+    String? suffix,
     List<String>? tags,
   }) async {
     final entry = KnowledgeEntry.createAnnotation(
@@ -71,6 +96,8 @@ class KnowledgeEntryService {
       styleType: styleType,
       topicId: topicId,
       topicName: topicName,
+      prefix: prefix,
+      suffix: suffix,
       tags: tags,
     );
 
@@ -409,6 +436,33 @@ class KnowledgeEntryService {
     debugPrint('[KnowledgeEntryService] 更新样式: $entryId');
   }
 
+  /// 更新 Group 样式
+  Future<void> updateStyleByGroupId({
+    required String groupId,
+    required int color,
+    String? styleType,
+  }) async {
+    final isar = await _db.instance;
+    final entries = await isar.knowledgeEntrys
+        .filter()
+        .groupIdEqualTo(groupId)
+        .findAll();
+
+    if (entries.isEmpty) return;
+
+    for (final entry in entries) {
+      entry.color = color;
+      if (styleType != null) entry.styleType = styleType;
+      entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    }
+
+    await isar.writeTxn(() async {
+      await isar.knowledgeEntrys.putAll(entries);
+    });
+
+    debugPrint('[KnowledgeEntryService] 更新 Group 样式: $groupId');
+  }
+
   /// 高亮升级为标注
   Future<void> upgradeToAnnotation({
     required String entryId,
@@ -428,6 +482,31 @@ class KnowledgeEntryService {
     debugPrint('[KnowledgeEntryService] 高亮升级为标注: $entryId');
   }
 
+  /// 更新条目的 Block 信息（用于 Lazy Migration）
+  Future<void> updateBlockInfo({
+    required String entryId,
+    required int blockIndex,
+    required String blockContentHash,
+    required int blockInternalStart,
+    required int blockInternalEnd,
+  }) async {
+    final entry = await getEntry(entryId);
+    if (entry == null) return;
+
+    entry.blockIndex = blockIndex;
+    entry.blockContentHash = blockContentHash;
+    entry.blockInternalStart = blockInternalStart;
+    entry.blockInternalEnd = blockInternalEnd;
+    entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
+
+    final isar = await _db.instance;
+    await isar.writeTxn(() async {
+      await isar.knowledgeEntrys.put(entry);
+    });
+
+    debugPrint('[KnowledgeEntryService] 更新 Block 信息: $entryId');
+  }
+
   // ==================== 删除操作 ====================
 
   /// 删除条目
@@ -438,6 +517,19 @@ class KnowledgeEntryService {
     });
 
     debugPrint('[KnowledgeEntryService] 删除条目: $entryId');
+  }
+
+  /// 删除指定 group 的所有条目
+  Future<void> deleteByGroupId(String groupId) async {
+    final isar = await _db.instance;
+    await isar.writeTxn(() async {
+      await isar.knowledgeEntrys
+          .filter()
+          .groupIdEqualTo(groupId)
+          .deleteAll();
+    });
+
+    debugPrint('[KnowledgeEntryService] 删除 Group 条目: $groupId');
   }
 
   /// 删除消息的所有条目

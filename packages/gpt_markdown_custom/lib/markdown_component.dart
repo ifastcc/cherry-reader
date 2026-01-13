@@ -11,6 +11,7 @@ import 'custom_widgets/code_field.dart';
 import 'custom_widgets/indent_widget.dart';
 import 'custom_widgets/link_button.dart';
 import 'custom_widgets/markdown_config.dart';
+import 'custom_widgets/custom_table_row.dart';
 import 'theme.dart';
 import 'md_widget.dart';
 
@@ -1112,7 +1113,10 @@ class TableMd extends BlockMd {
                 alignment: columnAlignments[index],
               );
             });
-            return CustomTableRow(isHeader: isHeader, fields: fields);
+            return CustomTableRow(
+              isHeader: isHeader, 
+              children: fields.map((e) => Text(e.data, textAlign: e.alignment)).toList()
+            );
           }).nonNulls.toList();
       return tableBuilder(
         context,
@@ -1266,11 +1270,3 @@ class CustomTableField {
 
   CustomTableField({required this.data, this.alignment = TextAlign.left});
 }
-
-class CustomTableRow {
-  final bool isHeader;
-  final List<CustomTableField> fields;
-
-  CustomTableRow({this.isHeader = false, required this.fields});
-}
-

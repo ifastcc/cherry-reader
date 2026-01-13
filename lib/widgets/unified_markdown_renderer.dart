@@ -57,95 +57,128 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 创建自定义主题，优化标题间距
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? const Color(0xFFE8E8E8) : const Color(0xFF1A1A2E);
+    
+    // 创建自定义主题 - Cherry Studio 风格
     final themeData = GptMarkdownThemeData(
       brightness: Theme.of(context).brightness,
-      // 自定义标题样式 - 增加底部间距感（通过 height）
+      // 标题样式 - 更紧凑的行高
       h1: TextStyle(
-        fontSize: largeFont ? 28 : 24,
+        fontSize: largeFont ? 28 : 22,
         fontWeight: FontWeight.w700,
-        color: const Color(0xFF1A1A2E),
-        height: 2.0, // 增加行高来创造标题后间距
+        color: textColor,
+        height: 1.4,
       ),
       h2: TextStyle(
-        fontSize: largeFont ? 24 : 20,
+        fontSize: largeFont ? 24 : 19,
         fontWeight: FontWeight.w600,
-        color: const Color(0xFF1A1A2E),
-        height: 1.8,
+        color: textColor,
+        height: 1.4,
       ),
       h3: TextStyle(
-        fontSize: largeFont ? 20 : 18,
+        fontSize: largeFont ? 20 : 17,
         fontWeight: FontWeight.w600,
-        color: const Color(0xFF1A1A2E),
-        height: 1.7,
+        color: textColor,
+        height: 1.4,
       ),
       h4: TextStyle(
-        fontSize: largeFont ? 18 : 16,
+        fontSize: largeFont ? 18 : 15,
         fontWeight: FontWeight.w600,
-        color: const Color(0xFF1A1A2E),
-        height: 1.6,
+        color: textColor,
+        height: 1.4,
       ),
       h5: TextStyle(
-        fontSize: largeFont ? 16 : 15,
+        fontSize: largeFont ? 16 : 14,
         fontWeight: FontWeight.w600,
-        color: const Color(0xFF1A1A2E),
-        height: 1.5,
+        color: textColor,
+        height: 1.4,
       ),
       h6: TextStyle(
-        fontSize: largeFont ? 15 : 14,
+        fontSize: largeFont ? 15 : 13,
         fontWeight: FontWeight.w600,
-        color: const Color(0xFF1A1A2E),
-        height: 1.5,
+        color: textColor,
+        height: 1.4,
       ),
-      linkColor: const Color(0xFF0F62FE),
-      // 默认高亮颜色（用于 ==text== 语法）
+      // 【关键】分割线更细更透明
+      hrLineThickness: 0.5,
+      hrLineColor: isDark 
+          ? Colors.white.withValues(alpha: 0.15) 
+          : Colors.black.withValues(alpha: 0.08),
+      linkColor: const Color(0xFF3B82F6),
+      // 默认高亮颜色
       highlightColor: const Color(0xFFFBC02D),
     );
 
-    // 默认的正文样式
+    // 默认的正文样式 - Cherry Studio 风格
+    final bodyColor = isDark ? const Color(0xFFD4D4D4) : const Color(0xFF374151);
     final defaultTextStyle =
         textStyle ??
         TextStyle(
-          fontSize: largeFont ? 18 : 15,
-          height: largeFont ? 2.0 : 1.85,
-          color: const Color(0xFF2C3E50),
-          letterSpacing: 0.2,
+          fontSize: largeFont ? 17 : 14,
+          height: 1.6, // Cherry Studio 的 line-height: 1.6
+          color: bodyColor,
+          letterSpacing: 0.1,
         );
 
     Widget markdownWidget = GptMarkdownTheme(
       gptThemeData: themeData,
-      child: GptMarkdown(
-        data,
-        style: defaultTextStyle,
-        textAlign: textAlign,
-        // 启用 LaTeX 支持 - 支持 $...$ 和 $$...$$ 语法
-        useDollarSignsForLatex: true,
-        // 跟随链接颜色
-        followLinkColor: true,
-        // 传递渲染层高亮数据
-        highlightRanges: highlights.map((h) => HighlightRangeData(
-          id: h.id,
-          start: h.start,
-          end: h.end,
-          color: h.color,
-          styleType: h.styleType,
-          text: h.text,
-        )).toList(),
-        // 高亮点击回调
-        onHighlightRangeTap: onHighlightTap != null 
-          ? (id, position) => onHighlightTap!(id, TapDownDetails(globalPosition: position))
-          : null,
-        // 自定义高亮渲染（用于 ==text== 语法的单色高亮）
-        highlightBuilder: (context, text, style) {
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFBC02D).withAlpha(180),
-              borderRadius: BorderRadius.circular(2),
-            ),
-            child: Text(text, style: style),
-          );
-        },
+      child: GptMarkdownV2(
+        data: data,
+        config: GptMarkdownConfig(
+          style: defaultTextStyle,
+          textAlign: textAlign,
+          // 启用 LaTeX 支持 - 支持 $...$ 和 $$...$$ 语法
+          useDollarSignsForLatex: true, // Config usually handles this internally or via regex replacement in V2 wrapper? 
+          // Note: GptMarkdownV2 wrapper in v2/widget.dart doesn't have useDollarSignsForLatex param logic in build?
+          // Let's check GptMarkdownV2 source again. It calls GptMarkdownVisitor.
+          // And GptMarkdown wrapper (V1) did regex replacement BEFORE MdWidget.
+          // GptMarkdownV2 wrapper in v2/widget.dart does NOT do regex replacement as seen in previous view?
+          // Wait, I viewed v2/widget.dart. It has:
+          // final document = md.Document(extensionSet: GptExtensionSet.all);
+          // And NO regex replacement.
+          // So I might need to handle $ -> \( replacement manually or update V2 to support it?
+          // LatexInlineSyntax in V2 handles $.
+          // So V2 is native. No need for regex replacement. GOOD.
+          
+          // 跟随链接颜色
+          followLinkColor: true,
+          
+          // 传递渲染层高亮数据
+          highlightRanges: highlights.map((h) => HighlightRangeData(
+            id: h.id,
+            start: h.start,
+            end: h.end,
+            color: h.color,
+            styleType: h.styleType,
+            text: h.text,
+            prefix: h.prefix,
+            suffix: h.suffix,
+            blockIndex: h.blockIndex,
+            blockContentHash: h.blockContentHash,
+            blockInternalStart: h.blockInternalStart,
+            blockInternalEnd: h.blockInternalEnd,
+            groupId: h.groupId,
+            isTarget: h.isTarget,  // 【精确定位】传递目标标记
+          )).toList(),
+          
+          // 高亮点击回调
+          onHighlightRangeTap: onHighlightTap != null 
+            ? (id, position) => onHighlightTap!(id, TapDownDetails(globalPosition: position))
+            : null,
+            
+          // 自定义高亮渲染
+          highlightBuilder: (context, text, style) {
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFBC02D).withAlpha(180),
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: Text(text, style: style),
+            );
+          },
+        ),
       ),
     );
 

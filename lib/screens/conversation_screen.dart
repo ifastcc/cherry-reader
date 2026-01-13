@@ -52,6 +52,9 @@ class ConversationScreen extends StatefulWidget {
   /// 【跳转定位】初始滚动到的消息 ID
   final String? scrollToMessageId;
 
+  /// 【精确定位】跳转到的高亮 ID（配合 scrollToMessageId 使用）
+  final String? scrollToHighlightId;
+
   /// 【搜索高亮】要高亮的搜索关键词
   final String? highlightKeyword;
 
@@ -62,6 +65,7 @@ class ConversationScreen extends StatefulWidget {
     required this.topicName,
     this.scrollToRoundIndex,
     this.scrollToMessageId,
+    this.scrollToHighlightId,
     this.highlightKeyword,
   }) : super(key: key);
 
@@ -144,6 +148,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
   ValueNotifier<int> _getCardPageNotifier(int groupIndex) {
     return _cardPageNotifiers.putIfAbsent(groupIndex, () => ValueNotifier(0));
   }
+
+  /// 【精确定位】目标高亮 ID（用于闪烁提示）
+  String? _targetHighlightId;
 
   /// 【快速定位】滚动到指定轮次的顶部
   void _scrollToGroupTop(int groupIndex) {
@@ -513,6 +520,23 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
 
     if (targetGroup != -1) {
+      // 【精确定位】设置目标高亮 ID，触发闪烁动画
+      if (widget.scrollToHighlightId != null) {
+        setState(() {
+          _targetHighlightId = widget.scrollToHighlightId;
+        });
+        debugPrint('🎯 [精确定位] 设置目标高亮: $_targetHighlightId');
+        
+        // 5 秒后自动清除目标高亮（闪烁动画结束）
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted && _targetHighlightId == widget.scrollToHighlightId) {
+            setState(() {
+              _targetHighlightId = null;
+            });
+          }
+        });
+      }
+      
       await _scrollToGroup(targetGroup);
       
       // If it's a specific card index (for replies), switch to it
@@ -2756,6 +2780,8 @@ $modelResponses''';
                 roundIndex: groupIndex,
                 // 【搜索高亮】优先使用页内搜索关键词，否则使用外部传入的
                 searchKeyword: _searchKeyword.isNotEmpty ? _searchKeyword : widget.highlightKeyword,
+                // 【精确定位】传递目标高亮 ID，用于闪烁提示
+                targetHighlightId: _targetHighlightId,
               );
             },
           ),

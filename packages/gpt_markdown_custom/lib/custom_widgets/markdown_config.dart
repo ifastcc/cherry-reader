@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:gpt_markdown_custom/gpt_markdown.dart';
+import 'custom_table_row.dart';
 
 /// A builder function for the ordered list.
 typedef OrderedListBuilder =
@@ -79,6 +80,14 @@ class HighlightRangeData {
   final Color color;
   final String? styleType; // 'background' or 'underline'
   final String? text; // 【新增】用于在渲染时动态匹配的文本
+  final String? prefix; // 【新增】上下文前缀 (用于语义定位)
+  final String? suffix; // 【新增】上下文后缀 (用于语义定位)
+  final int? blockIndex; // 【新增】Block ID，如有则 start/end 为局部偏移
+  final String? blockContentHash; // 【新增】
+  final int? blockInternalStart; // 【新增】
+  final int? blockInternalEnd; // 【新增】
+  final String? groupId; // 【新增】
+  final bool isTarget; // 【精确定位】是否为目标高亮
 
   const HighlightRangeData({
     this.id,
@@ -87,6 +96,14 @@ class HighlightRangeData {
     required this.color,
     this.styleType = 'background',
     this.text,
+    this.prefix,
+    this.suffix,
+    this.blockIndex,
+    this.blockContentHash,
+    this.blockInternalStart,
+    this.blockInternalEnd,
+    this.groupId,
+    this.isTarget = false,
   });
 }
 
@@ -98,6 +115,7 @@ class HighlightRangeData {
 /// and an optional [onLinkTap] parameter to handle link clicks.
 class GptMarkdownConfig {
   const GptMarkdownConfig({
+    this.useDollarSignsForLatex = false,
     this.style,
     this.textDirection = TextDirection.ltr,
     this.onLinkTap,
@@ -145,6 +163,9 @@ class GptMarkdownConfig {
 
   /// The source tag builder.
   final SourceTagBuilder? sourceTagBuilder;
+
+  /// Whether to use dollar signs for LaTeX (Ignored in V2 Config, handled wrapper)
+  final bool useDollarSignsForLatex;
 
   /// Whether to follow the link color.
   final bool followLinkColor;
@@ -213,8 +234,10 @@ class GptMarkdownConfig {
     final TableBuilder? tableBuilder,
     final List<HighlightRangeData>? highlightRanges,
     final HighlightRangeTapCallback? onHighlightRangeTap,
+    final bool? useDollarSignsForLatex,
   }) {
     return GptMarkdownConfig(
+      useDollarSignsForLatex: useDollarSignsForLatex ?? this.useDollarSignsForLatex,
       style: style ?? this.style,
       textDirection: textDirection ?? this.textDirection,
       onLinkTap: onLinkTap ?? this.onLinkTap,

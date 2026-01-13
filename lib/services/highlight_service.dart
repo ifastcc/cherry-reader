@@ -98,6 +98,13 @@ class HighlightService {
         styleType: h.styleType,
         topicId: topicId,
         topicName: topicName,
+        prefix: h.prefix,
+        suffix: h.suffix,
+        blockIndex: h.blockIndex,
+        blockContentHash: h.blockContentHash,
+        blockInternalStart: h.blockInternalStart,
+        blockInternalEnd: h.blockInternalEnd,
+        groupId: h.groupId,
       );
     }
 
@@ -107,14 +114,27 @@ class HighlightService {
     debugPrint('[HighlightService] 保存 ${highlights.length} 个标注: $messageId');
   }
 
-  /// 添加标注
+  /// 【新架构】添加高亮 - 一次选择 = 一条记录
   Future<List<HighlightData>> addHighlight(
     String messageId,
     HighlightData highlight, {
     String? topicId,
     String? topicName,
   }) async {
-    // 创建新高亮条目
+    // 【Bug Fix】检查是否已存在相同范围的高亮（内容去重）
+    final existingHighlights = await loadHighlights(messageId);
+    final isDuplicate = existingHighlights.any((h) => 
+      h.start == highlight.start && 
+      h.end == highlight.end && 
+      h.text == highlight.text
+    );
+    
+    if (isDuplicate) {
+      debugPrint('[HighlightService] 跳过重复高亮: ${highlight.text.substring(0, highlight.text.length.clamp(0, 20))}...');
+      return existingHighlights;
+    }
+    
+    // 【新架构】创建单条高亮记录，包含 selections
     final entry = await _entryService.createHighlight(
       messageId: messageId,
       quotedText: highlight.text,
@@ -124,19 +144,30 @@ class HighlightService {
       styleType: highlight.styleType,
       topicId: topicId,
       topicName: topicName,
+      prefix: highlight.prefix,
+      suffix: highlight.suffix,
+      blockIndex: highlight.blockIndex,
+      blockContentHash: highlight.blockContentHash,
+      blockInternalStart: highlight.blockInternalStart,
+      blockInternalEnd: highlight.blockInternalEnd,
+      selections: highlight.selections,  // 【新架构】传递 selections
     );
 
     // 更新缓存
-    final highlights = await loadHighlights(messageId);
-    final newHighlight = _entryToData(entry);
+    _cache.remove(messageId);  // 清除缓存强制重新加载
+    return loadHighlights(messageId);
+  }
 
-    // 避免重复添加（通过 ID 检查）
-    if (!highlights.any((h) => h.id == newHighlight.id)) {
-      highlights.add(newHighlight);
-      _cache[messageId] = highlights;
-    }
-
-    return highlights;
+  /// @deprecated 已废弃 - 新架构不需要 groupId
+  @Deprecated('新架构不再使用 groupId，直接使用 removeHighlight')
+  Future<List<HighlightData>> removeHighlightGroup(
+    String messageId,
+    String groupId,
+  ) async {
+    // 向后兼容：仍然支持旧数据
+    await _entryService.deleteByGroupId(groupId);
+    _cache.remove(messageId);
+    return loadHighlights(messageId);
   }
 
   /// 删除标注
@@ -170,6 +201,46 @@ class HighlightService {
     );
 
     // 清除缓存，强制重新加载
+    _cache.remove(messageId);
+    return loadHighlights(messageId);
+  }
+
+  /// @deprecated 已废弃 - 新架构不需要 groupId
+  @Deprecated('新架构不再使用 groupId，直接使用 updateHighlightStyle')
+  Future<List<HighlightData>> updateHighlightGroupStyle(
+    String messageId,
+    String groupId,
+    int newColor,
+    String newStyleType,
+  ) async {
+    // 向后兼容
+    await _entryService.updateStyleByGroupId(
+      groupId: groupId,
+      color: newColor,
+      styleType: newStyleType,
+    );
+    _cache.remove(messageId);
+    return loadHighlights(messageId);
+  }
+
+  /// 更新高亮 Block 信息 (Granular Update for Lazy Migration)
+  Future<List<HighlightData>> updateHighlightBlockInfo(
+    String messageId,
+    String highlightId, {
+    required int blockIndex,
+    required String blockContentHash,
+    required int blockInternalStart,
+    required int blockInternalEnd,
+  }) async {
+    await _entryService.updateBlockInfo(
+      entryId: highlightId,
+      blockIndex: blockIndex,
+      blockContentHash: blockContentHash,
+      blockInternalStart: blockInternalStart,
+      blockInternalEnd: blockInternalEnd,
+    );
+
+    // 清除缓存
     _cache.remove(messageId);
     return loadHighlights(messageId);
   }
@@ -213,7 +284,7 @@ class HighlightService {
 
   // ============ 私有辅助方法 ============
 
-  /// KnowledgeEntry 转 HighlightData
+  /// 【新架构】KnowledgeEntry 转 HighlightData
   HighlightData _entryToData(KnowledgeEntry entry) {
     return HighlightData(
       id: entry.entryId,
@@ -222,6 +293,14 @@ class HighlightService {
       end: entry.end ?? 0,
       color: entry.color ?? 0xFFFFF176,
       styleType: entry.styleType ?? 'background',
+      prefix: entry.prefix,
+      suffix: entry.suffix,
+      blockIndex: entry.blockIndex,
+      blockContentHash: entry.blockContentHash,
+      blockInternalStart: entry.blockInternalStart,
+      blockInternalEnd: entry.blockInternalEnd,
+      groupId: entry.groupId,
+      selections: entry.selectionRanges.isNotEmpty ? entry.selectionRanges : null,  // 【新架构】解析 selections
       createdAt: DateTime.fromMillisecondsSinceEpoch(entry.createdAt),
     );
   }

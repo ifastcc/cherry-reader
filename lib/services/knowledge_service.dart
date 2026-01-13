@@ -15,7 +15,9 @@ class KnowledgeService {
 
   // ==================== 查询操作 ====================
 
-  /// 获取所有知识项（按时间倒序）
+  /// 【新架构】获取所有知识项（按时间倒序）
+  /// 
+  /// 新架构下，一次选择 = 一条记录，不需要 groupId 聚合
   Future<List<KnowledgeItem>> getAllItems({
     KnowledgeType? type,
     int limit = 0,
@@ -24,6 +26,9 @@ class KnowledgeService {
       type: type,
       limit: limit,
     );
+    
+    // 【新架构】直接转换，不需要聚合
+    // 向后兼容：旧数据仍可能有 groupId，但新数据不再使用
     return entries.map(KnowledgeItem.fromEntry).toList();
   }
 

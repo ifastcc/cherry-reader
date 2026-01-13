@@ -1,7 +1,61 @@
+import 'dart:convert';
 import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 
 part 'knowledge_entry.g.dart';
+
+/// 选区范围数据类
+/// 
+/// 表示一个 Block 内的选中范围
+class SelectionRange {
+  final int blockIndex;
+  final int internalStart;
+  final int internalEnd;
+  final String text;
+  final String? blockContentHash;
+  // 【全局偏移】用于兼容和 fallback
+  final int globalStart;
+  final int globalEnd;
+  // 【语义上下文】
+  final String? prefix;
+  final String? suffix;
+
+  SelectionRange({
+    required this.blockIndex,
+    required this.internalStart,
+    required this.internalEnd,
+    required this.text,
+    this.blockContentHash,
+    required this.globalStart,
+    required this.globalEnd,
+    this.prefix,
+    this.suffix,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'blockIndex': blockIndex,
+    'internalStart': internalStart,
+    'internalEnd': internalEnd,
+    'text': text,
+    'blockContentHash': blockContentHash,
+    'globalStart': globalStart,
+    'globalEnd': globalEnd,
+    'prefix': prefix,
+    'suffix': suffix,
+  };
+
+  factory SelectionRange.fromJson(Map<String, dynamic> json) => SelectionRange(
+    blockIndex: json['blockIndex'] as int,
+    internalStart: json['internalStart'] as int,
+    internalEnd: json['internalEnd'] as int,
+    text: json['text'] as String,
+    blockContentHash: json['blockContentHash'] as String?,
+    globalStart: json['globalStart'] as int? ?? 0,
+    globalEnd: json['globalEnd'] as int? ?? 0,
+    prefix: json['prefix'] as String?,
+    suffix: json['suffix'] as String?,
+  );
+}
 
 /// 统一知识条目实体
 ///
@@ -59,6 +113,12 @@ class KnowledgeEntry {
   /// 话题名称（冗余存储，避免查询）
   String? topicName;
 
+  /// 上下文前缀
+  String? prefix;
+
+  /// 上下文后缀
+  String? suffix;
+
   /// 文本位置 - 起始
   int? start;
 
@@ -73,6 +133,32 @@ class KnowledgeEntry {
   /// 创建时间戳
   @Index()
   late int createdAt;
+
+  /// The sequence index of the block in the document (0-indexed).
+  /// Used for fast lookup.
+  int? blockIndex;
+
+  /// A hash of the block's plain text content.
+  /// Used to verify that the block hasn't changed.
+  String? blockContentHash;
+
+  /// Start offset RELATIVE to the start of the block's text.
+  int? blockInternalStart;
+
+  /// End offset RELATIVE to the start of the block's text.
+  /// End offset RELATIVE to the start of the block's text.
+  int? blockInternalEnd;
+  
+  /// Group ID for linking multiple entries (e.g. cross-block selection)
+  /// @deprecated 已废弃，使用 selections 替代
+  @Index()
+  String? groupId;
+  
+  /// 【新架构】多选区信息 (JSON 字符串)
+  /// 
+  /// 存储格式: [{blockIndex, internalStart, internalEnd, text, hash, globalStart, globalEnd}, ...]
+  /// 一次选择可能跨越多个 Block，每个 Block 内的选区单独记录
+  String? selections;
 
   /// 更新时间戳
   late int updatedAt;
@@ -134,6 +220,47 @@ class KnowledgeEntry {
         plainText != null &&
         plainText!.isNotEmpty;
   }
+  
+  /// 【新架构】解析 selections JSON
+  @ignore
+  List<SelectionRange> get selectionRanges {
+    if (selections == null || selections!.isEmpty) {
+      // Fallback: 使用旧字段构建单个选区
+      if (blockIndex != null && blockInternalStart != null && blockInternalEnd != null) {
+        return [
+          SelectionRange(
+            blockIndex: blockIndex!,
+            internalStart: blockInternalStart!,
+            internalEnd: blockInternalEnd!,
+            text: quotedText ?? '',
+            blockContentHash: blockContentHash,
+            globalStart: start ?? 0,
+            globalEnd: end ?? 0,
+            prefix: prefix,
+            suffix: suffix,
+          )
+        ];
+      }
+      // 无 Block 信息，返回空
+      return [];
+    }
+    
+    try {
+      final List<dynamic> list = jsonDecode(selections!);
+      return list.map((e) => SelectionRange.fromJson(e as Map<String, dynamic>)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+  
+  /// 【新架构】设置 selections
+  set selectionRanges(List<SelectionRange> ranges) {
+    if (ranges.isEmpty) {
+      selections = null;
+    } else {
+      selections = jsonEncode(ranges.map((r) => r.toJson()).toList());
+    }
+  }
 
   // ==================== 工厂方法 ====================
 
@@ -147,6 +274,9 @@ class KnowledgeEntry {
     String styleType = 'background',
     String? topicId,
     String? topicName,
+    String? prefix,
+    String? suffix,
+    String? groupId,
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     return KnowledgeEntry()
@@ -159,6 +289,9 @@ class KnowledgeEntry {
       ..messageId = messageId
       ..topicId = topicId
       ..topicName = topicName
+      ..prefix = prefix
+      ..suffix = suffix
+      ..groupId = groupId
       ..createdAt = now
       ..updatedAt = now;
   }
@@ -174,7 +307,11 @@ class KnowledgeEntry {
     String styleType = 'background',
     String? topicId,
     String? topicName,
+    String? prefix,
+    String? suffix,
+
     List<String>? tags,
+    String? groupId,
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     return KnowledgeEntry()
@@ -190,6 +327,8 @@ class KnowledgeEntry {
       ..messageId = messageId
       ..topicId = topicId
       ..topicName = topicName
+      ..prefix = prefix
+      ..suffix = suffix
       ..tags = tags ?? []
       ..createdAt = now
       ..updatedAt = now;
