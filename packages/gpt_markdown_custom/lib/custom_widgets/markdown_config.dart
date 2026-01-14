@@ -138,6 +138,7 @@ class GptMarkdownConfig {
     this.tableBuilder,
     this.highlightRanges,
     this.onHighlightRangeTap,
+    this.debugShowBlockIndex = false,
   });
 
   /// The direction of the text.
@@ -210,6 +211,9 @@ class GptMarkdownConfig {
   /// Callback when a highlight range is tapped.
   final HighlightRangeTapCallback? onHighlightRangeTap;
 
+  /// 【调试】是否在每个 Block 前显示索引号
+  final bool debugShowBlockIndex;
+
   /// A copy of the configuration with the specified parameters.
   GptMarkdownConfig copyWith({
     TextStyle? style,
@@ -235,6 +239,7 @@ class GptMarkdownConfig {
     final List<HighlightRangeData>? highlightRanges,
     final HighlightRangeTapCallback? onHighlightRangeTap,
     final bool? useDollarSignsForLatex,
+    final bool? debugShowBlockIndex,
   }) {
     return GptMarkdownConfig(
       useDollarSignsForLatex: useDollarSignsForLatex ?? this.useDollarSignsForLatex,
@@ -260,6 +265,7 @@ class GptMarkdownConfig {
       tableBuilder: tableBuilder ?? this.tableBuilder,
       highlightRanges: highlightRanges ?? this.highlightRanges,
       onHighlightRangeTap: onHighlightRangeTap ?? this.onHighlightRangeTap,
+      debugShowBlockIndex: debugShowBlockIndex ?? this.debugShowBlockIndex,
     );
   }
 

@@ -343,34 +343,43 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
        // 【理想路径】双向 HitTest 成功
        print('🎯 [HitTest] Start Block: $startBlockIndex, End Block: $endBlockIndex');
        
+       // 【调试】显示 Registry 概览
+       final registryIndices = registry.map((b) => b.index).toList()..sort();
+       print('📋 [Registry] Available Blocks: ${registryIndices.take(10).join(", ")}${registryIndices.length > 10 ? "... (total ${registryIndices.length})" : ""}');
+       
        // 找到涉及的所有 Block
        final minBlock = min(startBlockIndex, endBlockIndex);
        final maxBlock = max(startBlockIndex, endBlockIndex);
        
+       // 【验证】检查 HitTest 返回的 Block 是否在 Registry 中
+       final startExists = registry.any((b) => b.index == startBlockIndex);
+       final endExists = registry.any((b) => b.index == endBlockIndex);
+       if (!startExists || !endExists) {
+         print('⚠️ [Warning] HitTest returned invalid Block! start=$startBlockIndex exists=$startExists, end=$endBlockIndex exists=$endExists');
+       }
+       
+       // 【调试】显示搜索范围内的 Blocks
+       final blocksInRange = registry.where((b) => b.index >= minBlock && b.index <= maxBlock).toList();
+       print('🔎 [Search Range] $minBlock -> $maxBlock, found ${blocksInRange.length} blocks');
+       
        // 在这些 Block 中搜索选中文本
-       for (final block in registry) {
-         if (block.index >= minBlock && block.index <= maxBlock) {
-           // 在此 Block 内搜索选中文本
-           final textInBlock = block.text;
-           
-           // 【调试】输出 Block 文本和选中文本的对比
-           print('🔎 [SelectionResolve] Block ${block.index}:');
-           print('   Block text: "${textInBlock.substring(0, min(50, textInBlock.length))}..."');
-           print('   Selected  : "${_selectedText.substring(0, min(50, _selectedText.length))}..."');
-           
-           // 如果选中文本完全在这个 Block 内
-           final idx = textInBlock.indexOf(_selectedText);
-           if (idx != -1) {
-             globalStart = block.globalStart + idx;
-             globalEnd = globalStart + _selectedText.length;
-             print('   ✅ Found at idx=$idx, globalStart=$globalStart (block.globalStart=${block.globalStart})');
-             break;
-           } else {
-             print('   ❌ Not found in block');
-           }
-           
-           // 如果选中文本跨越多个 Block，需要在全文中搜索
-           // 但限制搜索范围为 Block 范围附近
+       for (final block in blocksInRange) {
+         // 在此 Block 内搜索选中文本
+         final textInBlock = block.text;
+         
+         // 【调试】输出 Block 文本和选中文本的对比
+         print('   Block ${block.index} [${block.globalStart}-${block.globalEnd}]:');
+         print('      Text: "${textInBlock.substring(0, min(40, textInBlock.length))}..."');
+         
+         // 如果选中文本完全在这个 Block 内
+         final idx = textInBlock.indexOf(_selectedText);
+         if (idx != -1) {
+           globalStart = block.globalStart + idx;
+           globalEnd = globalStart + _selectedText.length;
+           print('      ✅ Found at idx=$idx, globalStart=$globalStart');
+           break;
+         } else {
+           print('      ❌ Not found');
          }
        }
        
@@ -398,26 +407,14 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
          }
        }
      }
-          // 【回退路径】如果 HitTest 失败或在 Block 范围内未找到，使用全文搜索
+      // 【禁用全文匹配】当 Block 搜索失败时，不再回退到全文搜索
+      // 这样可以让问题更早暴露，便于调试
       if (globalStart == -1) {
-        print('⚠️ [HitTest] Block search failed, falling back to full text search');
-        
-        // 直接在全文中搜索选中文本
-        globalStart = fullText.indexOf(_selectedText);
-        if (globalStart != -1) {
-          globalEnd = globalStart + _selectedText.length;
-          print('🔍 [HitTest] Full text search found at [$globalStart, $globalEnd]');
-          
-          // 根据搜索结果更新 Block 索引
-          for (final block in registry) {
-            if (block.globalStart <= globalStart && globalStart < block.globalEnd) {
-              startBlockIndex = block.index;
-            }
-            if (block.globalStart < globalEnd && globalEnd <= block.globalEnd) {
-              endBlockIndex = block.index;
-            }
-          }
-        }
+        print('❌ [HitTest] Block search failed! Selected text not found in Block(s).');
+        print('   HitTest BlockRange: $startBlockIndex -> $endBlockIndex');
+        print('   Selected: "${_selectedText.substring(0, min(30, _selectedText.length))}..."');
+        // 不再回退到全文搜索，直接返回 null
+        return null;
       }
      
      if (globalStart == -1) return null;

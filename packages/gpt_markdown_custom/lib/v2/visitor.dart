@@ -1110,10 +1110,45 @@ class GptMarkdownVisitor implements md.NodeVisitor {
       }
       
       // Wrap in MetaData for HitTest
+      // 【调试】如果开启 debugShowBlockIndex，在左上角显示 Block 索引
+      Widget wrappedItemWidget = itemWidget;
+      if (config.debugShowBlockIndex) {
+        wrappedItemWidget = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            itemWidget,
+            Positioned(
+              left: -20,
+              top: 0,
+              // 【修复】使用 IgnorePointer + ExcludeSemantics 防止调试角标被选中
+              child: IgnorePointer(
+                child: ExcludeSemantics(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '$blockId',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      }
+      
       currentWidgets.add(MetaData(
         behavior: HitTestBehavior.translucent,
         metaData: {'blockIndex': blockId},
-        child: itemWidget,
+        child: wrappedItemWidget,
       ));
       
       // 【Bug Fix】注册 Block 并更新全局偏移（之前缺失这部分）

@@ -141,6 +141,9 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
           // LatexInlineSyntax in V2 handles $.
           // So V2 is native. No need for regex replacement. GOOD.
           
+          // 【调试】显示 Block 索引号 (临时开启)
+          debugShowBlockIndex: true,
+          
           // 跟随链接颜色
           followLinkColor: true,
           
