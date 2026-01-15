@@ -67,7 +67,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 创建高亮: ${entry.entryId} (包含 ${selections?.length ?? 0} 个选区)');
+    // debugPrint('[KnowledgeEntryService] 创建高亮: ${entry.entryId} (包含 ${selections?.length ?? 0} 个选区)');
     return entry;
   }
 
@@ -106,7 +106,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 创建标注: ${entry.entryId}');
+    // debugPrint('[KnowledgeEntryService] 创建标注: ${entry.entryId}');
     return entry;
   }
 
@@ -135,7 +135,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 创建笔记: ${entry.entryId}');
+    // debugPrint('[KnowledgeEntryService] 创建笔记: ${entry.entryId}');
     return entry;
   }
 
@@ -311,7 +311,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
     
-    debugPrint('[KnowledgeEntryService] 记录回顾: $entryId (第${entry.reviewCount}次)');
+    // debugPrint('[KnowledgeEntryService] 记录回顾: $entryId (第${entry.reviewCount}次)');
   }
 
   /// 获取置顶条目
@@ -337,7 +337,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
     
-    debugPrint('[KnowledgeEntryService] 切换置顶: $entryId -> ${entry.isPinned}');
+    // debugPrint('[KnowledgeEntryService] 切换置顶: $entryId -> ${entry.isPinned}');
   }
 
   /// 更新重要性评分
@@ -353,7 +353,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
     
-    debugPrint('[KnowledgeEntryService] 更新重要性: $entryId -> $importance');
+    // debugPrint('[KnowledgeEntryService] 更新重要性: $entryId -> $importance');
   }
 
   // ==================== 更新操作 ====================
@@ -367,7 +367,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 更新条目: ${entry.entryId}');
+    // debugPrint('[KnowledgeEntryService] 更新条目: ${entry.entryId}');
   }
 
   /// 更新笔记内容
@@ -390,7 +390,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 更新笔记: $entryId');
+    // debugPrint('[KnowledgeEntryService] 更新笔记: $entryId');
   }
 
   /// 更新标注评论
@@ -412,7 +412,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 更新评论: $entryId');
+    // debugPrint('[KnowledgeEntryService] 更新评论: $entryId');
   }
 
   /// 更新高亮样式
@@ -433,7 +433,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 更新样式: $entryId');
+    // debugPrint('[KnowledgeEntryService] 更新样式: $entryId');
   }
 
   /// 更新 Group 样式
@@ -460,7 +460,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.putAll(entries);
     });
 
-    debugPrint('[KnowledgeEntryService] 更新 Group 样式: $groupId');
+    // debugPrint('[KnowledgeEntryService] 更新 Group 样式: $groupId');
   }
 
   /// 高亮升级为标注
@@ -479,7 +479,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 高亮升级为标注: $entryId');
+    // debugPrint('[KnowledgeEntryService] 高亮升级为标注: $entryId');
   }
 
   /// 更新条目的 Block 信息（用于 Lazy Migration）
@@ -504,7 +504,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.put(entry);
     });
 
-    debugPrint('[KnowledgeEntryService] 更新 Block 信息: $entryId');
+    // debugPrint('[KnowledgeEntryService] 更新 Block 信息: $entryId');
   }
 
   // ==================== 删除操作 ====================
@@ -516,7 +516,7 @@ class KnowledgeEntryService {
       await isar.knowledgeEntrys.filter().entryIdEqualTo(entryId).deleteFirst();
     });
 
-    debugPrint('[KnowledgeEntryService] 删除条目: $entryId');
+    // debugPrint('[KnowledgeEntryService] 删除条目: $entryId');
   }
 
   /// 删除指定 group 的所有条目
@@ -529,7 +529,7 @@ class KnowledgeEntryService {
           .deleteAll();
     });
 
-    debugPrint('[KnowledgeEntryService] 删除 Group 条目: $groupId');
+    // debugPrint('[KnowledgeEntryService] 删除 Group 条目: $groupId');
   }
 
   /// 删除消息的所有条目
@@ -542,7 +542,7 @@ class KnowledgeEntryService {
           .deleteAll();
     });
 
-    debugPrint('[KnowledgeEntryService] 删除消息条目: $messageId');
+    // debugPrint('[KnowledgeEntryService] 删除消息条目: $messageId');
   }
 
   // ==================== 统计操作 ====================

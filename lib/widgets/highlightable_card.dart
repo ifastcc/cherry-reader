@@ -3,7 +3,6 @@ import 'package:uuid/uuid.dart';
 
 import 'package:flutter/foundation.dart'; 
 import 'dart:math';
-import 'package:flutter/scheduler.dart';
 import 'package:gpt_markdown_custom/gpt_markdown.dart';
 import '../models/highlight_data.dart';
 import '../models/isar/knowledge_entry.dart' show SelectionRange;
@@ -16,9 +15,7 @@ import 'highlight_style_menu.dart';
 import 'knowledge/quick_capture_sheet.dart';
 import 'floating_selection_toolbar.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/rendering.dart'; // For RenderMetaData lookup
-import 'package:gpt_markdown_custom/gpt_markdown.dart'; // Ensure GptMarkdownV2/MetaData is available
-import '../services/highlight_recovery_service.dart';
+import 'package:flutter/rendering.dart';
 
 /// 统一的可高亮卡片组件
 ///
@@ -225,9 +222,8 @@ class HighlightableCard extends StatefulWidget {
 /// 卡片类型
 enum CardType { assistant, aiAnalysis, user }
 
-class _HighlightableCardState extends State<HighlightableCard> with SingleTickerProviderStateMixin {
+class _HighlightableCardState extends State<HighlightableCard> {
   final HighlightService _highlightService = HighlightService();
-  final HighlightRecoveryService _recoveryService = HighlightRecoveryService();
 
   List<HighlightData> _highlights = [];
   String _selectedText = '';
@@ -244,15 +240,10 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
   int _discussionCount = 0;
   // 【性能优化】标记是否已加载过讨论数量，避免重复加载
   bool _discussionCountLoaded = false;
-  
-  // 【精确定位】闪烁动画控制器
-  AnimationController? _blinkController;
-  Animation<double>? _blinkAnimation;
 
   // 【性能优化】Markdown 渲染缓存（memo 模式）
   Widget? _cachedMarkdownWidget;
   String? _lastRenderedContent;
-  int? _lastRenderedHighlightsHash;
 
   // 【核心修复】缓存解析结果（包含纯文本和 Block Registry）
   MarkdownParseResult? _cachedParseResult;
@@ -341,11 +332,11 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
      
      if (startBlockIndex != null && endBlockIndex != null) {
        // 【理想路径】双向 HitTest 成功
-       print('🎯 [HitTest] Start Block: $startBlockIndex, End Block: $endBlockIndex');
+        // print('🎯 [HitTest] Start Block: $startBlockIndex, End Block: $endBlockIndex');
        
        // 【调试】显示 Registry 概览
        final registryIndices = registry.map((b) => b.index).toList()..sort();
-       print('📋 [Registry] Available Blocks: ${registryIndices.take(10).join(", ")}${registryIndices.length > 10 ? "... (total ${registryIndices.length})" : ""}');
+        // print('📋 [Registry] Available Blocks: ${registryIndices.take(10).join(", ")}${registryIndices.length > 10 ? "... (total ${registryIndices.length})" : ""}');
        
        // 找到涉及的所有 Block
        final minBlock = min(startBlockIndex, endBlockIndex);
@@ -355,31 +346,24 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
        final startExists = registry.any((b) => b.index == startBlockIndex);
        final endExists = registry.any((b) => b.index == endBlockIndex);
        if (!startExists || !endExists) {
-         print('⚠️ [Warning] HitTest returned invalid Block! start=$startBlockIndex exists=$startExists, end=$endBlockIndex exists=$endExists');
+         // print('⚠️ [Warning] HitTest returned invalid Block! start=$startBlockIndex exists=$startExists, end=$endBlockIndex exists=$endExists');
        }
        
        // 【调试】显示搜索范围内的 Blocks
        final blocksInRange = registry.where((b) => b.index >= minBlock && b.index <= maxBlock).toList();
-       print('🔎 [Search Range] $minBlock -> $maxBlock, found ${blocksInRange.length} blocks');
+        // print('🔎 [Search Range] $minBlock -> $maxBlock, found ${blocksInRange.length} blocks');
        
        // 在这些 Block 中搜索选中文本
        for (final block in blocksInRange) {
          // 在此 Block 内搜索选中文本
          final textInBlock = block.text;
          
-         // 【调试】输出 Block 文本和选中文本的对比
-         print('   Block ${block.index} [${block.globalStart}-${block.globalEnd}]:');
-         print('      Text: "${textInBlock.substring(0, min(40, textInBlock.length))}..."');
-         
          // 如果选中文本完全在这个 Block 内
          final idx = textInBlock.indexOf(_selectedText);
          if (idx != -1) {
            globalStart = block.globalStart + idx;
            globalEnd = globalStart + _selectedText.length;
-           print('      ✅ Found at idx=$idx, globalStart=$globalStart');
            break;
-         } else {
-           print('      ❌ Not found');
          }
        }
        
@@ -402,7 +386,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
            if (idx != -1) {
              globalStart = rangeStart + idx;
              globalEnd = globalStart + _selectedText.length;
-             print('🔗 [HitTest] Cross-block selection found at [$globalStart, $globalEnd]');
+             // print('🔗 [HitTest] Cross-block selection found at [$globalStart, $globalEnd]');
            }
          }
        }
@@ -410,9 +394,9 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
       // 【禁用全文匹配】当 Block 搜索失败时，不再回退到全文搜索
       // 这样可以让问题更早暴露，便于调试
       if (globalStart == -1) {
-        print('❌ [HitTest] Block search failed! Selected text not found in Block(s).');
-        print('   HitTest BlockRange: $startBlockIndex -> $endBlockIndex');
-        print('   Selected: "${_selectedText.substring(0, min(30, _selectedText.length))}..."');
+        // print('❌ [HitTest] Block search failed! Selected text not found in Block(s).');
+        // print('   HitTest BlockRange: $startBlockIndex -> $endBlockIndex');
+        // print('   Selected: "${_selectedText.substring(0, min(30, _selectedText.length))}..."');
         // 不再回退到全文搜索，直接返回 null
         return null;
       }
@@ -432,65 +416,6 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
         _loadDiscussionCount();
       }
     });
-    // 【精确定位】初始化闪烁动画
-    _initBlinkAnimationIfNeeded();
-  }
-
-  @override
-  void didUpdateWidget(HighlightableCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // 【精确定位】检查目标高亮是否变化
-    if (widget.targetHighlightId != oldWidget.targetHighlightId) {
-      _initBlinkAnimationIfNeeded();
-    }
-  }
-
-  /// 【精确定位】初始化闪烁动画（如果需要）
-  void _initBlinkAnimationIfNeeded() {
-    // 如果没有目标高亮，清理动画
-    if (widget.targetHighlightId == null) {
-      _blinkController?.dispose();
-      _blinkController = null;
-      _blinkAnimation = null;
-      return;
-    }
-    
-    // 检查目标高亮是否在当前卡片中
-    final hasTargetHighlight = _highlights.any((h) => h.id == widget.targetHighlightId);
-    if (!hasTargetHighlight) {
-      // 目标高亮不在当前卡片，清理动画
-      _blinkController?.dispose();
-      _blinkController = null;
-      _blinkAnimation = null;
-      return;
-    }
-    
-    // 创建闪烁动画（3 次闪烁）
-    _blinkController?.dispose();
-    _blinkController = AnimationController(
-      duration: const Duration(milliseconds: 600),
-      vsync: this,
-    );
-    
-    _blinkAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _blinkController!, curve: Curves.easeInOut),
-    );
-    
-    // 闪烁 3 次后停止
-    int blinkCount = 0;
-    _blinkController!.addStatusListener((status) {
-      if (status == AnimationStatus.completed) {
-        blinkCount++;
-        if (blinkCount < 3) {
-          _blinkController!.reverse();
-        }
-      } else if (status == AnimationStatus.dismissed && blinkCount < 3) {
-        _blinkController!.forward();
-      }
-    });
-    
-    _blinkController!.forward();
-    debugPrint('✨ [闪烁动画] 启动目标高亮闪烁: ${widget.targetHighlightId}');
   }
 
   Future<void> _loadDiscussionCount() async {
@@ -513,167 +438,29 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
         _highlights = highlights;
         // 高亮变化时清除 Markdown 缓存
         _cachedMarkdownWidget = null;
-        _cachedParseResult = null;  // 同时清除解析结果缓存
+        _cachedParseResult = null;
       });
-      // 【精确定位】高亮加载完成后，尝试初始化闪烁动画
-      _initBlinkAnimationIfNeeded();
     }
   }
 
-  /// 【性能优化】获取 memoized Markdown widget
+  /// 【简化】获取 memoized Markdown widget
   ///
-  /// 只有在 content 或 highlights 变化时才重新创建
+  /// 只有在 content 变化时才重新创建（移除了高亮渲染逻辑）
   Widget _getMemoizedMarkdownWidget() {
-    // 【优化】计算更健壮的 hash，包含 ID、颜色、样式
-    final highlightsHash = Object.hashAll(
-      _highlights.map((h) => Object.hash(h.id, h.color, h.styleType, h.start, h.end)),
-    ) + (widget.searchKeyword?.hashCode ?? 0);
     // 【新增】使用 _displayContent 而不是 widget.content，支持折叠显示
     final currentContent = _displayContent;
 
-    // 检查是否需要重新渲染
+    // 检查是否需要重新渲染（简化：只检查内容变化）
     final needsRebuild =
         _cachedMarkdownWidget == null ||
-        _lastRenderedContent != currentContent ||
-        _lastRenderedHighlightsHash != highlightsHash;
-
-    debugPrint('🔄 [MemoizedMarkdown] needsRebuild=$needsRebuild, cacheNull=${_cachedMarkdownWidget == null}, contentChanged=${_lastRenderedContent != currentContent}, hashChanged=${_lastRenderedHighlightsHash != highlightsHash}');
-    debugPrint('🔄 [MemoizedMarkdown] currentHash=$highlightsHash, lastHash=$_lastRenderedHighlightsHash, highlightsCount=${_highlights.length}');
+        _lastRenderedContent != currentContent;
 
     if (needsRebuild) {
-      debugPrint('🔄 [MemoizedMarkdown] Rebuilding markdown widget...');
-      // 【重构】使用新的单次解析架构
-      _cachedParseResult ??= _getParseResultFromMarkdown(currentContent);
-      final plainText = _cachedParseResult!.plainText;
-      
-      // 用户手动标注的高亮
-      List<HighlightData> validRecoveredHighlights = [];
-
-      // 【新架构】从每个 HighlightData 的 selections 解析多个 HighlightRange
-      final List<HighlightRange> userHighlights = [];
-      
-      for (final h in _highlights) {
-        // 尝试恢复/修正高亮位置
-        final recovered = _recoveryService.recover(
-          h, 
-          plainText, 
-          registry: _cachedParseResult?.blocks,
-        );
-        
-        // 如果恢复后位置越界，则放弃该高亮
-        if (recovered.start >= plainText.length || recovered.end > plainText.length) {
-          continue;
-        }
-        
-        validRecoveredHighlights.add(recovered);
-        
-        // 【Bug Fix】使用原始 h 的 color/styleType，因为 recovered 可能来自缓存（包含旧的样式）
-        final effectiveColor = h.color;
-        final effectiveStyleType = h.styleType;
-        
-        // 【新架构】从 effectiveSelections 生成多个 HighlightRange
-        final selections = recovered.effectiveSelections;
-        
-        // 【精确定位】检查是否为目标高亮
-        final isTargetHighlight = widget.targetHighlightId != null && h.id == widget.targetHighlightId;
-        
-        if (selections.isNotEmpty) {
-          // 有 selections，为每个选区创建 HighlightRange
-          for (int i = 0; i < selections.length; i++) {
-            final sel = selections[i];
-            userHighlights.add(HighlightRange(
-              id: '${recovered.id}_$i',  // 唯一 ID
-              start: sel.globalStart,
-              end: sel.globalEnd,
-              color: Color(effectiveColor),  // 【Bug Fix】使用原始颜色
-              styleType: effectiveStyleType,  // 【Bug Fix】使用原始样式
-              text: sel.text,
-              prefix: sel.prefix,
-              suffix: sel.suffix,
-              blockIndex: sel.blockIndex,
-              blockContentHash: sel.blockContentHash,
-              blockInternalStart: sel.internalStart,
-              blockInternalEnd: sel.internalEnd,
-              isTarget: isTargetHighlight,  // 【精确定位】标记目标高亮
-            ));
-          }
-        } else {
-          // 无 selections，fallback 到旧字段
-          userHighlights.add(HighlightRange(
-            id: recovered.id,
-            start: recovered.start,
-            end: recovered.end,
-            color: Color(effectiveColor),  // 【Bug Fix】使用原始颜色
-            styleType: effectiveStyleType,  // 【Bug Fix】使用原始样式
-            text: recovered.text,
-            prefix: recovered.prefix,
-            suffix: recovered.suffix,
-            blockIndex: recovered.blockIndex,
-            blockContentHash: recovered.blockContentHash,
-            blockInternalStart: recovered.blockInternalStart,
-            blockInternalEnd: recovered.blockInternalEnd,
-            isTarget: isTargetHighlight,  // 【精确定位】标记目标高亮
-          ));
-        }
-      }
-
-      // 【新架构】Lazy Migration 逻辑简化 - 新数据已经包含 selections，不需要迁移
-
-      // 【搜索高亮】生成搜索关键词的高亮范围（也在纯文本中匹配）
-      final searchHighlights = _generateSearchHighlights(plainText);
-
-      // 合并高亮（搜索高亮 + 用户高亮）
-      final allHighlights = [...searchHighlights, ...userHighlights];
-
-      // Debug Log for Highlights
-      if (allHighlights.isNotEmpty) {
-          print('🔍 [HighlightableCard] Passing ${allHighlights.length} ranges to Renderer');
-          for (var h in allHighlights) {
-             print('  - H: "${h.text}" Block:${h.blockIndex} [${h.start}, ${h.end}] ID:${h.id}');
-          }
-      } else {
-          print('🔍 [HighlightableCard] No highlights to render.');
-      }
-
+      // 【简化】直接渲染 Markdown，不进行高亮处理
       _cachedMarkdownWidget = UnifiedMarkdownRenderer(
         data: currentContent,
         scrollable: false,
         selectable: true,
-        highlights: allHighlights.map((h) {
-          // If blockIndex is present, we MUST use internal offsets for rendering
-          // because GptMarkdownVisitor expects local coordinates within the block.
-          final isBlockAnchored = h.blockIndex != null && h.blockInternalStart != null && h.blockInternalEnd != null;
-          
-          return HighlightRange(
-            id: h.id,
-            start: isBlockAnchored ? h.blockInternalStart! : h.start,
-            end: isBlockAnchored ? h.blockInternalEnd! : h.end,
-            color: h.color,
-            styleType: h.styleType,
-            text: h.text,
-            prefix: h.prefix,
-            suffix: h.suffix,
-            blockIndex: h.blockIndex,
-            blockContentHash: h.blockContentHash,
-            blockInternalStart: h.blockInternalStart,
-            blockInternalEnd: h.blockInternalEnd,
-            groupId: h.groupId,
-            isTarget: h.isTarget,  // 【精确定位】传递目标标记
-          );
-        }).toList(),
-        onHighlightTap: (id, details) {
-          // 搜索高亮不响应点击
-          if (id.startsWith('search_')) return;
-          
-          // 【新架构】ID 可能是 "originalId_0" 格式，需要提取原始 ID
-          final originalId = id.contains('_') ? id.substring(0, id.lastIndexOf('_')) : id;
-
-          final highlight = _highlights.firstWhere(
-            (h) => h.id == originalId || h.id == id,
-            orElse: () => _highlights.first,
-          );
-          _showHighlightMenu(highlight);
-        },
         textStyle: const TextStyle(
           fontSize: 15,
           height: 1.8,
@@ -683,46 +470,12 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
       );
 
       _lastRenderedContent = currentContent;
-      _lastRenderedHighlightsHash = highlightsHash;
     }
 
     return _cachedMarkdownWidget!;
   }
 
-  /// 【搜索高亮】根据搜索关键词生成高亮范围
-  List<HighlightRange> _generateSearchHighlights(String content) {
-    final keyword = widget.searchKeyword;
-    if (keyword == null || keyword.isEmpty) return [];
 
-    final highlights = <HighlightRange>[];
-    final lowerContent = content.toLowerCase();
-    final lowerKeyword = keyword.toLowerCase();
-
-    int startIndex = 0;
-    int matchCount = 0;
-
-    while (true) {
-      final index = lowerContent.indexOf(lowerKeyword, startIndex);
-      if (index == -1) break;
-
-      highlights.add(HighlightRange(
-        id: 'search_$matchCount',
-        start: index,
-        end: index + keyword.length,
-        color: const Color(0xFFFFEB3B), // 黄色高亮
-        styleType: 'background',
-        text: keyword,
-      ));
-
-      startIndex = index + keyword.length;
-      matchCount++;
-
-      // 限制最多高亮 50 个匹配，避免性能问题
-      if (matchCount >= 50) break;
-    }
-
-    return highlights;
-  }
 
   /// 【新架构】一次选择 = 一条记录
   /// 
@@ -730,7 +483,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
   Future<void> _addHighlightFromSelection(String text, int start, int end, {String prefix = '', String suffix = ''}) async {
     // 【Bug Fix】防抖动/防重复点击
     if (_isProcessingHighlight) {
-      print('⚠️ [AddHighlight] Skipped duplicate trigger.');
+      // print('⚠️ [AddHighlight] Skipped duplicate trigger.');
       return;
     }
     _isProcessingHighlight = true;
@@ -741,8 +494,8 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
       final registry = _cachedParseResult!.blocks;
       
       // 2. 查找涉及的 Block
-      print('🔍 [AddHighlight] Selection: [$start, $end] Text: "${text.substring(0, min(10, text.length))}..."');
-      print('🔍 [AddHighlight] Registry Size: ${registry.length}');
+      // print('🔍 [AddHighlight] Selection: [$start, $end] Text: "${text.substring(0, min(10, text.length))}..."');
+      // print('🔍 [AddHighlight] Registry Size: ${registry.length}');
 
       final intersectingBlocks = registry.where((b) {
         final intersectStart = max(start, b.globalStart);
@@ -767,8 +520,8 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
       }).toList();
       
       // 【调试日志】输出过滤前后的 Block 信息
-      print('🔍 [AddHighlight] Intersecting: ${intersectingBlocks.map((b) => "B${b.index}[${b.globalStart}-${b.globalEnd}]").join(", ")}');
-      print('🔍 [AddHighlight] Leaf Blocks: ${leafBlocks.map((b) => "B${b.index}[${b.globalStart}-${b.globalEnd}]").join(", ")}');
+      // print('🔍 [AddHighlight] Intersecting: ${intersectingBlocks.map((b) => "B${b.index}[${b.globalStart}-${b.globalEnd}]").join(", ")}');
+      // print('🔍 [AddHighlight] Leaf Blocks: ${leafBlocks.map((b) => "B${b.index}[${b.globalStart}-${b.globalEnd}]").join(", ")}');
       
       // Use leafBlocks for processing
       final blocksToProcess = leafBlocks.isNotEmpty ? leafBlocks : intersectingBlocks;
@@ -778,7 +531,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
       final int contextLength = 20;
       
       if (blocksToProcess.isEmpty) {
-        print('⚠️ [AddHighlight] No intersecting blocks found! Using Global Offset only.');
+        // print('⚠️ [AddHighlight] No intersecting blocks found! Using Global Offset only.');
         // Fallback: 无 Block 信息，selections 为空，依赖全局偏移
       } else {
         // 为每个 Block 收集选区信息
@@ -834,7 +587,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
         blockInternalEnd: selections.length == 1 ? selections.first.internalEnd : null,
       );
       
-      print('✅ [AddHighlight] Creating single highlight with ${selections.length} selections');
+      // 创建单条高亮记录
       
       // 5. 保存到服务
       final highlights = await _highlightService.addHighlight(
@@ -854,7 +607,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ 已添加高亮'),
+          content: Text('✅ 已添加笔记'),
           duration: Duration(seconds: 1),
           backgroundColor: Colors.green,
         ),
@@ -883,7 +636,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已删除高亮'), duration: Duration(seconds: 1)),
+      const SnackBar(content: Text('已删除笔记'), duration: Duration(seconds: 1)),
     );
   }
 
@@ -893,9 +646,6 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
     int newColor,
     String newType,
   ) async {
-    debugPrint('🎨 [UpdateStyle] START - ID: ${highlight.id}, OldColor: ${highlight.color}, NewColor: $newColor, Type: $newType');
-    debugPrint('🎨 [UpdateStyle] MessageId: ${widget.messageId}, mounted: $mounted');
-    
     final highlights = await _highlightService.updateHighlightStyle(
       widget.messageId, 
       highlight.id, 
@@ -903,24 +653,12 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
       newType,
     );
     
-    debugPrint('🎨 [UpdateStyle] Received ${highlights.length} highlights');
-    for (final h in highlights) {
-      debugPrint('🎨 [UpdateStyle]   - ID: ${h.id}, Color: ${h.color}, Type: ${h.styleType}');
-    }
-    
     if (mounted) {
-      debugPrint('🎨 [UpdateStyle] Calling setState to update UI...');
       setState(() {
         _highlights = highlights;
-        // 【Bug Fix】同时清除 Markdown Widget 缓存和解析结果缓存
         _cachedMarkdownWidget = null;
         _cachedParseResult = null;
-        // 【调试】记录缓存清除
-        debugPrint('🎨 [UpdateStyle] Cache cleared: _cachedMarkdownWidget=null, _cachedParseResult=null');
       });
-      debugPrint('🎨 [UpdateStyle] setState completed');
-    } else {
-      debugPrint('🎨 [UpdateStyle] WARNING: Widget not mounted, skipping setState');
     }
   }
 
@@ -1166,8 +904,6 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
   @override
   void dispose() {
     _hideFloatingToolbar();
-    // 【精确定位】清理闪烁动画
-    _blinkController?.dispose();
     super.dispose();
   }
 
@@ -1234,7 +970,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
                if (newSelectedText.isEmpty) {
                   _hideFloatingToolbar();
                }
-                SchedulerBinding.instance.addPostFrameCallback((_) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) {
                     setState(() {
                       _selectedText = newSelectedText;
@@ -1253,7 +989,7 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
                         _selectionStart = resolution.$2!;
                         _selectionEnd = resolution.$4!;
                         
-                        print('📌 [Selection] Block: $_selectionStartBlockIndex -> $_selectionEndBlockIndex, Global: [$_selectionStart, $_selectionEnd]');
+                        // print('📌 [Selection] Block: $_selectionStartBlockIndex -> $_selectionEndBlockIndex, Global: [$_selectionStart, $_selectionEnd]');
                       
                         // 提取上下文
                         const contextLen = 20;
@@ -1279,36 +1015,6 @@ class _HighlightableCardState extends State<HighlightableCard> with SingleTicker
         child: _getMemoizedMarkdownWidget(),
       ),
     );
-    
-    // 【精确定位】如果有闪烁动画，包装闪烁边框效果
-    if (_blinkAnimation != null && _blinkController != null) {
-      return AnimatedBuilder(
-        animation: _blinkAnimation!,
-        builder: (context, child) {
-          final opacity = _blinkAnimation!.value * 0.6;
-          final targetHighlight = _highlights.firstWhere(
-            (h) => h.id == widget.targetHighlightId,
-            orElse: () => _highlights.first,
-          );
-          final highlightColor = Color(targetHighlight.color);
-          
-          return Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: highlightColor.withValues(alpha: opacity),
-                  blurRadius: 12 + 8 * _blinkAnimation!.value,
-                  spreadRadius: 2 * _blinkAnimation!.value,
-                ),
-              ],
-            ),
-            child: child,
-          );
-        },
-        child: contentWidget,
-      );
-    }
     
     return contentWidget;
   }

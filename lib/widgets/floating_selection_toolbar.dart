@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 /// 浮动选择工具栏 - 类似微信读书的文字选择体验
 ///
 /// 当用户选中文字时,在选中区域附近弹出浮动工具栏
-/// 提供复制、高亮等操作
+/// 提供复制、添加笔记等操作
 class FloatingSelectionToolbar extends StatelessWidget {
   final Offset position;
   final VoidCallback? onCopy;
@@ -85,7 +85,7 @@ class FloatingSelectionToolbar extends StatelessWidget {
                   if (onHighlight != null)
                     _ToolbarButton(
                       icon: Icons.edit_rounded,
-                      label: '高亮',
+                      label: '添加笔记',
                       onPressed: onHighlight!,
                       iconColor: const Color(0xFFFFD54F),
                       labelColor: const Color(0xFFFFD54F),
@@ -150,7 +150,7 @@ class _ToolbarButton extends StatelessWidget {
   }
 }
 
-/// 高亮颜色选择器 - 弹出式面板
+/// 笔记颜色选择器 - 弹出式面板
 class HighlightColorPicker extends StatelessWidget {
   final Offset position;
   final Color currentColor;
@@ -218,7 +218,7 @@ class HighlightColorPicker extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    '选择高亮颜色',
+                    '选择笔记颜色',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,

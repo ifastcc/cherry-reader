@@ -35,7 +35,7 @@ class HighlightListSheet extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                '高亮列表',
+                '笔记列表',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -52,7 +52,7 @@ class HighlightListSheet extends StatelessWidget {
           if (highlights.isEmpty)
             const Expanded(
               child: Center(
-                child: Text('暂无高亮标注', style: TextStyle(color: Colors.grey)),
+                child: Text('暂无笔记', style: TextStyle(color: Colors.grey)),
               ),
             )
           else

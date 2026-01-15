@@ -190,7 +190,7 @@ class _QuickCaptureSheetState extends State<QuickCaptureSheet> {
           // 高亮（需要选中文本）
           if (hasSelectedText)
             ChoiceChip(
-              label: const Text('高亮'),
+              label: const Text('笔记'),
               avatar: Icon(
                 Icons.highlight,
                 size: 18,
@@ -256,31 +256,54 @@ class _QuickCaptureSheetState extends State<QuickCaptureSheet> {
   /// 选中文本预览
   Widget _buildSelectedTextPreview(BuildContext context) {
     final theme = Theme.of(context);
+    final previewColor = Color(_selectedColor);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Container(
-        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Color(_selectedColor).withOpacity(0.15),
-          borderRadius: BorderRadius.circular(8),
+          color: previewColor.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12),
           border: Border(
             left: BorderSide(
-              color: Color(_selectedColor),
-              width: 3,
+              color: previewColor,
+              width: 4,
             ),
           ),
         ),
-        child: Text(
-          widget.selectedText!,
-          style: TextStyle(
-            fontSize: 14,
-            fontStyle: FontStyle.italic,
-            color: theme.colorScheme.onSurfaceVariant,
-            height: 1.5,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 引用标签
+              Row(
+                children: [
+                  Icon(Icons.format_quote_rounded, size: 14, color: previewColor),
+                  const SizedBox(width: 4),
+                  Text(
+                    '选中内容',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: previewColor,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                widget.selectedText!,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                  height: 1.5,
+                ),
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ),
-          maxLines: 4,
-          overflow: TextOverflow.ellipsis,
         ),
       ),
     );
@@ -434,7 +457,7 @@ class _QuickCaptureSheetState extends State<QuickCaptureSheet> {
   String _getButtonLabel() {
     switch (_selectedType) {
       case KnowledgeType.highlight:
-        return '添加高亮';
+        return '添加笔记';
       case KnowledgeType.annotation:
         return '添加标注';
       case KnowledgeType.note:
@@ -504,7 +527,7 @@ class _QuickCaptureSheetState extends State<QuickCaptureSheet> {
         widget.onCreated?.call();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${_selectedType == KnowledgeType.highlight ? '高亮' : _selectedType == KnowledgeType.annotation ? '标注' : '笔记'}已保存'),
+            content: Text('${_selectedType == KnowledgeType.highlight ? '笔记' : _selectedType == KnowledgeType.annotation ? '标注' : '笔记'}已保存'),
             behavior: SnackBarBehavior.floating,
           ),
         );

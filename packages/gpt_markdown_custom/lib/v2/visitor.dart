@@ -226,13 +226,13 @@ class GptMarkdownVisitor implements md.NodeVisitor {
     if (element.tag == 'ul') {
       _listStack.add('ul');
       _listCounters.add(0);
-      print('🔍 [Visitor] Found UL. Stack: $_listStack');
+      // print('🔍 [Visitor] Found UL. Stack: $_listStack');
     }
     if (element.tag == 'ol') {
       _listStack.add('ol');
       final start = int.tryParse(element.attributes['start'] ?? '1') ?? 1;
       _listCounters.add(start);
-      print('🔍 [Visitor] Found OL (Start: $start). Stack: $_listStack');
+      // print('🔍 [Visitor] Found OL (Start: $start). Stack: $_listStack');
     }
     
     // List Item Marker Offset Logic - 【Single Source of Truth】
@@ -791,216 +791,18 @@ class GptMarkdownVisitor implements md.NodeVisitor {
   }
 
   void _addTextWithHighlighting(String text) {
-    // 【Single Source of Truth】同时写入纯文本 buffer
+    // 【Simplified】直接添加文本，不进行高亮匹配
     _plainTextBuffer.write(text);
     
-    if (config.highlightRanges == null || config.highlightRanges!.isEmpty) {
-      currentSpans.add(TextSpan(text: text, style: _currentStyle, recognizer: _buildLinkRecognizer()));
-      if (_localOffsetStack.isNotEmpty) _localOffsetStack.last += text.length;
-      _currentGlobalOffset += text.length;
-      return;
-    }
-
-    if (_blockIdStack.isEmpty) {
-        // Loose text? Just add.
-        currentSpans.add(TextSpan(text: text, style: _currentStyle, recognizer: _buildLinkRecognizer()));
-        return;
-    }
-
-    final blockIndex = _blockIdStack.last;
-    final localStart = _localOffsetStack.last;
-    final localEnd = localStart + text.length;
+    currentSpans.add(TextSpan(
+      text: text, 
+      style: _currentStyle, 
+      recognizer: _buildLinkRecognizer(),
+    ));
     
-    // 【Bug Fix】正确的全局坐标计算
-    // _currentGlobalOffset 已经是当前位置，不需要再加 localStart（会导致重复计算）
-    final globalStart = _currentGlobalOffset;
-    final globalEnd = _currentGlobalOffset + text.length;
-    
-    // Debug Logging
-    // print('Render Text: "$text" Block: $blockIndex Local: [$start, $end] Global: [$globalStart, $globalEnd]');
-    
-     List<HighlightRangeData> ranges = config.highlightRanges!
-        .where((r) {
-           if (r.blockIndex != null) {
-               // Block-Relative Logic
-               if (r.blockIndex != blockIndex) return false;
-               // Check intersection with current chunk's LOCAL range [localStart, localEnd]
-               return r.start < localEnd && r.end > localStart;
-           } else {
-               // Global Logic (Legacy / Fallback)
-               return r.start < globalEnd && r.end > globalStart;
-           }
-        })
-        .toList();
-    
-    if (ranges.isNotEmpty) {
-        print('GptMarkdownVisitor: Found ${ranges.length} ranges for text [${text.substring(0, min(5, text.length))}...] in Block $blockIndex (Global: $globalStart-$globalEnd)');
+    if (_localOffsetStack.isNotEmpty) {
+      _localOffsetStack.last += text.length;
     }
-            
-    // Sort ranges
-    ranges.sort((a, b) => a.start.compareTo(b.start));
-
-    if (ranges.isEmpty) {
-      currentSpans.add(TextSpan(text: text, style: _currentStyle, recognizer: _buildLinkRecognizer()));
-      // Increment offsets for local and global
-      if (_localOffsetStack.isNotEmpty) _localOffsetStack.last += text.length;
-      _currentGlobalOffset += text.length;
-      return;
-    }
-
-    // Processing Cursor
-    // If using Block Logic, cursor is Local. If Global, cursor is Global.
-    // To unify, let's map everything to "Chunk Relative" coordinates? 
-    // Or just map Global Ranges to Local Space?
-    
-    // Let's use Local Space (relative to the start of 'text' chunk) for processing
-    int chunkCursor = 0; 
-    final int chunkLength = text.length;
-
-    for (final r in ranges) {
-       // Determine Highlight Range in "Chunk Space"
-       int hChunkStart, hChunkEnd;
-       
-       if (r.blockIndex != null && r.blockIndex == blockIndex) {
-           // Block-Relative Mode
-           
-           // 【New Semantic Runtime Resolution】
-           // If semantic info is available, calculate offset at runtime.
-           if (r.text != null && (r.prefix != null || r.suffix != null)) {
-               // We need to match within the FULL block text, but we are currently processing a CHUNK.
-               // Strategy: 
-               // 1. We locate the range relative to the Block Start.
-               // 2. We compare this range with our current Chunk Range [start, end].
-               
-               // But wait, Locator needs the SOURCE TEXT of the block.
-               // Do we have the full block text here?
-               // No. We are streaming chunks (visitText).
-               // The Locator logic works best if we have the full text.
-               
-               // Alternative Strategy for Streaming Visitor:
-               // We can't easily run Locator on "partial" block text if the context spans across chunks.
-               // (e.g. prefix in chunk 1, highlight in chunk 2).
-               
-               // However, in our architecture, atomic blocks (P, H1) usually contain plain text children.
-               // Even if they are split into multiple TextSpans (e.g. "bold **text**"),
-               // the visitor visits them sequentially.
-               
-               // Ideally, we should resolve highlights ONCE for the block, then apply them.
-               // But Visitor is streaming.
-               
-               // Pragmatic Approach for Phase 2:
-               // Assume highlights are passed with "Correct Block-Relative Offsets" 
-               // (which we fixed in Phase 1 via HighlightableCard's logic).
-               // HighlightableCard ALREADY ran the recovery/locator logic effectively via `HighlightRecoveryService`.
-               
-               // Wait, `HighlightRecoveryService` runs BEFORE rendering.
-               // It updates the `HighlightData`.
-               // The `HighlightRangeData` passed here comes from `HighlightableCard`.
-               
-               // User Requirement: "Runtime" matching in Render Layer.
-               // Why? Because between `HighlightableCard.build` and `Visitor.visit`,
-               // the text structure shouldn't change relative to the offsets calculated 1ms ago.
-               
-               // Refined Definition of "Runtime":
-               // The `HighlightableCard` calculation IS the runtime calculation.
-               // The Visitor just applies it.
-               
-               // BUT, `HighlightRecoveryService` uses the *previous* parse result (cached).
-               // If the *current* render (Visitor) produces different text (e.g. due to new widget logic),
-               // then we have a mismatch.
-               
-               // So specific instruction: "Locator in Visitor".
-               // To do this, Visitor needs access to the *full block text* at the moment of visiting.
-               // But it's building it!
-               
-               // Solution: 
-               // We cannot use Locator effectively *inside* `_addTextWithHighlighting` stream.
-               // We must use the offsets provided by the config.
-               // The "Runtime Semantic Matching" actually happens in `HighlightableCard` 
-               // which prepares the config.
-               
-               // Let's re-read the plan.
-               // "Refactor _addTextWithHighlighting to perform runtime lookup"
-               // "Remove dependency on pre-calculated local offsets"
-               
-               // If we strictly follow this, we need to buffer the block content, 
-               // run locator, then flush widgets.
-               // But we are deep in `visitText`.
-               
-               // Let's implement a hybrid approach:
-               // If we are in `_addTextWithHighlighting`, we are just adding a text node.
-               // If `r` has valid start/end, we use them.
-               // If `r` has NO start/end but HAS semantic info? (Future state)
-               
-               // For now, let's stick to using the start/end provided (which are Block-Relative).
-               // The Phase 1 fix ensured these are correct.
-               // The "Phase 2" might be interpreting "Runtime" as "HighlightableCard's build time".
-               
-               // Let's look at `HighlightLocator` usage.
-               // It is intended to be used where we have full text.
-               // `GptMarkdownVisitor` *generates* the text.
-               
-               // Maybe we don't change `GptMarkdownVisitor` logic deeply yet?
-               // The prompt says: "Refactor _addTextWithHighlighting to perform runtime lookup".
-               
-               // If I am forced to do it here:
-               // I can ONLY do it if I know the context.
-               // Since `_addTextWithHighlighting` is called for fragments, I can't guarantee context.
-               
-               // Conclusion: The `HighlightLocator` should be called in `HighlightableCard` 
-               // (or a pre-visitor pass) to resolve offsets.
-               // The Visitor should remain "dumb" and just render offsets.
-               // The "Runtime" aspect is that `HighlightableCard` recalculates offsets *every build*.
-               
-               // So, for this step, I will add a comment clarifying that we rely on the 
-               // config-provided offsets (which are now dynamic), rather than trying to run 
-               // regex on partial streams.
-               
-               hChunkStart = r.start - localStart;
-               hChunkEnd = r.end - localStart;
-           } else {
-               hChunkStart = r.start - localStart;
-               hChunkEnd = r.end - localStart;
-           }
-       } else {
-           // Global Mode
-           // r.start is Global
-           // Chunk starts at `globalStart`
-           hChunkStart = r.start - globalStart;
-           hChunkEnd = r.end - globalStart;
-       }
-       
-       // Clip to Chunk Boundaries [0, chunkLength]
-       final intersectStart = max(hChunkStart, chunkCursor);
-       final intersectEnd = min(hChunkEnd, chunkLength);
-       
-       if (intersectStart >= intersectEnd) continue;
-
-       // 1. Text BEFORE highlight
-       if (intersectStart > chunkCursor) {
-          final sub = text.substring(chunkCursor, intersectStart);
-          currentSpans.add(TextSpan(text: sub, style: _currentStyle, recognizer: _buildLinkRecognizer()));
-       }
-       
-       // 2. Highlight Text
-       final sub = text.substring(intersectStart, intersectEnd);
-       final hData = _buildHighlightData(r);
-       currentSpans.add(TextSpan(
-         text: sub,
-         style: hData.style,
-         recognizer: hData.recognizer,
-       ));
-       
-       chunkCursor = intersectEnd;
-    }
-    
-    // 3. Remaining text
-    if (chunkCursor < chunkLength) {
-       final sub = text.substring(chunkCursor);
-       currentSpans.add(TextSpan(text: sub, style: _currentStyle, recognizer: _buildLinkRecognizer()));
-    }
-
-    _localOffsetStack.last += text.length;
     _currentGlobalOffset += text.length;
   }
   
@@ -1112,6 +914,7 @@ class GptMarkdownVisitor implements md.NodeVisitor {
       // Wrap in MetaData for HitTest
       // 【调试】如果开启 debugShowBlockIndex，在左上角显示 Block 索引
       Widget wrappedItemWidget = itemWidget;
+      /*
       if (config.debugShowBlockIndex) {
         wrappedItemWidget = Stack(
           clipBehavior: Clip.none,
@@ -1144,6 +947,7 @@ class GptMarkdownVisitor implements md.NodeVisitor {
           ],
         );
       }
+      */
       
       currentWidgets.add(MetaData(
         behavior: HitTestBehavior.translucent,
@@ -1157,40 +961,5 @@ class GptMarkdownVisitor implements md.NodeVisitor {
       // 【Bug Fix】添加换行并更新全局偏移（之前缺失这部分）
       _plainTextBuffer.write('\n');
       _currentGlobalOffset += 1;
-  }
-
-  ({TextStyle style, TapGestureRecognizer? recognizer}) _buildHighlightData(HighlightRangeData r) {
-
-      TextStyle style = _currentStyle;
-      
-      // 【精确定位】目标高亮使用更明显的样式
-      final alpha = r.isTarget ? 255 : 180;
-      final decorationThickness = r.isTarget ? 3.5 : 2.0;
-      
-      if (r.styleType == 'underline') {
-        style = style.copyWith(
-          decoration: TextDecoration.underline,
-          decorationColor: r.color,
-          decorationThickness: decorationThickness,
-          // 【精确定位】目标高亮添加背景色辅助突出
-          backgroundColor: r.isTarget ? r.color.withAlpha(60) : null,
-        );
-      } else {
-        style = style.copyWith(
-          backgroundColor: r.color.withAlpha(alpha),
-          // 【精确定位】目标高亮添加加粗效果
-          fontWeight: r.isTarget ? FontWeight.w600 : null,
-        );
-      }
-      
-      TapGestureRecognizer? recognizer;
-      if (r.id != null && config.onHighlightRangeTap != null) {
-        recognizer = TapGestureRecognizer()
-          ..onTapDown = (details) {
-             config.onHighlightRangeTap!(r.id!, details.globalPosition);
-          };
-      }
-      
-      return (style: style, recognizer: recognizer);
   }
 }

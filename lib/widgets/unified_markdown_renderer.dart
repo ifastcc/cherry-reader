@@ -1,15 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:gpt_markdown_custom/gpt_markdown.dart';
-import '../services/markdown_syntax_highlighter.dart';
-
-// 导出 HighlightRange 以便其他文件访问
-export '../services/markdown_syntax_highlighter.dart' show HighlightRange;
 
 /// 统一的 Markdown 渲染器
 ///
 /// 整合了所有 Markdown 渲染需求：
 /// - LaTeX 数学公式支持（$...$ 和 $$...$$）
-/// - 多色高亮标注（通过自定义语法 <highlight color="#xxx" id="yyy">text</highlight>）
 /// - 优化的排版样式（标题间距、行高、字间距）
 /// - 代码高亮
 /// - 可选的文本选择功能
@@ -30,12 +25,6 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
   /// 是否使用大字体模式（全屏阅读时）
   final bool largeFont;
 
-  /// 高亮范围列表（用于渲染已有高亮）
-  final List<HighlightRange> highlights;
-
-  /// 点击高亮区域的回调
-  final Function(String id, TapDownDetails details)? onHighlightTap;
-
   /// 内边距
   final EdgeInsets padding;
 
@@ -49,8 +38,6 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
     this.textAlign,
     this.selectable = false,
     this.largeFont = false,
-    this.highlights = const [],
-    this.onHighlightTap,
     this.padding = EdgeInsets.zero,
     this.scrollable = false,
   }) : super(key: key);
@@ -128,59 +115,9 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
         config: GptMarkdownConfig(
           style: defaultTextStyle,
           textAlign: textAlign,
-          // 启用 LaTeX 支持 - 支持 $...$ 和 $$...$$ 语法
-          useDollarSignsForLatex: true, // Config usually handles this internally or via regex replacement in V2 wrapper? 
-          // Note: GptMarkdownV2 wrapper in v2/widget.dart doesn't have useDollarSignsForLatex param logic in build?
-          // Let's check GptMarkdownV2 source again. It calls GptMarkdownVisitor.
-          // And GptMarkdown wrapper (V1) did regex replacement BEFORE MdWidget.
-          // GptMarkdownV2 wrapper in v2/widget.dart does NOT do regex replacement as seen in previous view?
-          // Wait, I viewed v2/widget.dart. It has:
-          // final document = md.Document(extensionSet: GptExtensionSet.all);
-          // And NO regex replacement.
-          // So I might need to handle $ -> \( replacement manually or update V2 to support it?
-          // LatexInlineSyntax in V2 handles $.
-          // So V2 is native. No need for regex replacement. GOOD.
-          
-          // 【调试】显示 Block 索引号 (临时开启)
-          debugShowBlockIndex: true,
-          
+          useDollarSignsForLatex: true,
           // 跟随链接颜色
           followLinkColor: true,
-          
-          // 传递渲染层高亮数据
-          highlightRanges: highlights.map((h) => HighlightRangeData(
-            id: h.id,
-            start: h.start,
-            end: h.end,
-            color: h.color,
-            styleType: h.styleType,
-            text: h.text,
-            prefix: h.prefix,
-            suffix: h.suffix,
-            blockIndex: h.blockIndex,
-            blockContentHash: h.blockContentHash,
-            blockInternalStart: h.blockInternalStart,
-            blockInternalEnd: h.blockInternalEnd,
-            groupId: h.groupId,
-            isTarget: h.isTarget,  // 【精确定位】传递目标标记
-          )).toList(),
-          
-          // 高亮点击回调
-          onHighlightRangeTap: onHighlightTap != null 
-            ? (id, position) => onHighlightTap!(id, TapDownDetails(globalPosition: position))
-            : null,
-            
-          // 自定义高亮渲染
-          highlightBuilder: (context, text, style) {
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFBC02D).withAlpha(180),
-                borderRadius: BorderRadius.circular(2),
-              ),
-              child: Text(text, style: style),
-            );
-          },
         ),
       ),
     );
@@ -197,3 +134,4 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
     return markdownWidget;
   }
 }
+
