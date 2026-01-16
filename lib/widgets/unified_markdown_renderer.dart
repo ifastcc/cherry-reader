@@ -9,6 +9,7 @@ import 'package:gpt_markdown_custom/gpt_markdown.dart';
 /// - 代码高亮
 /// - 可选的文本选择功能
 /// - 支持大字体模式（全屏阅读）
+/// - 【新增】虚拟化渲染优化（长文本场景）
 class UnifiedMarkdownRenderer extends StatelessWidget {
   /// Markdown 内容
   final String data;
@@ -30,6 +31,14 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
 
   /// 是否支持独立滚动
   final bool scrollable;
+  
+  /// 【性能优化】虚拟化阈值（字符数）
+  /// 超过此阈值时启用增量渲染优化
+  final int virtualizeThreshold;
+  
+  /// 【性能优化】是否启用虚拟化
+  /// 设为 true 时，长内容会分块渲染
+  final bool enableVirtualization;
 
   const UnifiedMarkdownRenderer({
     Key? key,
@@ -40,6 +49,8 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
     this.largeFont = false,
     this.padding = EdgeInsets.zero,
     this.scrollable = false,
+    this.virtualizeThreshold = 10000,
+    this.enableVirtualization = true,
   }) : super(key: key);
 
   @override
@@ -48,7 +59,54 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
     final textColor = isDark ? const Color(0xFFE8E8E8) : const Color(0xFF1A1A2E);
     
     // 创建自定义主题 - Cherry Studio 风格
-    final themeData = GptMarkdownThemeData(
+    final themeData = _buildThemeData(context, isDark, textColor);
+
+    // 默认的正文样式 - Cherry Studio 风格
+    final bodyColor = isDark ? const Color(0xFFD4D4D4) : const Color(0xFF374151);
+    final defaultTextStyle = textStyle ?? TextStyle(
+      fontSize: largeFont ? 17 : 14,
+      height: 1.6, // Cherry Studio 的 line-height: 1.6
+      color: bodyColor,
+      letterSpacing: 0.1,
+    );
+    
+    // 【性能优化】长内容虚拟化渲染
+    final shouldVirtualize = enableVirtualization && 
+                              data.length > virtualizeThreshold;
+
+    Widget markdownWidget;
+    
+    if (shouldVirtualize) {
+      // 长内容：使用增量渲染
+      markdownWidget = _buildVirtualizedContent(
+        context, 
+        themeData, 
+        defaultTextStyle,
+      );
+    } else {
+      // 短内容：直接渲染
+      markdownWidget = _buildDirectContent(themeData, defaultTextStyle);
+    }
+
+    // 根据 scrollable 和 padding 包装
+    if (padding != EdgeInsets.zero) {
+      markdownWidget = Padding(padding: padding, child: markdownWidget);
+    }
+
+    if (scrollable) {
+      return SingleChildScrollView(child: markdownWidget);
+    }
+
+    return markdownWidget;
+  }
+  
+  /// 构建主题数据
+  GptMarkdownThemeData _buildThemeData(
+    BuildContext context, 
+    bool isDark, 
+    Color textColor,
+  ) {
+    return GptMarkdownThemeData(
       brightness: Theme.of(context).brightness,
       // 标题样式 - 更紧凑的行高
       h1: TextStyle(
@@ -96,19 +154,14 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
       // 默认高亮颜色
       highlightColor: const Color(0xFFFBC02D),
     );
-
-    // 默认的正文样式 - Cherry Studio 风格
-    final bodyColor = isDark ? const Color(0xFFD4D4D4) : const Color(0xFF374151);
-    final defaultTextStyle =
-        textStyle ??
-        TextStyle(
-          fontSize: largeFont ? 17 : 14,
-          height: 1.6, // Cherry Studio 的 line-height: 1.6
-          color: bodyColor,
-          letterSpacing: 0.1,
-        );
-
-    Widget markdownWidget = GptMarkdownTheme(
+  }
+  
+  /// 直接渲染（短内容）
+  Widget _buildDirectContent(
+    GptMarkdownThemeData themeData,
+    TextStyle defaultTextStyle,
+  ) {
+    return GptMarkdownTheme(
       gptThemeData: themeData,
       child: GptMarkdownV2(
         data: data,
@@ -116,22 +169,69 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
           style: defaultTextStyle,
           textAlign: textAlign,
           useDollarSignsForLatex: true,
-          // 跟随链接颜色
           followLinkColor: true,
         ),
       ),
     );
-
-    // 根据 scrollable 和 padding 包装
-    if (padding != EdgeInsets.zero) {
-      markdownWidget = Padding(padding: padding, child: markdownWidget);
+  }
+  
+  /// 【性能优化】虚拟化渲染（长内容）
+  /// 
+  /// 策略：将长内容分成多个段落，使用 RepaintBoundary 隔离重绘
+  Widget _buildVirtualizedContent(
+    BuildContext context,
+    GptMarkdownThemeData themeData,
+    TextStyle defaultTextStyle,
+  ) {
+    // 按段落分割（使用双换行作为分隔符）
+    final chunks = _splitIntoChunks(data);
+    
+    return GptMarkdownTheme(
+      gptThemeData: themeData,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: chunks.map((chunk) {
+          return RepaintBoundary(
+            child: GptMarkdownV2(
+              data: chunk,
+              config: GptMarkdownConfig(
+                style: defaultTextStyle,
+                textAlign: textAlign,
+                useDollarSignsForLatex: true,
+                followLinkColor: true,
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+  
+  /// 将内容分割成块
+  /// 
+  /// 按双换行或特定标记分割，保持语义完整性
+  List<String> _splitIntoChunks(String content) {
+    // 按双换行分割（Markdown 段落边界）
+    final paragraphs = content.split(RegExp(r'\n\n+'));
+    
+    // 合并小段落，避免过多碎片
+    final chunks = <String>[];
+    final buffer = StringBuffer();
+    const maxChunkSize = 2000; // 每块最大字符数
+    
+    for (final para in paragraphs) {
+      if (buffer.length + para.length > maxChunkSize && buffer.isNotEmpty) {
+        chunks.add(buffer.toString().trim());
+        buffer.clear();
+      }
+      buffer.write(para);
+      buffer.write('\n\n');
     }
-
-    if (scrollable) {
-      return SingleChildScrollView(child: markdownWidget);
+    
+    if (buffer.isNotEmpty) {
+      chunks.add(buffer.toString().trim());
     }
-
-    return markdownWidget;
+    
+    return chunks.isEmpty ? [content] : chunks;
   }
 }
-

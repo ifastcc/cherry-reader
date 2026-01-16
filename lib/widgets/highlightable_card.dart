@@ -9,11 +9,14 @@ import '../models/isar/knowledge_entry.dart' show SelectionRange;
 import '../models/isar/unified_conversation_entity.dart';
 import '../services/highlight_service.dart';
 import '../services/unified_conversation_service.dart';
+import '../services/markdown_widget_cache.dart';
+import '../services/markdown_isolate_parser.dart';
 import '../screens/ai_chat_screen.dart';
 import 'unified_markdown_renderer.dart';
 import 'highlight_style_menu.dart';
 import 'knowledge/quick_capture_sheet.dart';
 import 'floating_selection_toolbar.dart';
+import 'skeleton_card.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
 
@@ -258,6 +261,10 @@ class _HighlightableCardState extends State<HighlightableCard> {
   static const int _collapseThreshold = 1000;
   // 折叠时显示的字符数
   static const int _collapsedPreviewLength = 500;
+  
+  // 【性能优化】Isolate 预解析状态
+  bool _isPreParsing = false;
+  MarkdownPreParseData? _preParseData;
 
   Color get _currentHighlightColor =>
       kHighlightStyles[_currentStyleIndex].color;
@@ -410,12 +417,41 @@ class _HighlightableCardState extends State<HighlightableCard> {
   void initState() {
     super.initState();
     _loadHighlights();
+    // 【性能优化】启动 Isolate 预解析
+    _startPreParsing();
     // 【性能优化】延迟加载讨论数量，不阻塞首次渲染
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_discussionCountLoaded) {
         _loadDiscussionCount();
       }
     });
+  }
+  
+  /// 【性能优化】启动 Isolate 预解析
+  Future<void> _startPreParsing() async {
+    if (widget.content.isEmpty) return;
+    
+    setState(() {
+      _isPreParsing = true;
+    });
+    
+    try {
+      final data = await MarkdownIsolateParser.instance
+          .parseInBackground(widget.content);
+      if (mounted) {
+        setState(() {
+          _preParseData = data;
+          _isPreParsing = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isPreParsing = false;
+        });
+      }
+      debugPrint('⚠️ [HighlightableCard] Pre-parse failed: $e');
+    }
   }
 
   Future<void> _loadDiscussionCount() async {
@@ -445,19 +481,17 @@ class _HighlightableCardState extends State<HighlightableCard> {
 
   /// 【简化】获取 memoized Markdown widget
   ///
-  /// 只有在 content 变化时才重新创建（移除了高亮渲染逻辑）
+  /// 使用 Widget 缓存服务，避免重复构建
   Widget _getMemoizedMarkdownWidget() {
     // 【新增】使用 _displayContent 而不是 widget.content，支持折叠显示
     final currentContent = _displayContent;
+    final contentHash = currentContent.hashCode;
 
-    // 检查是否需要重新渲染（简化：只检查内容变化）
-    final needsRebuild =
-        _cachedMarkdownWidget == null ||
-        _lastRenderedContent != currentContent;
-
-    if (needsRebuild) {
-      // 【简化】直接渲染 Markdown，不进行高亮处理
-      _cachedMarkdownWidget = UnifiedMarkdownRenderer(
+    // 使用全局缓存服务
+    return MarkdownWidgetCache.instance.getOrBuild(
+      key: '${widget.messageId}_${_expanded ? 'exp' : 'col'}',
+      contentHash: contentHash,
+      builder: () => UnifiedMarkdownRenderer(
         data: currentContent,
         scrollable: false,
         selectable: true,
@@ -467,12 +501,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
           color: Color(0xFF2C3E50),
           letterSpacing: 0.3,
         ),
-      );
-
-      _lastRenderedContent = currentContent;
-    }
-
-    return _cachedMarkdownWidget!;
+      ),
+    );
   }
 
 

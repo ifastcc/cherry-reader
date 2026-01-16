@@ -8,9 +8,11 @@ import '../services/analysis_cache_manager.dart';
 import '../services/highlight_service.dart';
 import '../services/unified_conversation_service.dart';
 import '../services/topic_service.dart';
+import '../services/markdown_isolate_parser.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../widgets/highlightable_card.dart';
 import '../widgets/message_action_bar.dart';
+import '../widgets/skeleton_card.dart';
 import '../services/epub_export_service.dart';
 import 'ai_chat_screen.dart';
 import 'package:provider/provider.dart';
@@ -86,6 +88,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   // 【新增】消息讨论数量缓存（key: messageId 或 contextId）
   Map<String, int> _discussionCounts = {};
+  
+  // 【智能分页】已加载的轮次索引
+  final Set<int> _loadedGroupIndices = {};
+  // 【智能分页】轮次预估高度
+  final Map<int, double> _estimatedGroupHeights = {};
+  // 【智能分页】Isolate 预解析缓存
+  final Map<int, MarkdownPreParseData> _preParseDataCache = {};
 
   final _epubExportService = EpubExportService();
 
@@ -755,6 +764,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
       sw.reset();
       await _preloadDiscussionCounts(conv);
       debugPrint('⏱️ [ConversationScreen] 讨论数量预加载: ${sw.elapsedMilliseconds}ms');
+      
+      // 【性能优化】Isolate 预解析 Markdown
+      sw.reset();
+      await _preParseAllContent(conv);
+      debugPrint('⏱️ [ConversationScreen] Isolate预解析: ${sw.elapsedMilliseconds}ms');
     }
 
     debugPrint('⏱️ [ConversationScreen] _loadData 总耗时: ${totalSw.elapsedMilliseconds}ms');
@@ -781,6 +795,43 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
     // ========== 调试信息：打印 Topic 详情 ==========
     _printTopicDebugInfo();
+  }
+  
+  /// 【性能优化】Isolate 预解析所有轮次的 Markdown 内容
+  /// 
+  /// 在后台线程完成解析，为首屏渲染做准备
+  Future<void> _preParseAllContent(Map<String, dynamic> conv) async {
+    final messages = conv['messages'] as List<dynamic>? ?? [];
+    final contents = <String, String>{};
+    
+    // 收集所有需要解析的内容
+    for (final msg in messages) {
+      if (msg is! Map<String, dynamic>) continue;
+      final messageId = msg['id'] as String?;
+      if (messageId == null || messageId.isEmpty) continue;
+      
+      // 提取 Markdown 内容
+      final blocks = msg['blocks'] as List<dynamic>? ?? [];
+      final buffer = StringBuffer();
+      for (final block in blocks) {
+        if (block is Map<String, dynamic>) {
+          final type = block['type'] as String?;
+          if (type == 'main_text' || type == 'thinking' || type == 'code') {
+            buffer.write(block['content'] as String? ?? '');
+          }
+        }
+      }
+      
+      final content = buffer.toString();
+      if (content.isNotEmpty) {
+        contents[messageId] = content;
+      }
+    }
+    
+    // 批量预解析
+    if (contents.isNotEmpty) {
+      await MarkdownIsolateParser.instance.batchPreParse(contents);
+    }
   }
 
   /// 【新增】批量预加载讨论数量
