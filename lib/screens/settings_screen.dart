@@ -89,6 +89,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool _obscureWebdavPassword = true;
   String _currentViewMode = 'timeline';
+  bool _useWebViewConversation = false; // WebView 版话题详情页开关
 
   @override
   void initState() {
@@ -199,6 +200,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // 加载视图模式
     final viewMode = prefs.getString('home_view_mode') ?? 'timeline';
+    
+    // 加载 WebView 话题详情页开关
+    final useWebViewConversation = prefs.getBool('use_webview_conversation') ?? false;
 
     // 加载 WebDAV 配置
     final loadMode = await WebDavService.getLoadMode();
@@ -218,6 +222,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() {
       _currentViewMode = viewMode;
+      _useWebViewConversation = useWebViewConversation;
       _apiUrlController.text = apiUrl;
       _apiKeyController.text = apiKey;
       _modelController.text = model;
@@ -787,6 +792,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                  setState(() => _currentViewMode = mode);
                  final prefs = await SharedPreferences.getInstance();
                  await prefs.setString('home_view_mode', mode);
+              },
+            ),
+            const Divider(height: 24),
+            // WebView 话题详情页开关
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('使用 WebView 话题详情页', style: TextStyle(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                '实验性功能：更好的文本选择和高亮体验',
+                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+              ),
+              value: _useWebViewConversation,
+              onChanged: (value) async {
+                setState(() => _useWebViewConversation = value);
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('use_webview_conversation', value);
               },
             ),
           ],

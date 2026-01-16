@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:ui'; // For ImageFilter
 import '../services/cherry_extractor.dart';
@@ -20,6 +21,7 @@ import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
 import '../widgets/tts_mini_player.dart';
 import '../widgets/dual_fab.dart';
+import 'webview_conversation_screen.dart';
 
 /// 页内搜索匹配结果
 class InPageSearchMatch {
@@ -223,10 +225,38 @@ class _ConversationScreenState extends State<ConversationScreen> {
       suggestedRowHeight: 400,
     );
 
+    // 【WebView 版本检测】检查是否启用 WebView 版话题详情页
+    _checkWebViewSwitch();
+
     _loadData();
 
     // 监听滚动变化
     _scrollController.addListener(_onScrollChanged);
+  }
+
+  /// 【WebView 版本检测】如果启用了 WebView 开关，跳转到 WebView 版本
+  Future<void> _checkWebViewSwitch() async {
+    final prefs = await SharedPreferences.getInstance();
+    final useWebView = prefs.getBool('use_webview_conversation') ?? false;
+    
+    if (useWebView && mounted) {
+      // 延迟一帧后替换当前页面，避免在 initState 中直接 push
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => WebViewConversationScreen(
+                topicId: widget.topicId,
+                topicName: widget.topicName,
+                scrollToGroupIndex: widget.scrollToRoundIndex,
+                scrollToMessageId: widget.scrollToMessageId,
+                scrollToHighlightId: widget.scrollToHighlightId,
+              ),
+            ),
+          );
+        }
+      });
+    }
   }
 
   @override

@@ -573,48 +573,33 @@ class _HighlightableCardState extends State<HighlightableCard> {
           final internalEnd = intersectEnd - block.globalStart;
           final subText = _cachedParseResult!.plainText.substring(intersectStart, intersectEnd);
           
-          // 提取 Block Local 语义上下文
-          String blockLocalPrefix = '';
-          if (internalStart > 0) {
-            final pStart = max(0, internalStart - contextLength);
-            blockLocalPrefix = block.text.substring(pStart, internalStart);
-          }
-          
-          String blockLocalSuffix = '';
-          if (internalEnd < block.text.length) {
-            final sEnd = min(block.text.length, internalEnd + contextLength);
-            blockLocalSuffix = block.text.substring(internalEnd, sEnd);
-          }
-          
+          // 【v3.0】使用简化的 SelectionRange
           selections.add(SelectionRange(
             blockIndex: block.index,
-            internalStart: internalStart,
-            internalEnd: internalEnd,
+            start: internalStart,
+            end: internalEnd,
             text: subText,
-            blockContentHash: block.contentHash,
-            globalStart: intersectStart,
-            globalEnd: intersectEnd,
-            prefix: blockLocalPrefix,
-            suffix: blockLocalSuffix,
           ));
         }
       }
       
-      // 4. 【新架构】创建单条高亮记录
+      // 4. 【v3.0】创建单条高亮记录
+      final colorHex = HighlightData.intColorToHex(_currentHighlightColor.value);
       final highlight = HighlightData(
-        text: text,  // 完整的引用文本（保留换行）
-        start: start,
-        end: end,
+        messageId: widget.messageId,
+        text: text,  // 完整的引用文本
+        color: colorHex,
+        style: _currentHighlightType,
+        ranges: selections.isNotEmpty 
+            ? selections.map((s) => HighlightRange(
+                blockIndex: s.blockIndex,
+                start: s.start,
+                end: s.end,
+                text: s.text,
+              )).toList()
+            : [],
         prefix: prefix,
         suffix: suffix,
-        color: _currentHighlightColor.value,
-        styleType: _currentHighlightType,
-        selections: selections.isNotEmpty ? selections : null,
-        // 单个 Block 时也填充旧字段（兼容性）
-        blockIndex: selections.length == 1 ? selections.first.blockIndex : null,
-        blockContentHash: selections.length == 1 ? selections.first.blockContentHash : null,
-        blockInternalStart: selections.length == 1 ? selections.first.internalStart : null,
-        blockInternalEnd: selections.length == 1 ? selections.first.internalEnd : null,
       );
       
       // 创建单条高亮记录
@@ -670,10 +655,10 @@ class _HighlightableCardState extends State<HighlightableCard> {
     );
   }
 
-  /// 【新架构】更新高亮样式 - 一条记录就是一个高亮
+  /// 【v3.0】更新高亮样式
   Future<void> _updateHighlightStyle(
     HighlightData highlight,
-    int newColor,
+    String newColor,
     String newType,
   ) async {
     final highlights = await _highlightService.updateHighlightStyle(
@@ -697,14 +682,19 @@ class _HighlightableCardState extends State<HighlightableCard> {
         Overlay.of(context).context.findRenderObject() as RenderBox;
     final center = Offset(overlay.size.width / 2, overlay.size.height / 2);
 
+    // 【v3.0】转换颜色格式为 int（菜单组件仍使用 int）
+    final colorInt = HighlightData.hexColorToInt(highlight.color);
+
     HighlightStyleMenu.show(
       context: context,
       position: center,
       highlightId: highlight.id,
-      currentColor: highlight.color,
-      currentStyleType: highlight.styleType,
+      currentColor: colorInt,
+      currentStyleType: highlight.style,
       onStyleChanged: (highlightId, newColor, newType) {
-        _updateHighlightStyle(highlight, newColor, newType);
+        // 【v3.0】转换回 String 格式
+        final newColorHex = HighlightData.intColorToHex(newColor);
+        _updateHighlightStyle(highlight, newColorHex, newType);
       },
       onDelete: (highlightId) {
         _removeHighlight(highlight);

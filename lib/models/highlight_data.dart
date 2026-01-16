@@ -1,154 +1,164 @@
 import 'package:uuid/uuid.dart';
-import 'isar/knowledge_entry.dart' show SelectionRange;
 
-/// 高亮数据模型
-/// 
-/// 【新架构】一条 HighlightData 代表用户的一次选择操作
-/// - selections: 存储多个 Block 内的选区信息
-/// - text: 完整的引用文本（保留换行）
-/// - start/end: 全局偏移（用于 fallback）
-class HighlightData {
-  final String id;
-  final String text;
+/// 高亮范围（v3.0）
+///
+/// 表示一个 Block 内的选中范围，简化字段命名
+class HighlightRange {
+  /// Block 索引
+  final int blockIndex;
+
+  /// Block 内起始偏移
   final int start;
+
+  /// Block 内结束偏移
   final int end;
-  final int color;
-  final String? prefix;
-  final String? suffix;
-  final String styleType;
-  final int? blockIndex;
-  final String? blockContentHash;
-  final int? blockInternalStart;
-  final int? blockInternalEnd;
-  @Deprecated('使用 selections 替代')
-  final String? groupId;
+
+  /// 该范围的文本（用于验证）
+  final String text;
+
+  HighlightRange({
+    required this.blockIndex,
+    required this.start,
+    required this.end,
+    required this.text,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'blockIndex': blockIndex,
+        'start': start,
+        'end': end,
+        'text': text,
+      };
+
+  factory HighlightRange.fromJson(Map<String, dynamic> json) => HighlightRange(
+        blockIndex: json['blockIndex'] as int,
+        start: json['start'] as int,
+        end: json['end'] as int,
+        text: json['text'] as String,
+      );
+
+  @override
+  String toString() =>
+      'HighlightRange(block:$blockIndex, $start-$end, "$text")';
+}
+
+/// 高亮数据模型（v3.0）
+///
+/// 用于 WebView 通信的标准格式
+/// - color: CSS 十六进制字符串 '#FFF176'
+/// - style: 'background' | 'underline' | 'wavy' | 'box' | 'dashed'
+/// - ranges: 简化的 Block 内偏移
+class HighlightData {
+  /// 唯一标识（UUID）
+  final String id;
+
+  /// 关联的消息 ID
+  final String messageId;
+
+  /// 完整高亮文本
+  final String text;
+
+  /// CSS 颜色（十六进制 '#FFF176'）
+  final String color;
+
+  /// 样式类型
+  final String style;
+
+  /// 定位信息：每个 Block 内的范围
+  final List<HighlightRange> ranges;
+
+  /// 恢复上下文（前 50 字符）
+  final String prefix;
+
+  /// 恢复上下文（后 50 字符）
+  final String suffix;
+
+  /// 创建时间
   final DateTime createdAt;
-  
-  /// 【新架构】多选区信息
-  final List<SelectionRange>? selections;
 
   HighlightData({
     String? id,
+    required this.messageId,
     required this.text,
-    required this.start,
-    required this.end,
     required this.color,
-    this.prefix,
-    this.suffix,
-    this.styleType = 'background',
-    this.blockIndex,
-    this.blockContentHash,
-    this.blockInternalStart,
-    this.blockInternalEnd,
-    this.groupId,
-    this.selections,
+    this.style = 'background',
+    required this.ranges,
+    this.prefix = '',
+    this.suffix = '',
     DateTime? createdAt,
-  }) : id = id ?? const Uuid().v4(),
-       createdAt = createdAt ?? DateTime.now();
-  
-  /// 【新架构】获取有效的选区列表
-  /// 
-  /// 优先使用 selections，fallback 到旧字段
-  List<SelectionRange> get effectiveSelections {
-    if (selections != null && selections!.isNotEmpty) {
-      return selections!;
-    }
-    // Fallback: 从旧字段构建单个选区
-    if (blockIndex != null && blockInternalStart != null && blockInternalEnd != null) {
-      return [
-        SelectionRange(
-          blockIndex: blockIndex!,
-          internalStart: blockInternalStart!,
-          internalEnd: blockInternalEnd!,
-          text: text,
-          blockContentHash: blockContentHash,
-          globalStart: start,
-          globalEnd: end,
-          prefix: prefix,
-          suffix: suffix,
-        )
-      ];
-    }
-    return [];
-  }
+  })  : id = id ?? 'hl-${const Uuid().v4()}',
+        createdAt = createdAt ?? DateTime.now();
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'text': text,
-    'start': start,
-    'end': end,
-    'color': color,
-    'prefix': prefix,
-    'suffix': suffix,
-    'styleType': styleType,
-    'blockIndex': blockIndex,
-    'blockContentHash': blockContentHash,
-    'blockInternalStart': blockInternalStart,
-    'blockInternalEnd': blockInternalEnd,
-    'groupId': groupId,
-    'selections': selections?.map((s) => s.toJson()).toList(),
-    'createdAt': createdAt.toIso8601String(),
-  };
+        'id': id,
+        'messageId': messageId,
+        'text': text,
+        'color': color,
+        'style': style,
+        'ranges': ranges.map((r) => r.toJson()).toList(),
+        'prefix': prefix,
+        'suffix': suffix,
+        'createdAt': createdAt.toIso8601String(),
+      };
 
-  factory HighlightData.fromJson(Map<String, dynamic> json) => HighlightData(
-    id: json['id'] as String?,
-    text: json['text'] as String,
-    start: json['start'] as int,
-    end: json['end'] as int,
-    color: json['color'] as int,
-    prefix: json['prefix'] as String?,
-    suffix: json['suffix'] as String?,
-    styleType: json['styleType'] as String? ?? 'background',
-    blockIndex: json['blockIndex'] as int?,
-    blockContentHash: json['blockContentHash'] as String?,
-    blockInternalStart: json['blockInternalStart'] as int?,
-    blockInternalEnd: json['blockInternalEnd'] as int?,
-    groupId: json['groupId'] as String?,
-    selections: json['selections'] != null
-        ? (json['selections'] as List).map((e) => SelectionRange.fromJson(e as Map<String, dynamic>)).toList()
-        : null,
-    createdAt: json['createdAt'] != null
-        ? DateTime.parse(json['createdAt'] as String)
-        : null,
-  );
-}
+  factory HighlightData.fromJson(Map<String, dynamic> json) {
+    final rangesList = json['ranges'] as List?;
+    final ranges = rangesList
+            ?.map((e) => HighlightRange.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        [];
 
-/// HighlightData 扩展
-extension HighlightDataCopyWith on HighlightData {
-  /// 创建副本并覆盖指定字段
+    return HighlightData(
+      id: json['id'] as String?,
+      messageId: json['messageId'] as String,
+      text: json['text'] as String,
+      color: json['color'] as String,
+      style: json['style'] as String? ?? 'background',
+      ranges: ranges,
+      prefix: json['prefix'] as String? ?? '',
+      suffix: json['suffix'] as String? ?? '',
+      createdAt: json['createdAt'] != null
+          ? DateTime.parse(json['createdAt'] as String)
+          : null,
+    );
+  }
+
+  /// 从旧版 int 颜色格式转换为 CSS 十六进制
+  static String intColorToHex(int color) {
+    return '#${(color & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  }
+
+  /// 从 CSS 十六进制转换为 int 颜色格式（用于数据库存储）
+  static int hexColorToInt(String hex) {
+    final cleanHex = hex.replaceFirst('#', '');
+    return 0xFF000000 | int.parse(cleanHex, radix: 16);
+  }
+
   HighlightData copyWith({
     String? id,
+    String? messageId,
     String? text,
+    String? color,
+    String? style,
+    List<HighlightRange>? ranges,
     String? prefix,
     String? suffix,
-    int? start,
-    int? end,
-    int? color,
-    String? styleType,
-    int? blockIndex,
-    String? blockContentHash,
-    int? blockInternalStart,
-    int? blockInternalEnd,
-    String? groupId,
-    List<SelectionRange>? selections,
     DateTime? createdAt,
   }) {
     return HighlightData(
       id: id ?? this.id,
+      messageId: messageId ?? this.messageId,
       text: text ?? this.text,
+      color: color ?? this.color,
+      style: style ?? this.style,
+      ranges: ranges ?? this.ranges,
       prefix: prefix ?? this.prefix,
       suffix: suffix ?? this.suffix,
-      start: start ?? this.start,
-      end: end ?? this.end,
-      color: color ?? this.color,
-      styleType: styleType ?? this.styleType,
-      blockIndex: blockIndex ?? this.blockIndex,
-      blockContentHash: blockContentHash ?? this.blockContentHash,
-      blockInternalStart: blockInternalStart ?? this.blockInternalStart,
-      blockInternalEnd: blockInternalEnd ?? this.blockInternalEnd,
-      groupId: groupId ?? this.groupId,
-      selections: selections ?? this.selections,
       createdAt: createdAt ?? this.createdAt,
     );
   }
+
+  @override
+  String toString() =>
+      'HighlightData(id:$id, msg:$messageId, style:$style, color:$color, ranges:${ranges.length})';
 }

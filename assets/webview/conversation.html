@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>对话详情</title>
+  <!-- Prism.js 主题样式 -->
+  <link rel="stylesheet" href="./vendor/prism-tomorrow.min.css">
+  <!-- 主样式 -->
+  <link rel="stylesheet" href="./conversation.css">
+  <!-- 高亮样式 -->
+  <link rel="stylesheet" href="./highlight.css">
+</head>
+<body class="theme-light">
+  <!-- Sticky Tab Bar (当内联 Tab 滚出时显示) -->
+  <header id="sticky-header" class="hidden">
+    <span class="round-label">Q1</span>
+    <div class="tab-list"></div>
+  </header>
+
+  <!-- 主内容区 -->
+  <main id="conversation-container">
+    <!-- 轮次卡片通过 JS 动态生成 -->
+  </main>
+
+  <!-- 能量条 (固定右侧) -->
+  <aside id="energy-bar">
+    <!-- 动态生成 -->
+  </aside>
+
+  <!-- 侧滑抽屉 -->
+  <aside id="edge-drawer" class="closed">
+    <div class="drawer-trigger">
+      <span class="trigger-icon">‹</span>
+    </div>
+    <div class="drawer-content">
+      <button class="nav-btn up" title="上一轮">▲</button>
+      <div class="round-indicator">1/1</div>
+      <button class="nav-btn down" title="下一轮">▼</button>
+      <hr>
+      <button class="action-btn tts" title="朗读">🎧</button>
+      <button class="action-btn discuss" title="讨论">💬</button>
+    </div>
+  </aside>
+
+  <!-- TTS Mini Player -->
+  <footer id="tts-player" class="hidden">
+    <div class="player-content">
+      <span class="title">正在朗读...</span>
+      <div class="controls">
+        <button class="prev" title="上一个">⏮</button>
+        <button class="play-pause" title="播放/暂停">⏸</button>
+        <button class="next" title="下一个">⏭</button>
+      </div>
+      <button class="close" title="关闭">✕</button>
+    </div>
+  </footer>
+
+  <!-- 高亮工具栏 (选中文本时显示) -->
+  <div id="highlight-toolbar" class="hidden">
+    <button class="color" data-color="#FFF176" style="background:#FFF176" title="黄色"></button>
+    <button class="color" data-color="#81C784" style="background:#81C784" title="绿色"></button>
+    <button class="color" data-color="#64B5F6" style="background:#64B5F6" title="蓝色"></button>
+    <button class="color" data-color="#E57373" style="background:#E57373" title="红色"></button>
+    <button class="color" data-color="#BA68C8" style="background:#BA68C8" title="紫色"></button>
+    <div class="divider"></div>
+    <button class="style-btn" data-style="background" title="背景">A</button>
+    <button class="style-btn" data-style="underline" title="下划线">U̲</button>
+  </div>
+
+  <!-- 高亮编辑弹窗（简化版）-->
+  <div id="highlight-editor" class="hidden">
+    <div class="editor-arrow"></div>
+    <div class="editor-content">
+      <!-- 颜色选择区 -->
+      <div class="color-row">
+        <button class="color-btn" data-color="#FFF176" style="background:#FFF176" title="黄色"></button>
+        <button class="color-btn" data-color="#81C784" style="background:#81C784" title="绿色"></button>
+        <button class="color-btn" data-color="#64B5F6" style="background:#64B5F6" title="蓝色"></button>
+        <button class="color-btn" data-color="#E57373" style="background:#E57373" title="红色"></button>
+        <button class="color-btn" data-color="#BA68C8" style="background:#BA68C8" title="紫色"></button>
+      </div>
+      <!-- 样式选择区（简化：只保留2种）-->
+      <div class="style-row">
+        <button class="style-btn" data-style="background" title="背景高亮">
+          <span class="preview bg">Aa</span>
+        </button>
+        <button class="style-btn" data-style="underline" title="下划线">
+          <span class="preview ul">Aa</span>
+        </button>
+      </div>
+      <!-- 操作按钮（简化：只保留复制和删除）-->
+      <div class="action-row">
+        <button class="action-btn copy">复制</button>
+        <button class="action-btn delete danger">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 第三方库 -->
+  <script src="./vendor/markdown-it.min.js"></script>
+  <script src="./vendor/prism-core.min.js"></script>
+  <script src="./vendor/prism-autoloader.min.js"></script>
+  
+  <!-- 主逻辑 -->
+  <script src="./conversation.js"></script>
+  <!-- 高亮管理器 -->
+  <script src="./highlight-manager.js"></script>
+</body>
+</html>

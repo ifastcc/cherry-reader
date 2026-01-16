@@ -4,58 +4,49 @@ import 'package:uuid/uuid.dart';
 
 part 'knowledge_entry.g.dart';
 
-/// 选区范围数据类
-/// 
+/// 选区范围数据类（v3.0）
+///
 /// 表示一个 Block 内的选中范围
+/// v3.0 简化字段：使用 start/end 替代 internalStart/internalEnd
 class SelectionRange {
+  /// Block 索引
   final int blockIndex;
-  final int internalStart;
-  final int internalEnd;
+
+  /// Block 内起始偏移
+  final int start;
+
+  /// Block 内结束偏移
+  final int end;
+
+  /// 该范围的文本（用于验证）
   final String text;
-  final String? blockContentHash;
-  // 【全局偏移】用于兼容和 fallback
-  final int globalStart;
-  final int globalEnd;
-  // 【语义上下文】
-  final String? prefix;
-  final String? suffix;
 
   SelectionRange({
     required this.blockIndex,
-    required this.internalStart,
-    required this.internalEnd,
+    required this.start,
+    required this.end,
     required this.text,
-    this.blockContentHash,
-    required this.globalStart,
-    required this.globalEnd,
-    this.prefix,
-    this.suffix,
   });
 
   Map<String, dynamic> toJson() => {
-    'blockIndex': blockIndex,
-    'internalStart': internalStart,
-    'internalEnd': internalEnd,
-    'text': text,
-    'blockContentHash': blockContentHash,
-    'globalStart': globalStart,
-    'globalEnd': globalEnd,
-    'prefix': prefix,
-    'suffix': suffix,
-  };
+        'blockIndex': blockIndex,
+        'start': start,
+        'end': end,
+        'text': text,
+      };
 
   factory SelectionRange.fromJson(Map<String, dynamic> json) => SelectionRange(
-    blockIndex: json['blockIndex'] as int,
-    internalStart: json['internalStart'] as int,
-    internalEnd: json['internalEnd'] as int,
-    text: json['text'] as String,
-    blockContentHash: json['blockContentHash'] as String?,
-    globalStart: json['globalStart'] as int? ?? 0,
-    globalEnd: json['globalEnd'] as int? ?? 0,
-    prefix: json['prefix'] as String?,
-    suffix: json['suffix'] as String?,
-  );
+        blockIndex: json['blockIndex'] as int,
+        // 兼容旧格式：优先读取 start，fallback 到 internalStart
+        start: json['start'] as int? ?? json['internalStart'] as int? ?? 0,
+        end: json['end'] as int? ?? json['internalEnd'] as int? ?? 0,
+        text: json['text'] as String? ?? '',
+      );
+
+  @override
+  String toString() => 'SelectionRange(block:$blockIndex, $start-$end)';
 }
+
 
 /// 统一知识条目实体
 ///
@@ -221,7 +212,7 @@ class KnowledgeEntry {
         plainText!.isNotEmpty;
   }
   
-  /// 【新架构】解析 selections JSON
+  /// 【v3.0】解析 selections JSON
   @ignore
   List<SelectionRange> get selectionRanges {
     if (selections == null || selections!.isEmpty) {
@@ -230,14 +221,9 @@ class KnowledgeEntry {
         return [
           SelectionRange(
             blockIndex: blockIndex!,
-            internalStart: blockInternalStart!,
-            internalEnd: blockInternalEnd!,
+            start: blockInternalStart!,
+            end: blockInternalEnd!,
             text: quotedText ?? '',
-            blockContentHash: blockContentHash,
-            globalStart: start ?? 0,
-            globalEnd: end ?? 0,
-            prefix: prefix,
-            suffix: suffix,
           )
         ];
       }
@@ -253,7 +239,7 @@ class KnowledgeEntry {
     }
   }
   
-  /// 【新架构】设置 selections
+  /// 【v3.0】设置 selections
   set selectionRanges(List<SelectionRange> ranges) {
     if (ranges.isEmpty) {
       selections = null;

@@ -59,6 +59,7 @@ dependencies:
   flutter_dotenv: ^5.1.0          # .env 文件支持
   url_launcher: ^6.3.2
   connectivity_plus: ^6.0.0       # 网络状态检测
+  flutter_inappwebview: ^6.1.5    # WebView 组件（话题详情页 WebView 版本）
 
 dev_dependencies:
   flutter_test:
@@ -75,6 +76,8 @@ flutter:
   # 环境变量文件
   assets:
     - .env
+    - assets/webview/
+    - assets/webview/vendor/
 
   # 字体配置（暂时注释，需要时再添加）
   # fonts:
