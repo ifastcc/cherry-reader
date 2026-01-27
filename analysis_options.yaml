@@ -9,6 +9,15 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    - packages/gpt_markdown_custom/example/**
+    - packages/gpt_markdown_custom/lib/v2/parser.dart
+    - packages/gpt_markdown_custom/lib/v2/plain_text_visitor.dart
+    - packages/gpt_markdown_custom/lib/v2/visitor.dart
+    - packages/gpt_markdown_custom/lib/v2/widget.dart
+    - test/line_slicing_investigation.dart
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

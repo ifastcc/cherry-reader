@@ -29,14 +29,19 @@ void main() {
        
        // Create a highlight anchored to this block
        final highlight = HighlightData(
+         messageId: 'm1',
          text: 'World',
          start: 106, // 100 + 6
          end: 111,
-         color: 0,
-         blockIndex: 0,
-         blockContentHash: _hash(blockText),
-         blockInternalStart: 6,
-         blockInternalEnd: 11,
+         color: '#000000',
+         ranges: [
+           HighlightRange(
+             blockIndex: 0,
+             start: 6,
+             end: 11,
+             text: 'World',
+           )
+         ],
        );
        
        // Same plain text context
@@ -77,14 +82,19 @@ void main() {
        // "Hello " is 6 chars. "World" is 5.
        // Internal: 6-11.
        final highlight = HighlightData(
+         messageId: 'm1',
          text: 'World',
          start: 106, 
          end: 111,
-         color: 0,
-         blockIndex: 0,
-         blockContentHash: _hash(oldBlockText), // Old hash
-         blockInternalStart: 6,
-         blockInternalEnd: 11,
+         color: '#000000',
+         ranges: [
+           HighlightRange(
+             blockIndex: 0,
+             start: 6,
+             end: 11,
+             text: 'World',
+           )
+         ],
        );
        
        final padding = 'a' * 100;
@@ -99,8 +109,10 @@ void main() {
        
        expect(recovered.start, 116);
        expect(recovered.end, 121);
-       expect(recovered.blockInternalStart, 16);
-       expect(recovered.blockInternalEnd, 21);
+       expect(recovered.ranges.length, 1);
+       expect(recovered.ranges.first.blockIndex, 0);
+       expect(recovered.ranges.first.start, 16);
+       expect(recovered.ranges.first.end, 21);
     });
     
     test('Block Moved: Found by Hash', () {
@@ -119,14 +131,19 @@ void main() {
        final registry = [block];
        
        final highlight = HighlightData(
+         messageId: 'm1',
          text: 'Paragraph',
          start: 7, // Originally at 0+7
          end: 16,
-         color: 0,
-         blockIndex: 0, // Old index
-         blockContentHash: hash,
-         blockInternalStart: 7,
-         blockInternalEnd: 16,
+         color: '#000000',
+         ranges: [
+           HighlightRange(
+             blockIndex: 0,
+             start: 7,
+             end: 16,
+             text: 'Paragraph',
+           )
+         ],
        );
        
        // Context: ... block at 500 ...
@@ -137,7 +154,7 @@ void main() {
        
        // Should find it at 500 + 7 = 507
        expect(recovered.start, 507);
-       expect(recovered.blockIndex, 5); // Should update index
+       expect(recovered.ranges.first.blockIndex, 5); // Should update index
     });
 
     test('Lazy Migration: Populates Block Info from Legacy', () {
@@ -154,11 +171,12 @@ void main() {
        
        // Legacy highlight: Global offsets only, no block info
        final highlight = HighlightData(
+         messageId: 'm1',
          text: 'Block', // "Target Block Content" -> "Block" is at 7
          start: 57, // 50 + 7
          end: 62,
-         color: 0,
-         // No block info
+         color: '#000000',
+         ranges: const [],
        );
        
        final padding = 'a' * 50;
@@ -170,10 +188,10 @@ void main() {
        expect(recovered.start, 57);
        
        // BUT should now have block info
-       expect(recovered.blockIndex, 2);
-       expect(recovered.blockContentHash, _hash(blockText));
-       expect(recovered.blockInternalStart, 7);
-       expect(recovered.blockInternalEnd, 12);
+       expect(recovered.ranges.length, 1);
+       expect(recovered.ranges.first.blockIndex, 2);
+       expect(recovered.ranges.first.start, 7);
+       expect(recovered.ranges.first.end, 12);
     });
   });
 }

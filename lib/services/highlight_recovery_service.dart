@@ -88,26 +88,25 @@ class HighlightRecoveryService {
     // ============================================
     // Strategy 1: Block-Based Semantic Match (Highest Confidence)
     // ============================================
-    if (registry != null && highlight.blockIndex != null) {
-      // Logic: If we know the block, and the internal offset text matches, we trust it 100%.
-      // This handles the case where the block moved globally, but content is intact.
-      final blockIndex = highlight.blockIndex!;
-      BlockInfo? targetBlock;
-      try {
-        targetBlock = registry.firstWhere((b) => b.index == blockIndex);
-      } catch (_) {}
-
-      if (targetBlock != null && highlight.blockInternalStart != null && highlight.blockInternalEnd != null) {
-          final newGlobalStart = targetBlock.globalStart + highlight.blockInternalStart!;
-          final newGlobalEnd = targetBlock.globalStart + highlight.blockInternalEnd!;
-          
-          if (newGlobalEnd <= plainText.length) {
-            final actualText = plainText.substring(newGlobalStart, newGlobalEnd);
-            if (actualText == highlight.text) {
-               // PERFECT MATCH within known block.
-               return highlight.copyWith(start: newGlobalStart, end: newGlobalEnd);
-            }
-          }
+    if (registry != null && highlight.ranges.isNotEmpty) {
+      final recovered = _recoverBySingleRange(
+        highlight: highlight,
+        plainText: plainText,
+        registry: registry,
+      );
+      if (recovered != null) return recovered;
+    }
+    if (registry != null && highlight.ranges.isEmpty) {
+      if (_validateOffset(highlight, plainText)) {
+        final derived = _deriveSingleRangeFromGlobal(
+          start: highlight.start,
+          end: highlight.end,
+          text: highlight.text,
+          registry: registry,
+        );
+        if (derived != null) {
+          return highlight.copyWith(ranges: [derived]);
+        }
       }
     }
 
@@ -117,9 +116,18 @@ class HighlightRecoveryService {
     // Logic: If block index failed (block edited or deleted), we search globally using context.
     final contextResult = _searchByContext(highlight, plainText);
     if (contextResult != null) {
+       final derived = registry == null
+           ? null
+           : _deriveSingleRangeFromGlobal(
+               start: contextResult.start,
+               end: contextResult.end,
+               text: highlight.text,
+               registry: registry,
+             );
        return highlight.copyWith(
          start: contextResult.start,
          end: contextResult.end,
+         ranges: derived != null ? [derived] : highlight.ranges,
        );
     }
   
@@ -150,11 +158,104 @@ class HighlightRecoveryService {
     
     final fuzzyResult = _fuzzySearch(highlight.text, plainText);
     if (fuzzyResult != null) {
-       return highlight.copyWith(start: fuzzyResult.start, end: fuzzyResult.end);
+       final derived = registry == null
+           ? null
+           : _deriveSingleRangeFromGlobal(
+               start: fuzzyResult.start,
+               end: fuzzyResult.end,
+               text: highlight.text,
+               registry: registry,
+             );
+       return highlight.copyWith(
+         start: fuzzyResult.start,
+         end: fuzzyResult.end,
+         ranges: derived != null ? [derived] : highlight.ranges,
+       );
     }
     
     // Truly lost.
     return highlight;
+  }
+
+  HighlightData? _recoverBySingleRange({
+    required HighlightData highlight,
+    required String plainText,
+    required List<BlockInfo> registry,
+  }) {
+    final range = highlight.ranges.first;
+    final byIndex = _matchRangeInBlock(
+      highlight: highlight,
+      range: range,
+      plainText: plainText,
+      registry: registry,
+      onlyBlockIndex: range.blockIndex,
+    );
+    if (byIndex != null) return byIndex;
+
+    final byScan = _matchRangeInBlock(
+      highlight: highlight,
+      range: range,
+      plainText: plainText,
+      registry: registry,
+      onlyBlockIndex: null,
+    );
+    return byScan;
+  }
+
+  HighlightData? _matchRangeInBlock({
+    required HighlightData highlight,
+    required HighlightRange range,
+    required String plainText,
+    required List<BlockInfo> registry,
+    required int? onlyBlockIndex,
+  }) {
+    for (final b in registry) {
+      if (onlyBlockIndex != null && b.index != onlyBlockIndex) continue;
+      final base = (b.globalStart as num).toInt();
+      final newGlobalStart = base + range.start;
+      final newGlobalEnd = base + range.end;
+      if (newGlobalStart < 0 || newGlobalEnd > plainText.length) continue;
+      if (newGlobalStart >= newGlobalEnd) continue;
+      final actualText = plainText.substring(newGlobalStart, newGlobalEnd);
+      final expectedText = range.text.isNotEmpty ? range.text : highlight.text;
+      if (expectedText.isNotEmpty && actualText != expectedText) continue;
+
+      final updatedRange = HighlightRange(
+        blockIndex: b.index,
+        start: range.start,
+        end: range.end,
+        text: expectedText,
+      );
+      return highlight.copyWith(
+        start: newGlobalStart,
+        end: newGlobalEnd,
+        ranges: [updatedRange],
+      );
+    }
+    return null;
+  }
+
+  HighlightRange? _deriveSingleRangeFromGlobal({
+    required int start,
+    required int end,
+    required String text,
+    required List<BlockInfo> registry,
+  }) {
+    for (final b in registry) {
+      final base = (b.globalStart as num).toInt();
+      final blockEnd = (b.globalEnd as num).toInt();
+      if (start < base || end > blockEnd) continue;
+      final localStart = start - base;
+      final localEnd = end - base;
+      if (localStart < 0 || localEnd < 0 || localStart >= localEnd) continue;
+      return HighlightRange(
+        blockIndex: b.index,
+        start: localStart,
+        end: localEnd,
+        text: text,
+      );
+    }
+    return null;
   }
 
   /// Fast Path: 验证原始偏移是否有效

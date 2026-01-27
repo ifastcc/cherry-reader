@@ -518,6 +518,11 @@ class _QuickCaptureSheetState extends State<QuickCaptureSheet> {
           await _knowledgeService.createNote(
             content: _commentController.text.trim(),
             plainText: _commentController.text.trim(),
+            messageId: widget.messageId,
+            start: widget.selectionStart,
+            end: widget.selectionEnd,
+            topicId: widget.topicId,
+            topicName: widget.topicName,
           );
           break;
       }

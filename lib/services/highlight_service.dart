@@ -29,7 +29,9 @@ class HighlightService {
       if (!_cache.containsKey(messageId)) {
         final entries = await _entryService.getByMessage(messageId);
         final highlights = entries
-            .where((e) => e.type == KnowledgeEntryType.highlight)
+            .where((e) =>
+                e.type == KnowledgeEntryType.highlight ||
+                e.type == KnowledgeEntryType.annotation)
             .map(_entryToData)
             .toList();
         _cache[messageId] = highlights;
@@ -47,7 +49,9 @@ class HighlightService {
 
     final entries = await _entryService.getByMessage(messageId);
     final highlights = entries
-        .where((e) => e.type == KnowledgeEntryType.highlight)
+        .where((e) =>
+            e.type == KnowledgeEntryType.highlight ||
+            e.type == KnowledgeEntryType.annotation)
         .map(_entryToData)
         .toList();
 
@@ -64,9 +68,12 @@ class HighlightService {
   }) async {
     // 检查重复（基于 ranges）
     final existingHighlights = await loadHighlights(messageId);
-    final isDuplicate = existingHighlights.any((h) =>
-        h.text == highlight.text &&
-        h.ranges.length == highlight.ranges.length);
+    final isDuplicate = existingHighlights.any(
+      (h) =>
+          h.start == highlight.start &&
+          h.end == highlight.end &&
+          h.text == highlight.text,
+    );
 
     if (isDuplicate) {
       debugPrint(
@@ -78,28 +85,26 @@ class HighlightService {
     final colorInt = HighlightData.hexColorToInt(highlight.color);
 
     await _entryService.createHighlight(
+      entryId: highlight.id,
       messageId: messageId,
       quotedText: highlight.text,
-      start: 0, // v3.0 不再使用全局偏移
-      end: 0,
+      start: highlight.start,
+      end: highlight.end,
       color: colorInt,
       styleType: highlight.style,
       topicId: topicId,
       topicName: topicName,
       prefix: highlight.prefix,
       suffix: highlight.suffix,
-      // 使用第一个 range 的信息（兼容旧数据库字段）
-      blockIndex: highlight.ranges.isNotEmpty ? highlight.ranges.first.blockIndex : null,
-      blockInternalStart: highlight.ranges.isNotEmpty ? highlight.ranges.first.start : null,
-      blockInternalEnd: highlight.ranges.isNotEmpty ? highlight.ranges.first.end : null,
-      // 存储完整 ranges
       selections: highlight.ranges.isNotEmpty
-          ? highlight.ranges.map((r) => SelectionRange(
-                blockIndex: r.blockIndex,
-                start: r.start,
-                end: r.end,
-                text: r.text,
-              )).toList()
+          ? highlight.ranges
+              .map((r) => SelectionRange(
+                    blockIndex: r.blockIndex,
+                    start: r.start,
+                    end: r.end,
+                    text: r.text,
+                  ))
+              .toList()
           : null,
     );
 
@@ -169,7 +174,9 @@ class HighlightService {
   Stream<List<HighlightData>> watchHighlights(String messageId) {
     return _entryService.watchByMessage(messageId).map(
           (entries) => entries
-              .where((e) => e.type == KnowledgeEntryType.highlight)
+              .where((e) =>
+                  e.type == KnowledgeEntryType.highlight ||
+                  e.type == KnowledgeEntryType.annotation)
               .map(_entryToData)
               .toList(),
         );
@@ -193,6 +200,8 @@ class HighlightService {
     return HighlightData(
       id: entry.entryId,
       messageId: entry.messageId ?? '',
+      start: entry.start ?? 0,
+      end: entry.end ?? ((entry.start ?? 0) + (entry.quotedText?.length ?? 0)),
       text: entry.quotedText ?? '',
       color: colorStr,
       style: entry.styleType ?? 'background',

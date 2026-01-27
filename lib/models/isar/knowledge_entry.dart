@@ -252,6 +252,7 @@ class KnowledgeEntry {
 
   /// 创建高亮
   static KnowledgeEntry createHighlight({
+    String? entryId,
     required String messageId,
     required String quotedText,
     required int start,
@@ -266,7 +267,7 @@ class KnowledgeEntry {
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     return KnowledgeEntry()
-      ..entryId = const Uuid().v4()
+      ..entryId = entryId ?? const Uuid().v4()
       ..quotedText = quotedText
       ..start = start
       ..end = end
@@ -284,6 +285,7 @@ class KnowledgeEntry {
 
   /// 创建标注（高亮 + 评论）
   static KnowledgeEntry createAnnotation({
+    String? entryId,
     required String messageId,
     required String quotedText,
     required int start,
@@ -301,7 +303,7 @@ class KnowledgeEntry {
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     return KnowledgeEntry()
-      ..entryId = const Uuid().v4()
+      ..entryId = entryId ?? const Uuid().v4()
       ..quotedText = quotedText
       ..content = comment
       ..plainText = comment
@@ -322,22 +324,31 @@ class KnowledgeEntry {
 
   /// 创建笔记
   static KnowledgeEntry createNote({
+    String? entryId,
     required String content,
     String contentType = 'delta',
     String? plainText,
     List<String>? tags,
     String? messageId,
+    int? start,
+    int? end,
+    String? prefix,
+    String? suffix,
     String? topicId,
     String? topicName,
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     return KnowledgeEntry()
-      ..entryId = const Uuid().v4()
+      ..entryId = entryId ?? const Uuid().v4()
       ..content = content
       ..contentType = contentType
       ..plainText = plainText ?? _extractPlainText(content, contentType)
       ..tags = tags ?? []
       ..messageId = messageId
+      ..start = start
+      ..end = end
+      ..prefix = prefix
+      ..suffix = suffix
       ..topicId = topicId
       ..topicName = topicName
       ..createdAt = now

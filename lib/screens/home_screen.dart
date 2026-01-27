@@ -3,7 +3,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:webdav_client/webdav_client.dart' as wd;
-import 'package:dio/dio.dart';
 import 'dart:io';
 import 'dart:async'; // For Timer
 import '../services/cherry_extractor.dart';
@@ -12,12 +11,17 @@ import '../services/repository_provider.dart';
 import '../services/webdav_service.dart';
 import '../services/local_folder_sync_service.dart';
 import '../services/ai_provider_service.dart';
-import '../services/unified_import_manager.dart';
 import '../services/version_service.dart';
 import '../services/background_import_service.dart';
+import '../services/sync_status_notifier.dart';
+import '../services/sync/sync_coordinator.dart';
+import '../services/sync/sync_candidate.dart';
+import '../services/sync/sync_preferences.dart';
+import '../services/sync/sync_source_type.dart';
+import '../services/timeline_compute_service.dart';
 import '../models/domain/data_version.dart';
 import '../models/domain/status_bar_state.dart';
-import '../utils/platform_utils.dart';
+import '../models/computed_timeline.dart';
 import 'conversation_screen.dart';
 import 'settings_screen.dart';
 import 'search_screen.dart';
@@ -25,6 +29,7 @@ import 'insight_screen.dart';
 import 'package:intl/intl.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/topic_card.dart';
+import '../widgets/sync_status_widget.dart';
 
 /// 同步阶段
 enum SyncStage {
@@ -44,7 +49,7 @@ enum HomeViewMode {
 enum TimeGroup { today, yesterday, thisWeek, earlier }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({Key? key}) : super(key: key);
+  const HomeScreen({super.key});
 
   @override
   State<HomeScreen> createState() => HomeScreenState();
@@ -53,44 +58,67 @@ class HomeScreen extends StatefulWidget {
 class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   CherryExtractor? _extractor;
   bool _isLoading = false;  // 仅用于首次加载无缓存时
-  DataLoadMode _loadMode = DataLoadMode.manual;
+  bool _autoWebDavEnabled = false;
+  bool _autoLocalFolderEnabled = false;
+  bool _autoHttpPullEnabled = false;
+  bool _autoLanReceiveEnabled = false;
+  StreamSubscription<SyncCandidate>? _syncCandidateSubscription;
 
   // 视图模式（默认为时间线）
   HomeViewMode _viewMode = HomeViewMode.timeline;
 
-  // 话题索引和助手信息
+  // 话题索引和助手信息（用于树形视图兼容）
   Map<String, List<Map<String, dynamic>>>? _topicIndex;
   Map<String, Map<String, dynamic>>? _assistantMap;
 
-  // 同步状态（统一）
-  bool _isSyncing = false;
-  double? _syncProgress;      // 同步进度 (0-1)
-  String? _syncMessage;       // 同步阶段描述（检查中/下载中/解析中）
-  CancelToken? _downloadCancelToken;
+  // 【性能优化】预计算的时间线数据
+  ComputedTimeline? _computedTimeline;
+  int _timelineVersion = 0;
+  bool _isComputingTimeline = false;
+  Timer? _skeletonTimer;
+  DateTime? _skeletonShownAt;
+  static const _skeletonDelay = Duration(milliseconds: 200);
+  static const _skeletonMinDuration = Duration(milliseconds: 300);
 
-  // 统一错误状态（替代原来的 _error 和 _lastErrorDetail）
-  String? _statusError;       // 错误详情，非空时状态栏显示红色
+  // 【性能优化】同步状态通知器（独立于主 Widget 树）
+  late final SyncStatusNotifier _syncNotifier;
+
+  // 同步状态（保留用于兼容，逐步迁移到 _syncNotifier）
+  bool _isSyncing = false;
+  double? _syncProgress;
+  String? _syncMessage;
+
+  // 统一错误状态
+  String? _statusError;
 
   // 数据源配置状态
   bool _hasValidWebDavConfig = false;
   bool _hasValidLocalFolderConfig = false;
-  LocalFolderSyncService? _localFolderSyncService;
-  LocalBackupInfo? _pendingLocalBackup;  // 本地文件夹模式下待加载的新版本
+  LocalBackupInfo? _pendingLocalBackup;
 
   // 版本管理
   StreamSubscription<ImportStatus>? _importStatusSubscription;
   DataVersion? _activeVersion;
   String? _currentVersionDisplay;
-  bool _hasNewVersion = false;  // 是否有新版本待查看（小蓝点）
-  bool _hasUpdate = false;      // 是否检测到更新可用
+  bool _hasNewVersion = false;
+  bool _hasUpdate = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _syncNotifier = SyncStatusNotifier();
     _loadViewMode();
     _initVersionListener();
+    _initSyncCoordinator();
     _initAndLoad();
+  }
+
+  void _initSyncCoordinator() {
+    unawaited(SyncCoordinator.instance.init());
+    _syncCandidateSubscription?.cancel();
+    _syncCandidateSubscription =
+        SyncCoordinator.instance.candidateStream.listen(_onSyncCandidate);
   }
 
   /// 加载视图模式偏好
@@ -102,16 +130,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _viewMode = savedMode == 'timeline' ? HomeViewMode.timeline : HomeViewMode.tree;
       });
     }
-  }
-
-  /// 切换视图模式
-  Future<void> _toggleViewMode() async {
-    final newMode = _viewMode == HomeViewMode.tree ? HomeViewMode.timeline : HomeViewMode.tree;
-    setState(() {
-      _viewMode = newMode;
-    });
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('home_view_mode', newMode == HomeViewMode.timeline ? 'timeline' : 'tree');
   }
 
   /// 初始化版本管理监听
@@ -190,8 +208,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _localFolderSyncService?.dispose();
+    _syncCandidateSubscription?.cancel();
+    unawaited(SyncCoordinator.instance.stopWatchingLocalFolder());
     _importStatusSubscription?.cancel();
+    _skeletonTimer?.cancel();
+    _syncNotifier.dispose();
     super.dispose();
   }
 
@@ -199,6 +220,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // 应用回到前台时刷新界面
     if (state == AppLifecycleState.resumed) {
+      // 【增量更新】检查时间边界，必要时重新分组
+      _refreshTimelineIfNeeded();
       setState(() {});
     }
   }
@@ -210,33 +233,30 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final newLoadMode = await WebDavService.getLoadMode();
-    final modeChanged = newLoadMode != _loadMode;
-    _loadMode = newLoadMode;
+    final prevAutoWebDavEnabled = _autoWebDavEnabled;
+    final prevAutoLocalFolderEnabled = _autoLocalFolderEnabled;
+    final prevAutoHttpPullEnabled = _autoHttpPullEnabled;
+    final prevAutoLanReceiveEnabled = _autoLanReceiveEnabled;
 
-    // 检查数据源配置
-    if (_loadMode == DataLoadMode.webdav) {
-      final config = await WebDavService.loadConfig();
-      _hasValidWebDavConfig = config.isValid;
-      _hasValidLocalFolderConfig = false;
-      _localFolderSyncService?.dispose();
-      _localFolderSyncService = null;
-    } else if (_loadMode == DataLoadMode.localFolder) {
-      final config = await LocalFolderSyncService.loadConfig();
-      _hasValidLocalFolderConfig = config.isValid;
-      _hasValidWebDavConfig = false;
-      if (config.isValid) {
-        _localFolderSyncService?.dispose();
-        _localFolderSyncService = LocalFolderSyncService();
-        _localFolderSyncService!.onFileChanged = _onLocalFileChanged;
-        await _localFolderSyncService!.startWatching(config);
-      }
-    } else {
-      _hasValidWebDavConfig = false;
-      _hasValidLocalFolderConfig = false;
-      _localFolderSyncService?.dispose();
-      _localFolderSyncService = null;
-    }
+    await SyncPreferences.migrateFromLegacyIfNeeded();
+    final sources = await SyncPreferences.getAutoSources();
+
+    _autoWebDavEnabled = sources[SyncSourceType.webdav] ?? false;
+    _autoLocalFolderEnabled = sources[SyncSourceType.localFolder] ?? false;
+    _autoHttpPullEnabled = sources[SyncSourceType.httpPull] ?? false;
+    _autoLanReceiveEnabled = sources[SyncSourceType.lanReceive] ?? false;
+
+    final webdavConfig = await WebDavService.loadConfig();
+    _hasValidWebDavConfig = webdavConfig.isValid;
+    final localConfig = await LocalFolderSyncService.loadConfig();
+    _hasValidLocalFolderConfig = localConfig.isValid;
+
+    await SyncCoordinator.instance.startWatchingLocalFolderIfEnabled();
+
+    final settingsChanged = prevAutoWebDavEnabled != _autoWebDavEnabled ||
+        prevAutoLocalFolderEnabled != _autoLocalFolderEnabled ||
+        prevAutoHttpPullEnabled != _autoHttpPullEnabled ||
+        prevAutoLanReceiveEnabled != _autoLanReceiveEnabled;
 
     // 如果正在同步，只更新配置状态
     if (_isSyncing) {
@@ -247,8 +267,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (mounted) setState(() {});
 
-    // 模式变化或强制重新加载时触发
-    if (forceReload || modeChanged || _topicIndex == null) {
+    if (forceReload || settingsChanged || _topicIndex == null) {
       await _autoLoadDataFile();
     }
   }
@@ -256,146 +275,238 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 自动加载数据文件
   Future<void> _autoLoadDataFile() async {
     await _loadFromLocal(showLoadingIfEmpty: true);
-
-    if (_loadMode == DataLoadMode.webdav) {
-      _syncFromWebDav();
-    } else if (_loadMode == DataLoadMode.localFolder) {
-      _syncFromLocalFolder();
+    if (_hasAnySyncSourceSelected) {
+      _syncFromEnabledSources();
     }
   }
 
-  /// 从 WebDAV 同步数据
-  Future<void> _syncFromWebDav() async {
+  List<String> get _selectedSourceLabels {
+    final enabled = <String>[];
+    if (_autoLocalFolderEnabled) enabled.add('文件夹');
+    if (_autoWebDavEnabled) enabled.add('WebDAV');
+    if (_autoHttpPullEnabled) enabled.add('HTTP');
+    if (_autoLanReceiveEnabled) enabled.add('局域网接收');
+    return enabled;
+  }
+
+  bool get _hasAnySyncSourceSelected => _selectedSourceLabels.isNotEmpty;
+
+  String get _syncModeLabel {
+    final enabled = _selectedSourceLabels;
+    if (enabled.isEmpty) return '未选择来源';
+    return enabled.join(' + ');
+  }
+
+  void _onSyncCandidate(SyncCandidate candidate) {
+    if (candidate.sourceType != SyncSourceType.localFolder) return;
+    unawaited(_syncLatestFromTypes({SyncSourceType.localFolder}));
+  }
+
+  Future<void> _syncLatestFromTypes(
+    Set<SyncSourceType> enabledTypes, {
+    bool force = false,
+  }) async {
     if (_isSyncing) return;
 
-    final config = await WebDavService.loadConfig();
-    if (!config.isValid) {
-      if (mounted) {
-        setState(() {
-          _hasValidWebDavConfig = false;
-          _isLoading = false;
-        });
-      }
-      return;
-    }
-
-    if (mounted) {
-      setState(() {
-        _hasValidWebDavConfig = true;
-      });
-    }
-
-    _downloadCancelToken = CancelToken();
-
-    setState(() {
-      _isSyncing = true;
-      _syncProgress = null;
-      _syncMessage = '检查更新...';
-      _statusError = null;  // 清除旧错误
-    });
+    _isSyncing = true;
+    _statusError = null;
+    _syncProgress = null;
+    _syncMessage = null;
+    _syncNotifier.startChecking();
 
     try {
-      // 1. 检查更新
-      final (needUpdate, remoteFile, checkMessage) = await WebDavService.checkForUpdate(config);
+      final discovery =
+          await SyncCoordinator.instance.discoverLatestCandidatesForTypes(enabledTypes);
       if (!mounted) return;
-
-      if (!needUpdate) {
-        setState(() {
-          _isSyncing = false;
-          _syncMessage = null;
-          _hasUpdate = false;
-        });
-        debugPrint('ℹ️ WebDAV: $checkMessage');
-        return;
-      }
-
-      setState(() => _hasUpdate = true);
-
-      // 2. 根据网络状态决定是否自动下载
-      final connectivityResult = await Connectivity().checkConnectivity();
-      bool shouldDownload = false;
-
-      if (connectivityResult.contains(ConnectivityResult.wifi) ||
-          connectivityResult.contains(ConnectivityResult.ethernet)) {
-        shouldDownload = true;
-      } else if (connectivityResult.contains(ConnectivityResult.mobile)) {
-        setState(() => _syncMessage = '等待确认...');
-        shouldDownload = await _showUpdateDialog(remoteFile!);
-      } else {
-        shouldDownload = await _showUpdateDialog(remoteFile!);
-      }
-
-      if (!shouldDownload) {
-        if (mounted) {
+      final candidate = SyncCoordinator.instance.chooseLatest(discovery.candidates);
+      if (candidate == null) {
+        if (discovery.warnings.isNotEmpty) {
+          final msg = discovery.warnings.join('\n');
+          _syncNotifier.setError(msg);
           setState(() {
-            _isSyncing = false;
-            _syncMessage = null;
+            _statusError = msg;
           });
         }
         return;
       }
 
-      // 3. 开始下载
-      setState(() => _syncMessage = '下载中...');
+      final decision = force
+          ? SyncDecision(selected: candidate, shouldSync: true)
+          : await SyncCoordinator.instance.decideWhetherToSync(candidate);
 
-      final localPath = await WebDavService.downloadBackup(
-        config,
-        remoteFile!,
-        cancelToken: _downloadCancelToken,
-        onProgress: (received, total) {
-          if (total > 0 && mounted) {
-            setState(() {
-              _syncProgress = received / total;
-              _syncMessage = '下载中 ${(received / 1024 / 1024).toStringAsFixed(1)}MB';
-            });
-          }
-        },
-      );
-
-      if (!mounted) return;
-      if (localPath == null) throw Exception('下载失败');
-
-      // 4. 解析文件
-      setState(() {
-        _syncProgress = null;
-        _syncMessage = '解析中...';
-      });
-
-      await DataPersistenceManager.clearCache();
-      // 如果已有数据，静默加载；否则显示加载动画
-      final loadSuccess = await _loadFile(
-        localPath,
-        saveCache: true,
-        silent: _topicIndex != null,
-      );
-
-      if (loadSuccess && mounted) {
-        setState(() {
-          _hasUpdate = false;
-        });
+      if (!decision.shouldSync) {
+        if (mounted) setState(() => _hasUpdate = false);
+        return;
       }
 
-    } on DioException catch (e) {
-      if (e.type != DioExceptionType.cancel && mounted) {
-        setState(() {
-          _statusError = 'WebDAV 同步失败\n\n${e.message ?? e.toString()}';
-        });
-      }
+      await _performCandidateSync(candidate, force: force);
     } catch (e) {
       if (mounted) {
+        _syncNotifier.setError('同步失败\n\n$e');
         setState(() {
-          _statusError = 'WebDAV 同步失败\n\n$e';
+          _statusError = '同步失败\n\n$e';
         });
       }
     } finally {
-      _downloadCancelToken = null;
+      _isSyncing = false;
+      if (_statusError == null) {
+        _syncNotifier.complete();
+      }
+    }
+  }
+
+  Future<void> _syncFromEnabledSources({bool force = false}) async {
+    if (_isSyncing) return;
+    if (!_hasAnySyncSourceSelected) return;
+
+    _isSyncing = true;
+    _statusError = null;
+    _syncProgress = null;
+    _syncMessage = null;
+    _syncNotifier.startChecking();
+
+    try {
+      final discovery = await SyncCoordinator.instance.discoverLatestCandidates();
+      if (!mounted) return;
+      final candidate = SyncCoordinator.instance.chooseLatest(discovery.candidates);
+      if (candidate == null) {
+        if (discovery.warnings.isNotEmpty) {
+          final msg = discovery.warnings.join('\n');
+          _syncNotifier.setError(msg);
+          setState(() {
+            _statusError = msg;
+          });
+        } else {
+          _syncNotifier.complete();
+        }
+        _isSyncing = false;
+        return;
+      }
+
+      final decision = force
+          ? SyncDecision(selected: candidate, shouldSync: true)
+          : await SyncCoordinator.instance.decideWhetherToSync(candidate);
+
+      if (!decision.shouldSync) {
+        if (mounted) setState(() => _hasUpdate = false);
+        return;
+      }
+
+      await _performCandidateSync(candidate, force: force);
+    } catch (e) {
       if (mounted) {
+        _syncNotifier.setError('同步失败\n\n$e');
         setState(() {
-          _isSyncing = false;
-          _syncProgress = null;
-          _syncMessage = null;
+          _statusError = '同步失败\n\n$e';
         });
       }
+    } finally {
+      _isSyncing = false;
+      if (_statusError == null) {
+        _syncNotifier.complete();
+      }
+    }
+  }
+
+  Future<void> _performCandidateSync(
+    SyncCandidate candidate, {
+    required bool force,
+  }) async {
+    if (candidate.sourceType == SyncSourceType.localFolder) {
+      final autoLoad = await LocalFolderSyncService.getAutoLoad();
+      if (!autoLoad && !force) {
+        if (mounted) {
+          setState(() {
+            _pendingLocalBackup = LocalBackupInfo(
+              name: candidate.name,
+              path: candidate.remoteId,
+              size: candidate.size,
+              modifiedTime: candidate.modifiedAt,
+            );
+            _hasUpdate = true;
+          });
+        }
+        return;
+      }
+    }
+
+    wd.File? remoteFileForDialog;
+    if (candidate.sourceType == SyncSourceType.webdav) {
+      final config = await WebDavService.loadConfig();
+      final list = await WebDavService.listBackupFiles(config);
+      for (final item in list) {
+        if (item.name == candidate.name) {
+          remoteFileForDialog = item.webdavFile;
+          break;
+        }
+      }
+
+      final connectivityResult = await Connectivity().checkConnectivity();
+      var shouldDownload = false;
+      if (force) {
+        shouldDownload = true;
+      } else if (connectivityResult.contains(ConnectivityResult.wifi) ||
+          connectivityResult.contains(ConnectivityResult.ethernet)) {
+        shouldDownload = true;
+      } else if (connectivityResult.contains(ConnectivityResult.mobile)) {
+        if (remoteFileForDialog != null) {
+          _syncNotifier.updateDownloadProgress(0, '等待确认...');
+          shouldDownload = await _showUpdateDialog(remoteFileForDialog);
+        }
+      } else {
+        if (remoteFileForDialog != null) {
+          shouldDownload = await _showUpdateDialog(remoteFileForDialog);
+        }
+      }
+
+      if (!shouldDownload) {
+        if (mounted) setState(() => _hasUpdate = true);
+        return;
+      }
+    }
+
+    if (candidate.sourceType == SyncSourceType.webdav) {
+      _syncNotifier.updateDownloadProgress(0, '下载中...');
+    } else {
+      _syncNotifier.updateImportProgress('加载备份...');
+    }
+
+    final localPath = await SyncCoordinator.instance.fetchToAppDataPath(
+      candidate,
+      onWebDavProgress: (received, total) {
+        if (total > 0) {
+          final progress = received / total;
+          final msg = '下载中 ${(received / 1024 / 1024).toStringAsFixed(1)}MB';
+          _syncNotifier.updateDownloadProgress(progress, msg);
+        }
+      },
+    );
+
+    if (!mounted) return;
+    if (localPath == null) throw Exception('获取失败');
+
+    _syncNotifier.startParsing();
+
+    await DataPersistenceManager.clearCache();
+    final loadSuccess = await _loadFile(
+      localPath,
+      saveCache: true,
+      silent: _topicIndex != null,
+    );
+
+    if (loadSuccess) {
+      await SyncPreferences.setLastImported(
+        fingerprint: candidate.fingerprint,
+        modifiedAt: candidate.modifiedAt,
+        sourceType: candidate.sourceType,
+      );
+    }
+
+    if (mounted) {
+      setState(() {
+        _hasUpdate = false;
+        _pendingLocalBackup = null;
+      });
     }
   }
 
@@ -435,97 +546,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ) ?? false;
   }
 
-  /// 从本地文件夹同步数据
-  Future<void> _syncFromLocalFolder() async {
-    if (_isSyncing) return;
-
-    final config = await LocalFolderSyncService.loadConfig();
-    if (!config.isValid) {
-      if (mounted) {
-        setState(() {
-          _hasValidLocalFolderConfig = false;
-          _isLoading = false;
-        });
-      }
-      return;
-    }
-
-    if (mounted) {
-      setState(() {
-        _hasValidLocalFolderConfig = true;
-      });
-    }
-
-    setState(() {
-      _isSyncing = true;
-      _syncProgress = null;
-      _syncMessage = '检查本地备份...';
-      _statusError = null;
-    });
-
-    try {
-      final (needUpdate, latestFile, checkMessage) =
-          await LocalFolderSyncService.checkForUpdate(config);
-
-      if (!mounted) return;
-
-      if (latestFile != null) {
-        _currentVersionDisplay = latestFile.displayName;
-      }
-
-      if (!needUpdate) {
-        setState(() {
-          _isSyncing = false;
-          _syncMessage = null;
-          _hasUpdate = false;
-        });
-        debugPrint('ℹ️ 本地文件夹: $checkMessage');
-        return;
-      }
-
-      // 有更新，自动加载
-      await _loadLocalBackup(latestFile!);
-
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _statusError = '本地文件夹同步失败\n\n$e';
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSyncing = false;
-          _syncProgress = null;
-          _syncMessage = null;
-        });
-      }
-    }
-  }
-
-  /// 本地文件变化回调
-  void _onLocalFileChanged(LocalBackupInfo backup) async {
-    debugPrint('📁 检测到新备份: ${backup.name}');
-    if (_isSyncing) return;
-
-    // 检查是否开启自动加载
-    final autoLoad = await LocalFolderSyncService.getAutoLoad();
-
-    if (autoLoad) {
-      // 自动加载模式：直接加载新版本
-      debugPrint('🔄 自动加载新版本...');
-      await _loadLocalBackup(backup);
-    } else {
-      // 手动模式：只提示有新版本
-      if (mounted) {
-        setState(() {
-          _pendingLocalBackup = backup;
-          _hasUpdate = true;
-        });
-      }
-    }
-  }
-
   /// 加载待更新的本地备份
   Future<void> _loadPendingLocalBackup() async {
     if (_pendingLocalBackup == null) return;
@@ -542,11 +562,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const maxRetries = 3;
     const retryDelay = Duration(seconds: 2);
 
-    setState(() {
-      _isSyncing = true;
-      _syncMessage = retryCount > 0 ? '等待文件写入完成...' : '复制文件...';
-      _syncProgress = null;
-    });
+    _isSyncing = true;
+    // 【性能优化】使用 notifier 更新状态
+    _syncNotifier.updateImportProgress(
+      retryCount > 0 ? '等待文件写入完成...' : '复制文件...',
+    );
 
     try {
       // 1. 复制文件到 App 目录（含 ZIP 完整性检查）
@@ -556,10 +576,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // ZIP 文件可能还在写入中，尝试重试
         if (retryCount < maxRetries) {
           debugPrint('⏳ ZIP 文件未就绪，${retryDelay.inSeconds}秒后重试 (${retryCount + 1}/$maxRetries)');
-          setState(() {
-            _isSyncing = false;
-            _syncMessage = null;
-          });
+          _isSyncing = false;
+          _syncNotifier.complete();
           await Future.delayed(retryDelay);
           return _loadLocalBackup(backup, retryCount: retryCount + 1);
         }
@@ -567,7 +585,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       if (!mounted) return;
-      setState(() => _syncMessage = '解压中...');
+      _syncNotifier.startParsing();
 
       // 2. 【后台】在 Isolate 中解压和解析 JSON（不阻塞 UI）
       final extractor = await CherryExtractor.loadInBackground(
@@ -576,7 +594,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
 
       if (!mounted) return;
-      setState(() => _syncMessage = '处理数据...');
+      _syncNotifier.updateImportProgress('处理数据...');
 
       // 3. 处理数据（主线程，但相对较快）
       await _processLoadedExtractor(extractor, backup.displayName);
@@ -584,6 +602,19 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // 4. 保存缓存
       await DataPersistenceManager.clearCache();
       await _saveToCache(extractor, localPath);
+
+      await SyncPreferences.setLastImported(
+        fingerprint: SyncCandidate(
+          sourceType: SyncSourceType.localFolder,
+          name: backup.name,
+          remoteId: backup.path,
+          size: backup.size,
+          modifiedAt: backup.modifiedTime,
+          displayName: backup.displayName,
+        ).fingerprint,
+        modifiedAt: backup.modifiedTime,
+        sourceType: SyncSourceType.localFolder,
+      );
 
       if (mounted) {
         setState(() {
@@ -593,32 +624,38 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _statusError = '加载备份失败\n\n$e';
-        });
+        _syncNotifier.setError('加载备份失败\n\n$e');
+        _statusError = '加载备份失败\n\n$e';
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isSyncing = false;
-          _syncMessage = null;
-          _syncProgress = null;
-        });
+      _isSyncing = false;
+      if (_statusError == null) {
+        _syncNotifier.complete();
       }
     }
   }
 
   /// 处理已加载的 extractor（从后台加载结果更新 UI）
   Future<void> _processLoadedExtractor(CherryExtractor extractor, String versionDisplay) async {
-    // 提取话题索引
+    // 提取 Assistant 信息（轻量操作，保留在主线程）
+    final assistants = extractor.getAssistants();
+    final assistantMap = <String, Map<String, dynamic>>{};
+    for (final a in assistants) {
+      if (a is Map<String, dynamic>) {
+        final id = a['id'] as String?;
+        if (id != null) {
+          assistantMap[id] = a;
+        }
+      }
+    }
+
+    // 为树形视图保留 topicIndex（兼容）
     final grouped = extractor.getTopicsByAssistant();
     final topicIndex = <String, List<Map<String, dynamic>>>{};
-
     for (final entry in grouped.entries) {
       final assistantId = entry.key;
       final assistantData = entry.value;
       final topics = assistantData['topics'] as List<dynamic>;
-
       topicIndex[assistantId] = topics.map((t) {
         final topic = t as Map<String, dynamic>;
         final messages = topic['messages'] as List? ?? [];
@@ -640,18 +677,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }).toList();
     }
 
-    // 提取 Assistant 信息
-    final assistants = extractor.getAssistants();
-    final assistantMap = <String, Map<String, dynamic>>{};
-    for (final a in assistants) {
-      if (a is Map<String, dynamic>) {
-        final id = a['id'] as String?;
-        if (id != null) {
-          assistantMap[id] = a;
-        }
-      }
-    }
-
     // 【被动导入】自动从加载的数据中导入 AI Providers
     try {
       if (extractor.rawData != null) {
@@ -665,7 +690,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('⚠️ AI Provider 自动导入失败: $e');
     }
 
-    // 更新 UI
+    // 更新基础 UI 状态
     if (mounted) {
       setState(() {
         _extractor = extractor;
@@ -674,6 +699,76 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _currentVersionDisplay = versionDisplay;
         _isLoading = false;
       });
+    }
+
+    // 【性能优化】触发 Isolate 计算时间线
+    if (extractor.rawData != null) {
+      _computeTimelineAsync(extractor.rawData!, assistantMap);
+    }
+  }
+
+  /// 【性能优化】在 Isolate 中计算时间线
+  Future<void> _computeTimelineAsync(
+    Map<String, dynamic> rawData,
+    Map<String, Map<String, dynamic>> assistantMap,
+  ) async {
+    _timelineVersion++;
+    final currentVersion = _timelineVersion;
+    _isComputingTimeline = true;
+
+    // 延迟显示骨架屏，避免闪烁
+    _skeletonTimer?.cancel();
+    _skeletonTimer = Timer(_skeletonDelay, () {
+      if (_isComputingTimeline && mounted) {
+        _skeletonShownAt = DateTime.now();
+        setState(() {}); // 触发显示骨架屏
+      }
+    });
+
+    try {
+      final result = await TimelineComputeService.computeTimeline(
+        TimelineComputeParams(
+          version: currentVersion,
+          rawData: rawData,
+          assistantMap: assistantMap,
+          now: DateTime.now(),
+        ),
+      );
+
+      // 版本检查，防止过期结果覆盖新数据
+      if (result.version != _timelineVersion) {
+        debugPrint('⚠️ 时间线计算结果已过期，丢弃');
+        return;
+      }
+
+      _skeletonTimer?.cancel();
+
+      // 如果骨架屏已显示，确保最少显示一段时间
+      if (_skeletonShownAt != null) {
+        final elapsed = DateTime.now().difference(_skeletonShownAt!);
+        if (elapsed < _skeletonMinDuration) {
+          await Future.delayed(_skeletonMinDuration - elapsed);
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _computedTimeline = result;
+          _isComputingTimeline = false;
+          _skeletonShownAt = null;
+        });
+      }
+
+      debugPrint('✅ 时间线计算完成: ${result.totalCount} 个话题');
+    } catch (e) {
+      debugPrint('❌ 时间线计算失败: $e');
+      _skeletonTimer?.cancel();
+      if (mounted) {
+        setState(() {
+          _isComputingTimeline = false;
+          _skeletonShownAt = null;
+        });
+      }
     }
   }
 
@@ -697,9 +792,31 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// 取消正在进行的下载
-  void _cancelDownload() {
-    _downloadCancelToken?.cancel('用户取消');
+  // ============ 【增量更新】时间线缓存增量操作 ============
+
+  /// 【增量更新】重新分组（当时间跨越边界时调用，如跨越午夜）
+  void _regroupTimeline() {
+    if (_computedTimeline == null) return;
+    _computedTimeline!.regroup();
+    if (mounted) setState(() {});
+    debugPrint('✅ 时间线重新分组完成');
+  }
+
+  /// 【增量更新】刷新时间线分组（可在应用恢复前台时调用）
+  void _refreshTimelineIfNeeded() {
+    if (_computedTimeline == null) return;
+    
+    final now = DateTime.now();
+    final computedAt = _computedTimeline!.computedAt;
+    
+    // 如果跨越了日期边界，重新分组
+    final computedDate = DateTime(computedAt.year, computedAt.month, computedAt.day);
+    final nowDate = DateTime(now.year, now.month, now.day);
+    
+    if (nowDate != computedDate) {
+      debugPrint('📅 时间线跨越日期边界，重新分组');
+      _regroupTimeline();
+    }
   }
 
   /// 从本地加载数据
@@ -715,7 +832,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final startTime = DateTime.now();
 
       // 尝试恢复版本显示（从上次同步时间）
-      if (_loadMode == DataLoadMode.localFolder && _currentVersionDisplay == null) {
+      if (_autoLocalFolderEnabled && _currentVersionDisplay == null) {
         final lastSyncTime = await LocalFolderSyncService.getLastSyncTime();
         if (lastSyncTime != null) {
           // 格式化为：2025-12-17 14:30:25
@@ -889,6 +1006,21 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final success = await _loadFile(appFilePath, saveCache: true);
 
+      if (success) {
+        final stat = await File(filePath).stat();
+        await SyncPreferences.setLastImported(
+          fingerprint: SyncCandidate(
+            sourceType: SyncSourceType.manualImport,
+            name: filePath.split(Platform.pathSeparator).last,
+            remoteId: filePath,
+            size: stat.size,
+            modifiedAt: stat.modified,
+          ).fingerprint,
+          modifiedAt: stat.modified,
+          sourceType: SyncSourceType.manualImport,
+        );
+      }
+
       if (success && mounted) {
         setState(() {
           _hasUpdate = false;
@@ -1022,330 +1154,72 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// 刷新数据（强制从 WebDAV 同步）
+  /// 刷新数据（强制同步一次）
   Future<void> _refreshData() async {
-    if (_loadMode == DataLoadMode.webdav) {
-      // 清除时间戳，强制重新下载
-      await WebDavService.clearLastModified();
+    if (_hasAnySyncSourceSelected) {
+      await _syncFromEnabledSources(force: true);
+      return;
     }
-    await _autoLoadDataFile();
-  }
-
-  /// 显示备份选择对话框
-  Future<void> _showBackupSelector() async {
-    if (!_hasValidWebDavConfig) return;
-
-    // 显示加载中对话框
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('正在获取备份列表...'),
-          ],
-        ),
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('未选择同步来源：请在设置里选择来源，或手动导入 ZIP'),
+        duration: Duration(seconds: 2),
       ),
     );
-
-    try {
-      final config = await WebDavService.loadConfig();
-      final backups = await WebDavService.listBackupFiles(config);
-
-      if (!mounted) return;
-      Navigator.pop(context); // 关闭加载对话框
-
-      if (backups.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('未找到备份文件'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-        return;
-      }
-
-      // 显示备份选择对话框
-      final selected = await showDialog<BackupFileInfo>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('选择备份版本'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: backups.length,
-              itemBuilder: (context, index) {
-                final backup = backups[index];
-                final isFirst = index == 0;
-                return ListTile(
-                  leading: Icon(
-                    isFirst ? Icons.star : Icons.archive,
-                    color: isFirst ? Colors.orange : Colors.grey,
-                  ),
-                  title: Text(backup.displayName),
-                  subtitle: Text(backup.formattedSize),
-                  trailing: isFirst
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            '最新',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.orange,
-                            ),
-                          ),
-                        )
-                      : null,
-                  onTap: () => Navigator.pop(context, backup),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-          ],
-        ),
-      );
-
-      if (selected != null) {
-        await _downloadAndLoadBackup(selected);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // 确保关闭加载对话框
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('获取备份列表失败: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
   }
 
-  /// 显示本地文件夹备份选择对话框
-  Future<void> _showLocalBackupSelector() async {
-    if (!_hasValidLocalFolderConfig) return;
-
-    // 显示加载中对话框
-    showDialog(
+  Future<void> _showSyncActionsSheet() async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('正在获取备份列表...'),
-          ],
-        ),
-      ),
-    );
-
-    try {
-      final config = await LocalFolderSyncService.loadConfig();
-      final backups = await LocalFolderSyncService.listBackupFiles(config);
-
-      if (!mounted) return;
-      Navigator.pop(context); // 关闭加载对话框
-
-      if (backups.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('未找到备份文件'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-        return;
-      }
-
-      // 显示备份选择对话框
-      final selected = await showDialog<LocalBackupInfo>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Row(
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.folder_open, color: Colors.blue[600]),
-              const SizedBox(width: 8),
-              const Text('选择备份版本'),
+              ListTile(
+                leading: const Icon(Icons.sync),
+                title: const Text('同步最新'),
+                subtitle: Text(
+                  _hasAnySyncSourceSelected ? _syncModeLabel : '未选择来源：去设置选择同步来源',
+                ),
+                onTap: () async {
+                  Navigator.pop(context);
+                  if (_hasAnySyncSourceSelected) {
+                    await _syncFromEnabledSources(force: true);
+                    return;
+                  }
+                  await Navigator.push(
+                    this.context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                  if (mounted) {
+                    _initAndLoad(forceReload: true);
+                  }
+                },
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.upload_file_outlined),
+                title: const Text('选择 ZIP/JSON 导入'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickAndLoadFile();
+                },
+              ),
+              const SizedBox(height: 12),
             ],
           ),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 400,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: backups.length,
-              itemBuilder: (context, index) {
-                final backup = backups[index];
-                final isFirst = index == 0;
-                final isCurrent = backup.displayName == _currentVersionDisplay;
-                return ListTile(
-                  leading: Icon(
-                    isFirst ? Icons.star : Icons.archive,
-                    color: isFirst ? Colors.orange : Colors.grey,
-                  ),
-                  title: Text(
-                    backup.displayName,
-                    style: TextStyle(
-                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                  subtitle: Text(backup.formattedSize),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (isCurrent)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.green.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            '当前',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.green,
-                            ),
-                          ),
-                        ),
-                      if (isFirst && !isCurrent)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            '最新',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.orange,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  onTap: () => Navigator.pop(context, backup),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-          ],
-        ),
-      );
-
-      if (selected != null) {
-        // 清除时间戳，强制加载选中的版本
-        await LocalFolderSyncService.clearLastModified();
-        await _loadLocalBackup(selected);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // 确保关闭加载对话框
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('获取备份列表失败: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  /// 下载并加载指定的备份文件
-  Future<void> _downloadAndLoadBackup(BackupFileInfo backup) async {
-    setState(() {
-      _isSyncing = true;
-      _syncProgress = 0;
-      _syncMessage = '下载: ${backup.displayName}';
-      _statusError = null;
-    });
-
-    try {
-      final config = await WebDavService.loadConfig();
-      final localPath = await WebDavService.downloadBackup(
-        config,
-        backup.webdavFile,
-        onProgress: (received, total) {
-          if (mounted && total > 0) {
-            setState(() {
-              _syncProgress = received / total;
-            });
-          }
-        },
-        cancelToken: _downloadCancelToken,
-      );
-
-      if (localPath == null) {
-        throw Exception('下载失败');
-      }
-
-      setState(() {
-        _syncProgress = null;
-        _syncMessage = '解析中...';
-      });
-
-      await DataPersistenceManager.clearCache();
-      // 如果已有数据，静默加载
-      final loadSuccess = await _loadFile(
-        localPath,
-        saveCache: true,
-        silent: _topicIndex != null,
-      );
-
-      if (loadSuccess && mounted) {
-        setState(() {
-          _hasUpdate = false;
-          _statusError = null;
-        });
-      }
-    } catch (e) {
-      debugPrint('❌ 下载备份失败: $e');
-      if (mounted) {
-        setState(() {
-          _statusError = '下载备份失败\n\n$e';
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSyncing = false;
-          _syncProgress = null;
-          _syncMessage = null;
-        });
-      }
-    }
+        );
+      },
+    );
   }
 
   /// 处理主按钮点击 (Floating Dock Center Action)
   void handleMainAction() {
-    if (_loadMode == DataLoadMode.manual && _topicIndex == null) {
+    if (_topicIndex == null) {
       _pickAndLoadFile();
     } else if (_topicIndex != null) {
        Navigator.push(
@@ -1425,6 +1299,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       scrolledUnderElevation: 0,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       actions: [
+        IconButton(
+          icon: const Icon(Icons.sync),
+          onPressed: _isLoading ? null : _showSyncActionsSheet,
+          tooltip: '同步',
+        ),
 
         // 搜索按钮
         IconButton(
@@ -1462,23 +1341,33 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   
   /// 构建状态徽章 (Mini version for AppBar Action)
   Widget _buildStatusBadge() {
-    final state = _computeStatusBarState();
-    
-    // Map StatusBarState to StatusBadgeState
-    final badgeState = switch (state.phase) {
-      StatusBarPhase.idle => StatusBadgeState.idle,
-      StatusBarPhase.syncing => StatusBadgeState.syncing,
-      StatusBarPhase.hasUpdate => StatusBadgeState.hasUpdate,
-      StatusBarPhase.error => StatusBadgeState.error,
-    };
-
-    String? message; // Actions area usually too small for text, maybe just icon or short text
-    // For the unified consistent look, we use the StatusBadge widget but maybe simpler
-    
-    return StatusBadge(
-      state: badgeState,
-      message: null, // Hide message in AppBar to save space
-      onTap: () => _onStatusBarTap(state),
+    // 【性能优化】同步进行中时使用独立的 SyncStatusWidget，不触发全局重建
+    return ValueListenableBuilder<SyncStatus>(
+      valueListenable: _syncNotifier,
+      builder: (context, syncStatus, _) {
+        // 如果正在同步，显示同步状态
+        if (syncStatus.isInProgress) {
+          return SyncStatusWidget(
+            notifier: _syncNotifier,
+            onTap: () => _onStatusBarTap(_computeStatusBarState()),
+          );
+        }
+        
+        // 否则使用原有逻辑
+        final state = _computeStatusBarState();
+        final badgeState = switch (state.phase) {
+          StatusBarPhase.idle => StatusBadgeState.idle,
+          StatusBarPhase.syncing => StatusBadgeState.syncing,
+          StatusBarPhase.hasUpdate => StatusBadgeState.hasUpdate,
+          StatusBarPhase.error => StatusBadgeState.error,
+        };
+        
+        return StatusBadge(
+          state: badgeState,
+          message: null,
+          onTap: () => _onStatusBarTap(state),
+        );
+      },
     );
   }
   
@@ -1508,7 +1397,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // 1. 错误状态
     if (_statusError != null) {
       return StatusBarState.error(
-        loadMode: _loadMode,
+        modeLabel: _syncModeLabel,
         errorDetail: _statusError!,
         versionDisplay: versionDisplay,
         topicCount: topicCount,
@@ -1518,7 +1407,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // 2. 同步中状态
     if (_isSyncing) {
       return StatusBarState.syncing(
-        loadMode: _loadMode,
+        modeLabel: _syncModeLabel,
         progress: _syncProgress,
         message: _syncMessage,
         versionDisplay: versionDisplay,
@@ -1529,7 +1418,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // 3. 有更新可用
     if (_hasUpdate || _pendingLocalBackup != null) {
       return StatusBarState.hasUpdate(
-        loadMode: _loadMode,
+        modeLabel: _syncModeLabel,
         versionDisplay: versionDisplay,
         topicCount: topicCount,
       );
@@ -1537,7 +1426,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // 4. 空闲状态
     return StatusBarState.idle(
-      loadMode: _loadMode,
+      modeLabel: _syncModeLabel,
       versionDisplay: versionDisplay,
       topicCount: topicCount,
       todayTopicCount: todayTopicCount,
@@ -1563,15 +1452,12 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (state.phase == StatusBarPhase.hasUpdate) {
-      if (_loadMode == DataLoadMode.webdav) {
-        _syncFromWebDav();
+      if (_hasAnySyncSourceSelected) {
+        _syncFromEnabledSources(force: true);
+      } else {
+        unawaited(_showSyncActionsSheet());
       }
       return;
-    }
-    
-    // 如果是 idle 状态，点击显示版本管理
-    if (state.phase == StatusBarPhase.idle) {
-         _showVersionManager();
     }
   }
 
@@ -1613,300 +1499,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
   }
-  
-  /// 显示版本管理对话框
-  Future<void> _showVersionManager() async {
-    final versions = await VersionService.instance.listVersions();
-    
-    // 获取本地备份文件，找出未导入的
-    List<LocalBackupInfo> unimportedBackups = [];
-    try {
-      final config = await LocalFolderSyncService.loadConfig();
-      if (config.isValid) {
-        final backups = await LocalFolderSyncService.listBackupFiles(config);
-        final importedNames = versions.map((v) => v.sourceFileName).toSet();
-        unimportedBackups = backups.where((b) => !importedNames.contains(b.name)).toList();
-      }
-    } catch (e) {
-      debugPrint('⚠️ 获取备份文件失败: $e');
-    }
-
-    if (!mounted) return;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.3,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (context, scrollController) {
-          return Column(
-            children: [
-              // 标题栏
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  border: Border(bottom: BorderSide(color: Colors.grey[200]!)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.history, size: 20),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        '版本历史',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-
-              // 列表内容
-              Expanded(
-                child: versions.isEmpty && unimportedBackups.isEmpty
-                    ? const Center(child: Text('暂无版本数据'))
-                    : ListView(
-                        controller: scrollController,
-                        children: [
-                          if (versions.isNotEmpty) ...[
-                            _buildSectionHeader('已导入版本 (${versions.length})'),
-                            ...versions.map((version) => _buildVersionItem(version)),
-                          ],
-                          
-                          if (unimportedBackups.isNotEmpty) ...[
-                            _buildSectionHeader('未导入备份 (${unimportedBackups.length})', 
-                              action: '点击导入',
-                            ),
-                            ...unimportedBackups.map((backup) => _buildBackupItem(backup)),
-                          ],
-                          
-                          const SizedBox(height: 20),
-                        ],
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title, {String? action}) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey[600],
-            ),
-          ),
-          if (action != null)
-             Text(
-              action,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.blue[600],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVersionItem(DataVersion version) {
-    final isActive = version.status == VersionStatus.active;
-    
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: isActive ? Colors.green[100] : Colors.grey[100],
-        child: Icon(
-          isActive ? Icons.check : Icons.archive_outlined,
-          color: isActive ? Colors.green : Colors.grey,
-          size: 20,
-        ),
-      ),
-      title: Row(
-        children: [
-          Expanded(child: Text(version.displayName, overflow: TextOverflow.ellipsis)),
-          if (isActive)
-            Container(
-              margin: const EdgeInsets.only(left: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.green[50],
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                '当前',
-                style: TextStyle(fontSize: 10, color: Colors.green[700]),
-              ),
-            ),
-          if (version.isLocked)
-            Container(
-              margin: const EdgeInsets.only(left: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.orange[50],
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                '锁定',
-                style: TextStyle(fontSize: 10, color: Colors.orange[700]),
-              ),
-            ),
-        ],
-      ),
-      subtitle: Text(
-        '${version.topicCount} 话题 · ${version.messageCount} 消息 · ${version.formattedSize}',
-        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-      ),
-      trailing: isActive
-          ? null
-          : TextButton(
-              onPressed: () async {
-                Navigator.pop(context); // 关闭弹窗
-                await _activateVersion(version);
-              },
-              child: const Text('切换'),
-            ),
-    );
-  }
-
-  Widget _buildBackupItem(LocalBackupInfo backup) {
-    return ListTile(
-        leading: CircleAvatar(
-          backgroundColor: Colors.blue[50],
-          child: Icon(Icons.file_upload_outlined, color: Colors.blue[400], size: 20),
-        ),
-        title: Text(backup.displayName, overflow: TextOverflow.ellipsis),
-        subtitle: Text(
-          '文件 · ${backup.formattedSize}',
-          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-        ),
-        trailing: TextButton(
-          onPressed: () {
-            Navigator.pop(context);
-            _importBackupAsVersion(backup);
-          },
-          child: const Text('导入'),
-        ),
-      );
-  }
-
-  // 导入备份为新版本
-  Future<void> _importBackupAsVersion(LocalBackupInfo backup) async {
-    try {
-      // 1. 先异步加载 Extractor (快速)
-      // 使用 loadInBackground 在 Isolate 中解析，避免卡顿
-      // 注意：这里我们使用 zipPath 初始化
-      // BackgroundImportService 需要一个已加载的 extractor
-      
-      // 显示加载中提示
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('正在准备导入: ${backup.displayName}...')),
-      );
-
-      // 启动后台解析
-      final extractor = await CherryExtractor.loadInBackground(zipPath: backup.path);
-      
-      // 2. 启动后台导入
-      BackgroundImportService.instance.importInBackground(
-        extractor: extractor,
-        sourceFileName: backup.name,
-        sourceModifiedAt: backup.modifiedTime,
-      ).ignore();
-      
-    } catch (e) {
-      debugPrint('❌ 准备导入失败: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(content: Text('无法导入: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
-
-  /// 激活指定版本
-  Future<void> _activateVersion(DataVersion version) async {
-    try {
-      final success = await VersionService.instance.activateVersion(
-        version.versionId,
-        force: true,
-      );
-
-      if (success && mounted) {
-        await _loadActiveVersion();
-        await _silentRefreshData(); // 静默刷新数据
-        setState(() {
-          _hasNewVersion = false; // 用户已手动切换，清除蓝点
-          _statusError = null;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _statusError = '切换版本失败\n\n$e';
-        });
-      }
-    }
-  }
-
-  /// 格式化缓存版本时间
-  String _formatSyncTime(DateTime? time) {
-    if (time == null) return '未知';
-    final now = DateTime.now();
-    final diff = now.difference(time);
-    
-    if (diff.inMinutes < 1) {
-      return '刚刚';
-    } else if (diff.inHours < 1) {
-      return '${diff.inMinutes} 分钟前';
-    } else if (diff.inDays < 1) {
-      return '${diff.inHours} 小时前';
-    } else if (diff.inDays < 7) {
-      return '${diff.inDays} 天前';
-    } else {
-      return DateFormat('MM-dd HH:mm').format(time);
-    }
-  }
-
-  /// 【新增】格式化检查时间为友好的相对时间
-  String _formatCheckTime(DateTime? checkTime) {
-    if (checkTime == null) return '未检查';
-
-    final now = DateTime.now();
-    final diff = now.difference(checkTime);
-
-    if (diff.inSeconds < 10) return '刚刚检查';
-    if (diff.inMinutes < 1) return '${diff.inSeconds}秒前检查';
-    if (diff.inHours < 1) return '${diff.inMinutes}分钟前检查';
-    if (diff.inDays < 1) return '${diff.inHours}小时前检查';
-    return DateFormat('MM-dd HH:mm').format(checkTime) + ' 检查';
-  }
-
-  /// 格式化版本时间（备份文件的修改时间）
-  String _formatVersionTime(DateTime? time) {
-    if (time == null) return '未知';
-    return DateFormat('MM-dd HH:mm').format(time);
-  }
 
   Widget _buildTopicListSliver() {
     if (_topicIndex == null || _topicIndex!.isEmpty) {
@@ -1932,7 +1524,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             color: Theme.of(context).cardColor,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
-              side: BorderSide(color: Theme.of(context).colorScheme.outline.withOpacity(0.1)),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.outline.withValues(alpha: 26),
+              ),
             ),
             child: ExpansionTile(
               shape: const Border(), // Remove borders when expanded
@@ -1949,33 +1543,24 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               subtitle: Text('${topics.length} 个话题'),
               children: [
-                 ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: topics.length,
-                    itemBuilder: (context, topicIndex) {
-                      final topic = topics[topicIndex];
-                      // Use the new simplified item or card here? 
-                      // For tree view, keep it simple as list item for now, or reuse logic
-                      // Let's keep it simple ListTile for tree view as nesting cards is weird
-                      
-                      final topicName = topic['name'] as String? ?? '未命名话题';
-                      final topicId = topic['id'] as String;
-                      final messageCount = topic['messageCount'] as int? ?? 0;
-                      final roundCount = topic['roundCount'] as int? ?? 0;
+                // 显示所有话题（使用 Column 替代 ListView.builder 避免 shrinkWrap 问题）
+                ...topics.map((topic) {
+                  final topicName = topic['name'] as String? ?? '未命名话题';
+                  final topicId = topic['id'] as String;
+                  final messageCount = topic['messageCount'] as int? ?? 0;
+                  final roundCount = topic['roundCount'] as int? ?? 0;
 
-                      return ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 4,
-                        ),
-                        title: Text(topicName),
-                        subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
-                        trailing: const Icon(Icons.chevron_right, size: 16),
-                        onTap: () => _openTopic(topicId, topicName),
-                      );
-                    },
-                  ),
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 4,
+                    ),
+                    title: Text(topicName),
+                    subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
+                    trailing: const Icon(Icons.chevron_right, size: 16),
+                    onTap: () => _openTopic(topicId, topicName),
+                  );
+                }),
               ],
             ),
           );
@@ -1985,8 +1570,124 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// 时间线视图（按更新时间倒序，分组显示）
+  /// 时间线视图（使用预计算数据，build 中零计算）
   Widget _buildTimelineListSliver() {
+    // 【性能优化】如果正在计算或显示骨架屏
+    if (_isComputingTimeline && _skeletonShownAt != null) {
+      return SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (context, index) => _buildSkeletonCard(),
+          childCount: 8,
+        ),
+      );
+    }
+
+    // 优先使用预计算的时间线
+    if (_computedTimeline != null && _computedTimeline!.groups.isNotEmpty) {
+      return _buildComputedTimelineSliver();
+    }
+
+    // 降级：使用旧逻辑（兼容）
+    return _buildLegacyTimelineSliver();
+  }
+
+  /// 【性能优化】使用预计算数据构建时间线
+  Widget _buildComputedTimelineSliver() {
+    final flatItems = _computedTimeline!.flatItems;
+    if (flatItems.isEmpty) {
+      return const SliverToBoxAdapter(child: Center(child: Text('没有找到话题')));
+    }
+
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (context, index) {
+          final item = flatItems[index];
+          
+          // 分组标题
+          if (item is TimelineGroup) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+              child: Text(
+                item.type.title,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            );
+          }
+          
+          // 话题卡片（使用预计算的数据）
+          if (item is TopicItem) {
+            return TopicCard(
+              title: item.name,
+              date: item.timeDisplay,
+              assistantName: item.assistantName,
+              roundCount: item.roundCount,
+              userPreview: item.userPreview,
+              aiPreview: item.aiPreview,
+              onTap: () => _openTopic(item.topicId, item.name),
+            );
+          }
+          
+          return const SizedBox.shrink();
+        },
+        childCount: flatItems.length,
+      ),
+    );
+  }
+
+  /// 骨架屏卡片
+  Widget _buildSkeletonCard() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Container(
+        height: 120,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 200,
+                height: 16,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: Colors.grey[200],
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: 150,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: Colors.grey[200],
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 降级：旧的时间线构建逻辑（兼容）
+  Widget _buildLegacyTimelineSliver() {
     if (_topicIndex == null || _topicIndex!.isEmpty) {
       return const SliverToBoxAdapter(child: Center(child: Text('没有找到话题')));
     }
@@ -2024,7 +1725,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       groupedTopics.putIfAbsent(group, () => []).add(topic);
     }
 
-    // 构建分组列表 - Use flat list approach
+    // 构建分组列表
     final groups = [TimeGroup.today, TimeGroup.yesterday, TimeGroup.thisWeek, TimeGroup.earlier];
     final flatItems = <Widget>[];
     
@@ -2039,7 +1740,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Text(
               _getGroupTitle(group),
               style: TextStyle(
-                fontSize: 18, // Bigger, cleaner header
+                fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: Theme.of(context).colorScheme.onSurface,
               ),
@@ -2243,19 +1944,25 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             width: 100,
             height: 100,
             decoration: BoxDecoration(
-              color: _loadMode == DataLoadMode.webdav
+              color: (_autoWebDavEnabled)
                   ? (_hasValidWebDavConfig ? Colors.blue[50] : Colors.orange[50])
-                  : Colors.grey[100],
+                  : (_autoLocalFolderEnabled)
+                      ? (_hasValidLocalFolderConfig ? Colors.blue[50] : Colors.orange[50])
+                      : Colors.grey[100],
               borderRadius: BorderRadius.circular(24),
             ),
             child: Icon(
-              _loadMode == DataLoadMode.webdav
+              (_autoWebDavEnabled)
                   ? (_hasValidWebDavConfig ? Icons.cloud_queue : Icons.cloud_off)
-                  : Icons.folder_open,
+                  : (_autoLocalFolderEnabled)
+                      ? (_hasValidLocalFolderConfig ? Icons.folder_copy_outlined : Icons.folder_off_outlined)
+                      : Icons.folder_open,
               size: 48,
-              color: _loadMode == DataLoadMode.webdav
+              color: (_autoWebDavEnabled)
                   ? (_hasValidWebDavConfig ? Colors.blue[400] : Colors.orange[400])
-                  : Colors.grey[500],
+                  : (_autoLocalFolderEnabled)
+                      ? (_hasValidLocalFolderConfig ? Colors.blue[400] : Colors.orange[400])
+                      : Colors.grey[500],
             ),
           ),
 
@@ -2263,8 +1970,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
           // 标题
           Text(
-            _loadMode == DataLoadMode.webdav
-                ? (_hasValidWebDavConfig ? '暂无数据' : '配置 WebDAV 同步')
+            _hasAnySyncSourceSelected
+                ? ((_autoWebDavEnabled && !_hasValidWebDavConfig) ||
+                        (_autoLocalFolderEnabled && !_hasValidLocalFolderConfig))
+                    ? '配置同步来源'
+                    : '暂无数据'
                 : '选择数据文件',
             style: const TextStyle(
               fontSize: 22,
@@ -2276,10 +1986,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
           // 描述
           Text(
-            _loadMode == DataLoadMode.webdav
-                ? (_hasValidWebDavConfig
-                    ? '点击下方按钮从云端同步你的对话记录'
-                    : '配置与 Cherry Studio 相同的 WebDAV 设置')
+            _hasAnySyncSourceSelected
+                ? ((_autoWebDavEnabled && !_hasValidWebDavConfig) ||
+                        (_autoLocalFolderEnabled && !_hasValidLocalFolderConfig))
+                    ? '先在设置页补全同步来源配置'
+                    : '点击下方按钮同步并导入最新备份'
                 : '导入 Cherry Studio 导出的 ZIP 或 JSON 文件',
             style: TextStyle(
               color: Colors.grey[600],
@@ -2292,30 +2003,31 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(height: 32),
 
           // 操作按钮
-          if (_loadMode == DataLoadMode.webdav) ...[
-            if (_hasValidWebDavConfig)
-              // 已配置，显示同步按钮
+          if (_hasAnySyncSourceSelected) ...[
+            if ((_autoWebDavEnabled && !_hasValidWebDavConfig) ||
+                (_autoLocalFolderEnabled && !_hasValidLocalFolderConfig))
               ElevatedButton.icon(
-                onPressed: _isLoading ? null : _refreshData,
-                icon: const Icon(Icons.cloud_sync),
-                label: const Text('立即同步'),
+                onPressed: _isLoading
+                    ? null
+                    : () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                        ).then((_) {
+                          if (mounted) _initAndLoad();
+                        });
+                      },
+                icon: const Icon(Icons.settings),
+                label: const Text('去配置'),
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
                 ),
               )
             else
-              // 未配置，显示配置按钮
               ElevatedButton.icon(
-                onPressed: _isLoading ? null : () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                  ).then((_) {
-                    if (mounted) _initAndLoad();
-                  });
-                },
-                icon: const Icon(Icons.settings),
-                label: const Text('去配置'),
+                onPressed: _isLoading ? null : _refreshData,
+                icon: const Icon(Icons.cloud_sync),
+                label: const Text('立即同步'),
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
                 ),
@@ -2335,7 +2047,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Icon(Icons.touch_app, color: Colors.blue[700], size: 20),
                   const SizedBox(width: 12),
                   Text(
-                    '点击右下角按钮选择文件',
+                    '点击右上角“同步”导入文件',
                     style: TextStyle(
                       color: Colors.blue[800],
                       fontSize: 14,
@@ -2383,7 +2095,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
           const SizedBox(height: 16),
 
-          if (_loadMode == DataLoadMode.webdav && !_hasValidWebDavConfig) ...[
+          if (_autoWebDavEnabled && !_hasValidWebDavConfig) ...[
             _buildGuideStep(
               number: '1',
               title: '在 Cherry Studio 中配置 WebDAV',
@@ -2398,10 +2110,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 12),
             _buildGuideStep(
               number: '3',
-              title: '自动同步',
-              description: '配置完成后，应用会自动从云端同步你的对话记录',
+              title: '导入数据',
+              description: '配置完成后，可在首页右上角“同步”手动导入；也可在设置里开启自动导入',
             ),
-          ] else if (_loadMode == DataLoadMode.manual) ...[
+          ] else if (!_hasAnySyncSourceSelected) ...[
             _buildGuideStep(
               number: '1',
               title: '导出 Cherry Studio 数据',
@@ -2411,7 +2123,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _buildGuideStep(
               number: '2',
               title: '导入到本应用',
-              description: '点击右下角按钮，选择导出的 ZIP 或 JSON 文件',
+              description: '首页右上角“同步” → 手动：选择文件导入',
             ),
           ] else ...[
             _buildGuideStep(
@@ -2442,9 +2154,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    _loadMode == DataLoadMode.webdav
-                        ? '想手动导入文件？去设置切换模式'
-                        : '想自动同步？去设置配置 WebDAV',
+                    '去设置选择并配置同步来源（WebDAV / 本地文件夹 / HTTP）',
                     style: TextStyle(
                       color: Colors.grey[600],
                       fontSize: 13,

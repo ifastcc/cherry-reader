@@ -148,6 +148,7 @@ class KnowledgeService {
 
   /// 创建高亮
   Future<KnowledgeEntry> createHighlight({
+    String? entryId,
     required String messageId,
     required String quotedText,
     required int start,
@@ -158,6 +159,7 @@ class KnowledgeService {
     String? topicName,
   }) async {
     return _entryService.createHighlight(
+      entryId: entryId,
       messageId: messageId,
       quotedText: quotedText,
       start: start,
@@ -171,6 +173,7 @@ class KnowledgeService {
 
   /// 创建标注
   Future<KnowledgeEntry> createAnnotation({
+    String? entryId,
     required String messageId,
     required String quotedText,
     required int start,
@@ -183,6 +186,7 @@ class KnowledgeService {
     List<String>? tags,
   }) async {
     return _entryService.createAnnotation(
+      entryId: entryId,
       messageId: messageId,
       quotedText: quotedText,
       start: start,
@@ -198,20 +202,30 @@ class KnowledgeService {
 
   /// 创建笔记
   Future<KnowledgeEntry> createNote({
+    String? entryId,
     required String content,
     String contentType = 'delta',
     String? plainText,
     List<String>? tags,
     String? messageId,
+    int? start,
+    int? end,
+    String? prefix,
+    String? suffix,
     String? topicId,
     String? topicName,
   }) async {
     return _entryService.createNote(
+      entryId: entryId,
       content: content,
       contentType: contentType,
       plainText: plainText,
       tags: tags,
       messageId: messageId,
+      start: start,
+      end: end,
+      prefix: prefix,
+      suffix: suffix,
       topicId: topicId,
       topicName: topicName,
     );

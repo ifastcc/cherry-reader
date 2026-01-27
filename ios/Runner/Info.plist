@@ -23,6 +23,12 @@
 	<string>Cherry Reader 需要访问下载文件夹以导入聊天记录</string>
 	<key>NSFileProviderPresenceUsageDescription</key>
 	<string>Cherry Reader 需要访问文件以导入聊天记录</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Cherry Reader 需要在局域网内接收 Cherry Studio 发送的备份文件</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_cherrystudio._tcp</string>
+	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>

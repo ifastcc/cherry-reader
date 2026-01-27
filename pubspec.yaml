@@ -60,6 +60,7 @@ dependencies:
   url_launcher: ^6.3.2
   connectivity_plus: ^6.0.0       # 网络状态检测
   flutter_inappwebview: ^6.1.5    # WebView 组件（话题详情页 WebView 版本）
+  bonsoir: ^5.1.5
 
 dev_dependencies:
   flutter_test:

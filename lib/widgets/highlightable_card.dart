@@ -587,6 +587,8 @@ class _HighlightableCardState extends State<HighlightableCard> {
       final colorHex = HighlightData.intColorToHex(_currentHighlightColor.value);
       final highlight = HighlightData(
         messageId: widget.messageId,
+        start: start,
+        end: end,
         text: text,  // 完整的引用文本
         color: colorHex,
         style: _currentHighlightType,

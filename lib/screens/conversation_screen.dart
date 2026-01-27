@@ -21,6 +21,7 @@ import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
 import '../widgets/tts_mini_player.dart';
 import '../widgets/dual_fab.dart';
+import '../providers/webview_navigation_controller.dart';
 import 'webview_conversation_screen.dart';
 
 /// 页内搜索匹配结果
@@ -59,6 +60,14 @@ class ConversationScreen extends StatefulWidget {
   /// 【精确定位】跳转到的高亮 ID（配合 scrollToMessageId 使用）
   final String? scrollToHighlightId;
 
+  final int? scrollToTextStart;
+
+  final int? scrollToTextEnd;
+
+  final String? scrollToQuotedText;
+
+  final int? scrollToQuotedTextOccurrence;
+
   /// 【搜索高亮】要高亮的搜索关键词
   final String? highlightKeyword;
 
@@ -70,6 +79,10 @@ class ConversationScreen extends StatefulWidget {
     this.scrollToRoundIndex,
     this.scrollToMessageId,
     this.scrollToHighlightId,
+    this.scrollToTextStart,
+    this.scrollToTextEnd,
+    this.scrollToQuotedText,
+    this.scrollToQuotedTextOccurrence,
     this.highlightKeyword,
   }) : super(key: key);
 
@@ -240,20 +253,28 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final useWebView = prefs.getBool('use_webview_conversation') ?? false;
     
     if (useWebView && mounted) {
-      // 延迟一帧后替换当前页面，避免在 initState 中直接 push
+      // 延迟一帧后显示 WebView，避免在 initState 中直接操作
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => WebViewConversationScreen(
-                topicId: widget.topicId,
-                topicName: widget.topicName,
-                scrollToGroupIndex: widget.scrollToRoundIndex,
-                scrollToMessageId: widget.scrollToMessageId,
-                scrollToHighlightId: widget.scrollToHighlightId,
-              ),
-            ),
+          // 【Stack 架构】使用 Controller 显示 WebView
+          final controller = Provider.of<WebViewNavigationController>(
+            context, 
+            listen: false,
           );
+          controller.showWebView(
+            topicId: widget.topicId,
+            topicName: widget.topicName,
+            scrollToGroupIndex: widget.scrollToRoundIndex,
+            scrollToMessageId: widget.scrollToMessageId,
+            scrollToHighlightId: widget.scrollToHighlightId,
+            scrollToTextStart: widget.scrollToTextStart,
+            scrollToTextEnd: widget.scrollToTextEnd,
+            scrollToQuotedText: widget.scrollToQuotedText,
+            scrollToQuotedTextOccurrence: widget.scrollToQuotedTextOccurrence,
+          );
+          
+          // 返回上一页（WebView 会覆盖在上面）
+          Navigator.of(context).pop();
         }
       });
     }
@@ -802,6 +823,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
 
     debugPrint('⏱️ [ConversationScreen] _loadData 总耗时: ${totalSw.elapsedMilliseconds}ms');
+
+    // 【修复】检查 widget 是否仍然挂载
+    if (!mounted) return;
 
     final renderSw = Stopwatch()..start();
     setState(() {
@@ -3960,4 +3984,3 @@ class _EnergyBarWidget extends StatelessWidget {
     );
   }
 }
-

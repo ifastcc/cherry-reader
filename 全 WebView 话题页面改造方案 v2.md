@@ -3024,7 +3024,7 @@ document.getElementById('highlight-editor').addEventListener('click', (e) => {
       FlutterBridge.onHighlightDeleted({ highlightId: currentEditingHighlightId });
       hideHighlightEditor();
     } else if (actionBtn.classList.contains('note')) {
-      FlutterBridge.openNoteEditor({ highlightId: currentEditingHighlightId });
+      FlutterBridge.openAnnotationEditor({ highlightId: currentEditingHighlightId });
     }
   }
 });

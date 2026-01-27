@@ -316,41 +316,55 @@ class WebDavService {
     CancelToken? cancelToken,
   }) async {
     try {
-      // 构建完整的下载 URL
+      final localPath = await DataPersistenceManager.getAppDataFilePath();
+      return await downloadBackupToPath(
+        config,
+        remoteFile,
+        targetPath: localPath,
+        onProgress: onProgress,
+        cancelToken: cancelToken,
+        saveRemoteModified: true,
+      );
+    } catch (e) {
+      debugPrint('❌ 下载失败: $e');
+      return null;
+    }
+  }
+
+  static Future<String?> downloadBackupToPath(
+    WebDavConfig config,
+    webdav.File remoteFile, {
+    required String targetPath,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+    bool saveRemoteModified = false,
+  }) async {
+    try {
       var baseUrl = config.url;
       if (!baseUrl.endsWith('/')) baseUrl += '/';
-      // 移除 path 开头的斜杠
       var path = config.path;
       if (path.startsWith('/')) path = path.substring(1);
       if (!path.endsWith('/')) path += '/';
-      
+
       final downloadUrl = '$baseUrl$path${remoteFile.name}';
       debugPrint('📥 开始下载: $downloadUrl');
 
-      // 获取 App 数据目录
-      final localPath = await DataPersistenceManager.getAppDataFilePath();
-      final localFile = File(localPath);
-
-      // 如果本地文件存在，先删除
+      final localFile = File(targetPath);
       if (await localFile.exists()) {
         await localFile.delete();
       }
 
-      // 使用 dio 下载（支持重定向）
       final dio = Dio();
       dio.options.followRedirects = true;
       dio.options.maxRedirects = 5;
-      
-      // 设置 Basic Auth
+
       final auth = base64Encode(utf8.encode('${config.username}:${config.password}'));
       dio.options.headers['Authorization'] = 'Basic $auth';
-      
-      // 禁用响应压缩，避免下载大文件时被截断
       dio.options.headers['Accept-Encoding'] = 'identity';
 
       await dio.download(
         downloadUrl,
-        localPath,
+        targetPath,
         cancelToken: cancelToken,
         onReceiveProgress: (received, total) {
           if (onProgress != null && total > 0) {
@@ -359,7 +373,6 @@ class WebDavService {
         },
       );
 
-      // 验证下载
       if (!await localFile.exists()) {
         debugPrint('❌ 下载失败：本地文件不存在');
         return null;
@@ -367,24 +380,23 @@ class WebDavService {
 
       final fileSize = await localFile.length();
       final expectedSize = remoteFile.size ?? 0;
-      debugPrint('✅ 下载完成: $localPath');
+      debugPrint('✅ 下载完成: $targetPath');
       debugPrint('   本地文件大小: ${fileSize ~/ 1024} KB');
       debugPrint('   远程文件大小: ${expectedSize ~/ 1024} KB');
-      
-      // 检查文件大小是否匹配（允许 1% 误差）
+
       if (expectedSize > 0 && fileSize < expectedSize * 0.99) {
         debugPrint('⚠️ 警告：下载文件大小不匹配，可能下载不完整');
-        debugPrint('   期望: ${expectedSize ~/ 1024} KB, 实际: ${fileSize ~/ 1024} KB');
       }
 
-      // 保存远程文件的修改时间
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(
-        _keyLastRemoteModified,
-        remoteFile.mTime?.millisecondsSinceEpoch ?? 0,
-      );
+      if (saveRemoteModified) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(
+          _keyLastRemoteModified,
+          remoteFile.mTime?.millisecondsSinceEpoch ?? 0,
+        );
+      }
 
-      return localPath;
+      return targetPath;
     } catch (e) {
       debugPrint('❌ 下载失败: $e');
       return null;

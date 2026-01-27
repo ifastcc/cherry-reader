@@ -24,7 +24,7 @@ class ConversationBridge {
   void Function(Map<String, dynamic>)? onSearchResult;
   void Function(Map<String, dynamic>)? onPlayTTS;
   void Function(Map<String, dynamic>)? onOpenDiscussion;
-  void Function(Map<String, dynamic>)? onOpenNoteEditor;
+  void Function(Map<String, dynamic>)? onOpenAnnotationEditor;
   
   // 轮次数据请求回调
   Future<List<Map<String, dynamic>>> Function(List<int>)? onRequestRounds;
@@ -143,12 +143,12 @@ class ConversationBridge {
       },
     );
 
-    // 打开笔记编辑器
+    // 打开标注编辑器
     controller.addJavaScriptHandler(
-      handlerName: 'openNoteEditor',
+      handlerName: 'openAnnotationEditor',
       callback: (args) {
-        if (args.isNotEmpty && onOpenNoteEditor != null) {
-          onOpenNoteEditor!(_parseArgs(args[0]));
+        if (args.isNotEmpty && onOpenAnnotationEditor != null) {
+          onOpenAnnotationEditor!(_parseArgs(args[0]));
         }
       },
     );
@@ -317,6 +317,10 @@ class ConversationDataConverter {
     int? scrollToRoundIndex,
     String? scrollToMessageId,
     String? scrollToHighlightId,
+    int? scrollToTextStart,
+    int? scrollToTextEnd,
+    String? scrollToQuotedText,
+    int? scrollToQuotedTextOccurrence,
     String? searchKeyword,
   }) {
     final rounds = <Map<String, dynamic>>[];
@@ -335,6 +339,10 @@ class ConversationDataConverter {
       'scrollToRoundIndex': scrollToRoundIndex,
       'scrollToMessageId': scrollToMessageId,
       'scrollToHighlightId': scrollToHighlightId,
+      'scrollToTextStart': scrollToTextStart,
+      'scrollToTextEnd': scrollToTextEnd,
+      'scrollToQuotedText': scrollToQuotedText,
+      'scrollToQuotedTextOccurrence': scrollToQuotedTextOccurrence,
       'searchKeyword': searchKeyword ?? '',
     };
   }
@@ -399,10 +407,11 @@ class ConversationDataConverter {
     return {
       'id': highlight['id'],
       'messageId': highlight['messageId'],
+      'start': highlight['start'] ?? 0,
+      'end': highlight['end'] ?? 0,
       'text': highlight['text'] ?? '',
       'color': colorStr,
       'style': highlight['style'] ?? highlight['styleType'] ?? 'background',
-      'ranges': highlight['ranges'] ?? [],
       'prefix': highlight['prefix'] ?? '',
       'suffix': highlight['suffix'] ?? '',
       'createdAt': highlight['createdAt'],

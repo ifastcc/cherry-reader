@@ -1,110 +1,283 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>对话详情</title>
-  <!-- Prism.js 主题样式 -->
-  <link rel="stylesheet" href="./vendor/prism-tomorrow.min.css">
-  <!-- 主样式 -->
-  <link rel="stylesheet" href="./conversation.css">
-  <!-- 高亮样式 -->
-  <link rel="stylesheet" href="./highlight.css">
-</head>
-<body class="theme-light">
-  <!-- Sticky Tab Bar (当内联 Tab 滚出时显示) -->
-  <header id="sticky-header" class="hidden">
-    <span class="round-label">Q1</span>
-    <div class="tab-list"></div>
-  </header>
-
-  <!-- 主内容区 -->
-  <main id="conversation-container">
-    <!-- 轮次卡片通过 JS 动态生成 -->
-  </main>
-
-  <!-- 能量条 (固定右侧) -->
-  <aside id="energy-bar">
-    <!-- 动态生成 -->
-  </aside>
-
-  <!-- 侧滑抽屉 -->
-  <aside id="edge-drawer" class="closed">
-    <div class="drawer-trigger">
-      <span class="trigger-icon">‹</span>
-    </div>
-    <div class="drawer-content">
-      <button class="nav-btn up" title="上一轮">▲</button>
-      <div class="round-indicator">1/1</div>
-      <button class="nav-btn down" title="下一轮">▼</button>
-      <hr>
-      <button class="action-btn tts" title="朗读">🎧</button>
-      <button class="action-btn discuss" title="讨论">💬</button>
-    </div>
-  </aside>
-
-  <!-- TTS Mini Player -->
-  <footer id="tts-player" class="hidden">
-    <div class="player-content">
-      <span class="title">正在朗读...</span>
-      <div class="controls">
-        <button class="prev" title="上一个">⏮</button>
-        <button class="play-pause" title="播放/暂停">⏸</button>
-        <button class="next" title="下一个">⏭</button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <title>对话详情</title>
+    <!-- Prism.js 主题样式 -->
+    <link rel="stylesheet" href="./vendor/prism-tomorrow.min.css" />
+    <!-- 主样式 -->
+    <link rel="stylesheet" href="./conversation.css" />
+    <!-- 高亮样式 -->
+    <link rel="stylesheet" href="./highlight.css" />
+  </head>
+  <body class="theme-light has-sidebar">
+    <!-- 大纲导航侧边栏 (固定悬浮) -->
+    <aside id="outline-sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">
+          <svg
+            class="sidebar-title-icon"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M8 6h13"></path>
+            <path d="M8 12h13"></path>
+            <path d="M8 18h13"></path>
+            <path d="M3 6h.01"></path>
+            <path d="M3 12h.01"></path>
+            <path d="M3 18h.01"></path>
+          </svg>
+          <span class="sidebar-title-text">大纲</span>
+        </span>
+        <div class="sidebar-actions">
+          <button
+            class="sidebar-action outline-mode-toggle"
+            type="button"
+            title="密集/舒展"
+            aria-label="切换紧凑/详情显示"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 6h16"></path>
+              <path d="M4 12h10"></path>
+              <path d="M4 18h16"></path>
+            </svg>
+          </button>
+          <button
+            class="sidebar-action outline-expand-toggle"
+            type="button"
+            title="展开/折叠全部"
+            aria-label="展开或折叠全部"
+          >
+            <svg
+              class="outline-expand-toggle-icon"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M5 12h14"></path>
+              <path class="expand-vertical" d="M12 5v14"></path>
+            </svg>
+          </button>
+        </div>
       </div>
-      <button class="close" title="关闭">✕</button>
-    </div>
-  </footer>
+      <nav class="outline-nav">
+        <!-- 通过 JS 动态生成 -->
+      </nav>
+    </aside>
 
-  <!-- 高亮工具栏 (选中文本时显示) -->
-  <div id="highlight-toolbar" class="hidden">
-    <button class="color" data-color="#FFF176" style="background:#FFF176" title="黄色"></button>
-    <button class="color" data-color="#81C784" style="background:#81C784" title="绿色"></button>
-    <button class="color" data-color="#64B5F6" style="background:#64B5F6" title="蓝色"></button>
-    <button class="color" data-color="#E57373" style="background:#E57373" title="红色"></button>
-    <button class="color" data-color="#BA68C8" style="background:#BA68C8" title="紫色"></button>
-    <div class="divider"></div>
-    <button class="style-btn" data-style="background" title="背景">A</button>
-    <button class="style-btn" data-style="underline" title="下划线">U̲</button>
-  </div>
+    <button class="sidebar-handle" aria-label="展开或收起侧边栏">
+      <svg
+        class="sidebar-handle-icon"
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M9 18l6-6-6-6"></path>
+      </svg>
+    </button>
 
-  <!-- 高亮编辑弹窗（简化版）-->
-  <div id="highlight-editor" class="hidden">
-    <div class="editor-arrow"></div>
-    <div class="editor-content">
-      <!-- 颜色选择区 -->
-      <div class="color-row">
-        <button class="color-btn" data-color="#FFF176" style="background:#FFF176" title="黄色"></button>
-        <button class="color-btn" data-color="#81C784" style="background:#81C784" title="绿色"></button>
-        <button class="color-btn" data-color="#64B5F6" style="background:#64B5F6" title="蓝色"></button>
-        <button class="color-btn" data-color="#E57373" style="background:#E57373" title="红色"></button>
-        <button class="color-btn" data-color="#BA68C8" style="background:#BA68C8" title="紫色"></button>
-      </div>
-      <!-- 样式选择区（简化：只保留2种）-->
-      <div class="style-row">
-        <button class="style-btn" data-style="background" title="背景高亮">
-          <span class="preview bg">Aa</span>
+    <!-- 主内容区 -->
+    <main id="conversation-container">
+      <!-- 问题和回复通过 JS 动态生成 -->
+    </main>
+
+    <!-- 底部悬浮工具栏 -->
+    <footer id="content-toolbar">
+      <div class="toolbar-inner">
+        <div class="reply-nav">
+          <button class="nav-btn prev" title="上一个回复">◀</button>
+          <span class="reply-indicator">1/3</span>
+          <button class="nav-btn next" title="下一个回复">▶</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <button class="action-btn tts" title="朗读">
+          <span class="icon">🎧</span>
+          <span class="label">朗读</span>
         </button>
-        <button class="style-btn" data-style="underline" title="下划线">
-          <span class="preview ul">Aa</span>
+        <button class="action-btn discuss" title="讨论">
+          <span class="icon">💬</span>
+          <span class="label">讨论</span>
+        </button>
+        <button class="action-btn copy" title="复制">
+          <span class="icon">📋</span>
+          <span class="label">复制</span>
         </button>
       </div>
-      <!-- 操作按钮（简化：只保留复制和删除）-->
-      <div class="action-row">
-        <button class="action-btn copy">复制</button>
-        <button class="action-btn delete danger">删除</button>
+    </footer>
+
+    <!-- 选中文本工具栏（高亮/标注/复制） -->
+    <div
+      id="highlight-toolbar"
+      class="hidden"
+      role="toolbar"
+      aria-label="选中文本操作"
+    >
+      <div class="highlight-toolbar-inner">
+        <button class="toolbar-action" data-action="copy" type="button">
+          复制
+        </button>
+        <button class="toolbar-action" data-action="annotate" type="button">
+          批注
+        </button>
+        <button
+          class="color"
+          data-color="#FFF176"
+          style="--dot-color: #fff176"
+          type="button"
+          title="黄色"
+        ></button>
+        <button
+          class="color"
+          data-color="#81C784"
+          style="--dot-color: #81c784"
+          type="button"
+          title="绿色"
+        ></button>
+        <button
+          class="color"
+          data-color="#64B5F6"
+          style="--dot-color: #64b5f6"
+          type="button"
+          title="蓝色"
+        ></button>
+        <button
+          class="color"
+          data-color="#E57373"
+          style="--dot-color: #e57373"
+          type="button"
+          title="红色"
+        ></button>
+        <button
+          class="color"
+          data-color="#BA68C8"
+          style="--dot-color: #ba68c8"
+          type="button"
+          title="紫色"
+        ></button>
       </div>
     </div>
-  </div>
 
-  <!-- 第三方库 -->
-  <script src="./vendor/markdown-it.min.js"></script>
-  <script src="./vendor/prism-core.min.js"></script>
-  <script src="./vendor/prism-autoloader.min.js"></script>
-  
-  <!-- 主逻辑 -->
-  <script src="./conversation.js"></script>
-  <!-- 高亮管理器 -->
-  <script src="./highlight-manager.js"></script>
-</body>
+    <!-- 高亮编辑弹窗（微信读书风格）-->
+    <div id="highlight-editor" class="hidden">
+      <div class="editor-bar">
+        <!-- 样式选择：背景高亮 A 按钮 -->
+        <button class="style-toggle" data-style="background" title="背景高亮">
+          <span class="style-icon bg-style">A</span>
+        </button>
+        <!-- 样式选择：下划线 A 按钮 -->
+        <button class="style-toggle" data-style="underline" title="下划线">
+          <span class="style-icon ul-style">A</span>
+        </button>
+        <!-- 分隔符 -->
+        <div class="bar-divider"></div>
+        <!-- 颜色选择 -->
+        <button
+          class="color-dot"
+          data-color="#FFF176"
+          style="--dot-color: #fff176"
+          title="黄色"
+        ></button>
+        <button
+          class="color-dot"
+          data-color="#81C784"
+          style="--dot-color: #81c784"
+          title="绿色"
+        ></button>
+        <button
+          class="color-dot"
+          data-color="#64B5F6"
+          style="--dot-color: #64b5f6"
+          title="蓝色"
+        ></button>
+        <button
+          class="color-dot"
+          data-color="#E57373"
+          style="--dot-color: #e57373"
+          title="红色"
+        ></button>
+        <button
+          class="color-dot"
+          data-color="#BA68C8"
+          style="--dot-color: #ba68c8"
+          title="紫色"
+        ></button>
+        <!-- 分隔符 -->
+        <div class="bar-divider"></div>
+        <!-- 操作按钮 -->
+        <button class="action-icon copy" title="复制">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path
+              d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+            ></path>
+          </svg>
+        </button>
+        <button class="action-icon delete" title="删除">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path
+              d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+            ></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 第三方库 -->
+    <script src="./vendor/markdown-it.min.js"></script>
+    <script src="./vendor/prism-core.min.js"></script>
+    <script src="./vendor/prism-autoloader.min.js"></script>
+
+    <!-- 主逻辑 -->
+    <script src="./conversation.js"></script>
+    <!-- 高亮管理器 -->
+    <script src="./highlight-manager.js"></script>
+  </body>
 </html>

@@ -1,40 +1,53 @@
 /**
- * 对话页面主逻辑
- * 
+ * 对话页面主逻辑 - 大纲导航版
+ *
  * 功能：
  * - 框架初始化
- * - Markdown 渲染 + Block 索引注入
- * - 对话数据加载与渲染
- * - Tab 切换与 Swiper 滑动
- * - 能量条
- * - 侧滑抽屉
- * - Sticky Header
- * - 滚动事件处理
+ * - Markdown 渲染
+ * - 大纲导航交互
+ * - 回复切换
+ * - 底部工具栏
  */
 
-(function() {
-  'use strict';
+(function () {
+  "use strict";
 
   // ========== 全局状态 ==========
   const state = {
     topicId: null,
-    topicName: '',
+    topicName: "",
     isDarkMode: false,
     totalRounds: 0,
-    loadedRounds: new Set(),
+    rounds: [],
     currentRoundIndex: 0,
-    scrollProgress: 0,
+    currentReplyIndex: 0,
     isInitialized: false,
+    outlineCompact: null,
+    outlineRoundExpansionOverrides: {},
+    outlineExpansionMode: "auto",
+    isProgrammaticScroll: false,
+    programmaticScrollTimer: null,
+    roundObserver: null,
+    roundObserverTargets: new Set(),
   };
+
+  function getScrollBehavior() {
+    try {
+      if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+        return "auto";
+      }
+    } catch (_) {}
+    return window.flutter_inappwebview ? "auto" : "smooth";
+  }
 
   // ========== 模型颜色映射 ==========
   const MODEL_COLORS = {
-    'claude': '#8B5CF6',
-    'gpt': '#10B981',
-    'gemini': '#4285F4',
-    'deepseek': '#1E88E5',
-    'qwen': '#FF6B35',
-    'default': '#6B7280',
+    claude: "#8B5CF6",
+    gpt: "#10B981",
+    gemini: "#4285F4",
+    deepseek: "#1E88E5",
+    qwen: "#FF6B35",
+    default: "#6B7280",
   };
 
   // ========== Markdown 渲染器 ==========
@@ -42,7 +55,7 @@
 
   function initMarkdownRenderer() {
     if (!window.markdownit) {
-      console.error('[Conversation] markdown-it not loaded');
+      console.error("[Conversation] markdown-it not loaded");
       return;
     }
 
@@ -54,43 +67,42 @@
     });
 
     // 配置 Prism 自动加载路径
-    if (window.Prism && window.Prism.plugins && window.Prism.plugins.autoloader) {
-      window.Prism.plugins.autoloader.languages_path = './vendor/prism-components/';
+    if (
+      window.Prism &&
+      window.Prism.plugins &&
+      window.Prism.plugins.autoloader
+    ) {
+      window.Prism.plugins.autoloader.languages_path =
+        "./vendor/prism-components/";
     }
   }
 
-  // 渲染 Markdown 并注入 Block 索引
   function renderMarkdown(content, messageId) {
     if (!md) {
       initMarkdownRenderer();
     }
 
     if (!md) {
-      // Fallback：简单的 HTML 转义
       return `<p data-block-index="0">${escapeHtml(content)}</p>`;
     }
 
-    // 解析 Markdown 为 tokens
     const tokens = md.parse(content, {});
-    
-    // 为每个 Block 级元素注入索引
+
     let blockIndex = 0;
-    
     function processTokens(tokens) {
       for (const token of tokens) {
-        // Block 级开始标签
-        if (token.type === 'paragraph_open' ||
-            token.type === 'heading_open' ||
-            token.type === 'list_item_open' ||
-            token.type === 'blockquote_open' ||
-            token.type === 'code_block' ||
-            token.type === 'fence' ||
-            token.type === 'table_open' ||
-            token.type === 'hr') {
-          token.attrPush(['data-block-index', String(blockIndex++)]);
+        if (
+          token.type === "paragraph_open" ||
+          token.type === "heading_open" ||
+          token.type === "list_item_open" ||
+          token.type === "blockquote_open" ||
+          token.type === "code_block" ||
+          token.type === "fence" ||
+          token.type === "table_open" ||
+          token.type === "hr"
+        ) {
+          token.attrPush(["data-block-index", String(blockIndex++)]);
         }
-        
-        // 递归处理子 tokens
         if (token.children) {
           processTokens(token.children);
         }
@@ -98,117 +110,17 @@
     }
 
     processTokens(tokens);
-    
-    // 渲染为 HTML
-    let html = md.renderer.render(tokens, md.options, {});
-    
-    return html;
+    return md.renderer.render(tokens, md.options, {});
   }
 
   function escapeHtml(text) {
-    const div = document.createElement('div');
+    const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
   }
 
-  // ========== 轮次渲染 ==========
-  function renderRound(round) {
-    const container = document.getElementById('conversation-container');
-    if (!container) return;
-
-    const roundEl = document.createElement('article');
-    roundEl.className = 'round-card';
-    roundEl.dataset.roundIndex = round.index;
-
-    // 问题区
-    const questionHtml = renderQuestionSection(round);
-    
-    // 回复区
-    const replyHtml = renderReplySection(round);
-
-    roundEl.innerHTML = questionHtml + replyHtml;
-    container.appendChild(roundEl);
-
-    // 注册 Tab 切换事件
-    setupTabSwitch(roundEl, round.index);
-
-    // 代码高亮（延迟执行）
-    scheduleCodeHighlight(roundEl);
-
-    // 标记为已加载
-    state.loadedRounds.add(round.index);
-  }
-
-  function renderQuestionSection(round) {
-    const user = round.userMessage || {};
-    const qLabel = `Q${round.index + 1}`;
-    const questionContent = renderMarkdown(user.content || '', user.id || '');
-
-    return `
-      <section class="question-section">
-        <div class="color-bar"></div>
-        <div class="content">
-          <span class="q-label">${qLabel}</span>
-          <div class="question-text" data-message-id="${user.id || ''}">
-            ${questionContent}
-          </div>
-        </div>
-      </section>
-    `;
-  }
-
-  function renderReplySection(round) {
-    const replies = round.assistantReplies || [];
-    if (replies.length === 0) {
-      return '';
-    }
-
-    // Tab 栏
-    const tabsHtml = replies.map((reply, idx) => {
-      const modelColor = getModelColor(reply.modelId || reply.modelName || '');
-      const isActive = idx === 0 ? 'active' : '';
-      const mainlineBadge = reply.isMainline ? '<span class="mainline-badge">★</span>' : '';
-      
-      return `
-        <button class="tab ${isActive}" data-index="${idx}" data-model="${reply.modelId || ''}"
-                style="--model-color: ${modelColor}">
-          <span class="model-dot" style="background:${modelColor}"></span>
-          <span class="model-name">${reply.modelName || 'AI'}</span>
-          ${mainlineBadge}
-        </button>
-      `;
-    }).join('');
-
-    // Swiper 内容
-    const slidesHtml = replies.map((reply, idx) => {
-      const isActive = idx === 0 ? 'active' : '';
-      const replyContent = renderMarkdown(reply.content || '', reply.id || '');
-      
-      return `
-        <div class="swiper-slide ${isActive}" data-message-id="${reply.id || ''}" data-reply-index="${idx}">
-          <div class="markdown-body">
-            ${replyContent}
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    return `
-      <section class="reply-section">
-        <div class="tab-bar" data-round-index="${round.index}">
-          ${tabsHtml}
-        </div>
-        <div class="reply-swiper">
-          <div class="swiper-wrapper">
-            ${slidesHtml}
-          </div>
-        </div>
-      </section>
-    `;
-  }
-
   function getModelColor(modelId) {
-    const lowerModel = (modelId || '').toLowerCase();
+    const lowerModel = (modelId || "").toLowerCase();
     for (const [key, color] of Object.entries(MODEL_COLORS)) {
       if (lowerModel.includes(key)) {
         return color;
@@ -217,404 +129,645 @@
     return MODEL_COLORS.default;
   }
 
-  // ========== Tab 切换 ==========
-  function setupTabSwitch(roundEl, roundIndex) {
-    const tabBar = roundEl.querySelector('.tab-bar');
-    const swiperWrapper = roundEl.querySelector('.swiper-wrapper');
-    
-    if (!tabBar || !swiperWrapper) return;
-
-    const tabs = tabBar.querySelectorAll('.tab');
-    const slides = swiperWrapper.querySelectorAll('.swiper-slide');
-
-    tabBar.addEventListener('click', (e) => {
-      const tab = e.target.closest('.tab');
-      if (!tab) return;
-
-      const index = parseInt(tab.dataset.index, 10);
-      switchToSlide(roundEl, index);
-    });
-
-    // 触摸滑动支持
-    setupSwipeGesture(roundEl);
+  function truncateText(text, maxLength) {
+    if (!text) return "";
+    const plainText = text
+      .replace(/[#*`\[\]()]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (plainText.length <= maxLength) return plainText;
+    return plainText.substring(0, maxLength) + "...";
   }
 
-  function switchToSlide(roundEl, index) {
-    const tabBar = roundEl.querySelector('.tab-bar');
-    const swiperWrapper = roundEl.querySelector('.swiper-wrapper');
-    
-    if (!tabBar || !swiperWrapper) return;
+  function toPlainText(text) {
+    if (!text) return "";
+    return text
+      .replace(/[#*`\[\]()]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
 
-    const tabs = tabBar.querySelectorAll('.tab');
-    const slides = swiperWrapper.querySelectorAll('.swiper-slide');
+  function truncatePlainText(plainText, maxLength) {
+    if (!plainText) return "";
+    if (plainText.length <= maxLength) return plainText;
+    return plainText.substring(0, maxLength) + "...";
+  }
 
-    // 更新 Tab 状态
-    tabs.forEach((tab, i) => {
-      tab.classList.toggle('active', i === index);
+  // ========== 轮次渲染（简化版）==========
+  function renderRound(round) {
+    const container = document.getElementById("conversation-container");
+    if (!container) return;
+
+    const roundEl = document.createElement("article");
+    roundEl.className = "round-card";
+    roundEl.dataset.roundIndex = round.index;
+
+    // 问题区
+    const questionHtml = renderQuestionSection(round);
+
+    // 回复区（只显示当前选中的回复）
+    const replyHtml = renderReplySection(round, 0);
+
+    roundEl.innerHTML = questionHtml + replyHtml;
+    container.appendChild(roundEl);
+
+    // 检查是否需要折叠
+    checkQuestionCollapse(roundEl);
+
+    // 代码高亮
+    scheduleCodeHighlight(roundEl);
+  }
+
+  function renderQuestionSection(round) {
+    const user = round.userMessage || {};
+    const qLabel = `Q${round.index + 1}`;
+    const questionContent = renderMarkdown(user.content || "", user.id || "");
+    return `
+      <section class="question-section">
+        <div class="color-bar"></div>
+        <div class="content">
+          <div style="display:flex;align-items:center">
+            <span class="q-label">${qLabel}</span>
+            <span class="question-expand-hint">（双击展开）</span>
+          </div>
+          <div class="question-text" data-message-id="${user.id || ""}">
+            ${questionContent}
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function checkQuestionCollapse(roundEl) {
+    const questionSection = roundEl.querySelector(".question-section");
+    const questionText = roundEl.querySelector(".question-text");
+    if (!questionSection || !questionText) return;
+
+    // 绑定双击事件
+    questionSection.addEventListener("dblclick", () => {
+      if (questionSection.classList.contains("collapsible")) {
+        questionSection.classList.toggle("collapsed");
+        // 更新提示文案
+        const hint = questionSection.querySelector(".question-expand-hint");
+        if (hint) {
+          hint.textContent = questionSection.classList.contains("collapsed")
+            ? "（双击展开）"
+            : "（双击收起）";
+        }
+      }
     });
 
-    // 更新 Slide 状态
-    slides.forEach((slide, i) => {
-      slide.classList.toggle('active', i === index);
+    // 检查高度（延迟执行确保渲染完成）
+    requestAnimationFrame(() => {
+      const maxHeight = window.innerHeight * 0.35; // 约1/3屏幕高度
+      if (questionText.scrollHeight > maxHeight) {
+        questionSection.classList.add("collapsible", "collapsed");
+      }
     });
+  }
 
-    // 滑动动画
-    swiperWrapper.style.transform = `translateX(-${index * 100}%)`;
+  function renderReplySection(round, replyIndex) {
+    const replies = round.assistantReplies || [];
+    if (replies.length === 0) {
+      return '<section class="reply-section"><p style="color:var(--text-tertiary)">暂无回复</p></section>';
+    }
+
+    const reply = replies[replyIndex] || replies[0];
+    const modelColor = getModelColor(reply.modelId || reply.modelName || "");
+    const replyContent = renderMarkdown(reply.content || "", reply.id || "");
+    const mainlineStar = reply.isMainline
+      ? '<span class="mainline-star">★</span>'
+      : "";
+
+    return `
+      <section class="reply-section" data-round-index="${round.index}" data-current-reply="${replyIndex}">
+        <div class="reply-header">
+          <div class="reply-model-badge" style="--model-color: ${modelColor}">
+            <span class="model-dot" style="background: ${modelColor}"></span>
+            <span>${reply.modelName || "AI"}</span>
+            ${mainlineStar}
+          </div>
+        </div>
+        <div class="reply-content markdown-body" data-message-id="${reply.id || ""}">
+          ${replyContent}
+        </div>
+      </section>
+    `;
+  }
+
+  // ========== 切换回复 ==========
+  function switchReply(roundIndex, replyIndex) {
+    const round = state.rounds.find((r) => r.index === roundIndex);
+    if (!round) return;
+
+    const replies = round.assistantReplies || [];
+    if (replyIndex < 0 || replyIndex >= replies.length) return;
+
+    // 更新状态
+    state.currentRoundIndex = roundIndex;
+    state.currentReplyIndex = replyIndex;
+
+    // 更新主内容区
+    const roundEl = document.querySelector(
+      `.round-card[data-round-index="${roundIndex}"]`,
+    );
+    if (roundEl) {
+      const oldReplySection = roundEl.querySelector(".reply-section");
+      if (oldReplySection) {
+        const newReplyHtml = renderReplySection(round, replyIndex);
+        oldReplySection.outerHTML = newReplyHtml;
+        scheduleCodeHighlight(roundEl);
+        const replyMessageId = replies[replyIndex]?.id || null;
+        if (
+          replyMessageId &&
+          window.HighlightManager &&
+          round.highlights &&
+          round.highlights[replyMessageId]
+        ) {
+          window.HighlightManager.applyHighlights(
+            replyMessageId,
+            round.highlights[replyMessageId],
+          );
+        }
+      }
+    }
+
+    // 更新大纲导航高亮
+    updateOutlineActive();
+
+    // 更新底部工具栏
+    updateToolbar();
+
+    // 滚动到该轮次
+    scrollToRound(roundIndex);
 
     // 通知 Flutter
-    const roundIndex = parseInt(roundEl.dataset.roundIndex, 10);
-    const activeSlide = slides[index];
-    const messageId = activeSlide ? activeSlide.dataset.messageId : null;
-
     if (window.FlutterBridge && window.FlutterBridge.onTabChanged) {
+      const reply = replies[replyIndex];
       window.FlutterBridge.onTabChanged({
         roundIndex,
-        replyIndex: index,
-        messageId,
+        replyIndex,
+        messageId: reply?.id || null,
       });
     }
   }
 
-  // ========== 滑动手势（触摸 + 鼠标）==========
-  function setupSwipeGesture(roundEl) {
-    const swiperWrapper = roundEl.querySelector('.swiper-wrapper');
-    if (!swiperWrapper) return;
-
-    const slides = roundEl.querySelectorAll('.swiper-slide');
-    let startX = 0;
-    let startY = 0;
-    let currentX = 0;
-    let isDragging = false;
-    let isHorizontal = null;
-
-    // 通用开始拖动
-    function handleDragStart(clientX, clientY) {
-      startX = clientX;
-      startY = clientY;
-      currentX = clientX;
-      isDragging = true;
-      isHorizontal = null;
-      swiperWrapper.style.transition = 'none';
-      swiperWrapper.classList.add('dragging');
-    }
-
-    // 通用拖动中
-    function handleDragMove(clientX, clientY, e) {
-      if (!isDragging) return;
-
-      currentX = clientX;
-      const currentY = clientY;
-      const diffX = currentX - startX;
-      const diffY = currentY - startY;
-
-      // 判断滑动方向
-      if (isHorizontal === null) {
-        isHorizontal = Math.abs(diffX) > Math.abs(diffY);
+  function scrollToRound(index) {
+    const round = document.querySelector(
+      `.round-card[data-round-index="${index}"]`,
+    );
+    if (round) {
+      state.isProgrammaticScroll = true;
+      if (state.programmaticScrollTimer) {
+        clearTimeout(state.programmaticScrollTimer);
       }
-
-      if (!isHorizontal) return;
-
-      // 阻止默认行为
-      if (e && e.preventDefault) e.preventDefault();
-
-      // 计算当前偏移
-      const currentSlideIndex = getCurrentSlideIndex(roundEl);
-      const translateX = -currentSlideIndex * 100 + (diffX / swiperWrapper.offsetWidth * 100);
-      
-      // 限制边界
-      const maxTranslate = 0;
-      const minTranslate = -(slides.length - 1) * 100;
-      const clampedTranslate = Math.max(minTranslate, Math.min(maxTranslate, translateX));
-
-      swiperWrapper.style.transform = `translateX(${clampedTranslate}%)`;
-    }
-
-    // 通用拖动结束
-    function handleDragEnd() {
-      if (!isDragging) return;
-      isDragging = false;
-      swiperWrapper.classList.remove('dragging');
-
-      if (!isHorizontal) return;
-
-      swiperWrapper.style.transition = 'transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
-
-      const diffX = currentX - startX;
-      const threshold = swiperWrapper.offsetWidth * 0.15;
-      const currentSlideIndex = getCurrentSlideIndex(roundEl);
-      
-      let newIndex = currentSlideIndex;
-      if (diffX > threshold && currentSlideIndex > 0) {
-        newIndex = currentSlideIndex - 1;
-      } else if (diffX < -threshold && currentSlideIndex < slides.length - 1) {
-        newIndex = currentSlideIndex + 1;
-      }
-
-      switchToSlide(roundEl, newIndex);
-    }
-
-    // 触摸事件
-    swiperWrapper.addEventListener('touchstart', (e) => {
-      handleDragStart(e.touches[0].clientX, e.touches[0].clientY);
-    }, { passive: true });
-
-    swiperWrapper.addEventListener('touchmove', (e) => {
-      handleDragMove(e.touches[0].clientX, e.touches[0].clientY, e);
-    }, { passive: false });
-
-    swiperWrapper.addEventListener('touchend', handleDragEnd);
-
-    // 鼠标事件（桌面端）
-    swiperWrapper.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return; // 只响应左键
-      handleDragStart(e.clientX, e.clientY);
-      e.preventDefault();
-    });
-
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      handleDragMove(e.clientX, e.clientY, e);
-    });
-
-    document.addEventListener('mouseup', handleDragEnd);
-
-    // ======== macOS 触控板两指水平滚动 ========
-    let wheelAccumulatorX = 0;
-    let wheelTimeout = null;
-    const WHEEL_THRESHOLD = 60; // 触发切换的阈值
-
-    swiperWrapper.addEventListener('wheel', (e) => {
-      // 只响应水平滚动为主的手势
-      if (Math.abs(e.deltaX) < Math.abs(e.deltaY)) return;
-      
-      // 阻止默认行为防止页面滚动
-      e.preventDefault();
-      
-      wheelAccumulatorX += e.deltaX;
-      
-      // 清除之前的超时
-      if (wheelTimeout) clearTimeout(wheelTimeout);
-      
-      // 延迟重置累积量
-      wheelTimeout = setTimeout(() => {
-        wheelAccumulatorX = 0;
-      }, 150);
-      
-      // 检查是否超过阈值
-      if (Math.abs(wheelAccumulatorX) > WHEEL_THRESHOLD) {
-        const currentSlideIndex = getCurrentSlideIndex(roundEl);
-        
-        if (wheelAccumulatorX > 0 && currentSlideIndex < slides.length - 1) {
-          // 向左滑 -> 下一个
-          switchToSlide(roundEl, currentSlideIndex + 1);
-          wheelAccumulatorX = 0;
-        } else if (wheelAccumulatorX < 0 && currentSlideIndex > 0) {
-          // 向右滑 -> 上一个
-          switchToSlide(roundEl, currentSlideIndex - 1);
-          wheelAccumulatorX = 0;
-        }
-      }
-    }, { passive: false });
-  }
-
-
-  function getCurrentSlideIndex(roundEl) {
-    const activeSlide = roundEl.querySelector('.swiper-slide.active');
-    return activeSlide ? parseInt(activeSlide.dataset.replyIndex, 10) : 0;
-  }
-
-  // ========== 代码高亮 ==========
-  function scheduleCodeHighlight(container) {
-    requestIdleCallback(() => {
-      const codeBlocks = container.querySelectorAll('pre code');
-      codeBlocks.forEach((code) => {
-        if (window.Prism) {
-          window.Prism.highlightElement(code);
-        }
-      });
-    }, { timeout: 500 });
-  }
-
-  // requestIdleCallback polyfill
-  window.requestIdleCallback = window.requestIdleCallback || function(cb, opts) {
-    const start = Date.now();
-    return setTimeout(() => {
-      cb({
-        didTimeout: false,
-        timeRemaining: () => Math.max(0, 50 - (Date.now() - start))
-      });
-    }, opts?.timeout || 1);
-  };
-
-  // ========== 能量条 ==========
-  function initEnergyBar() {
-    const energyBar = document.getElementById('energy-bar');
-    if (!energyBar) return;
-
-    energyBar.innerHTML = '';
-
-    for (let i = 0; i < state.totalRounds; i++) {
-      const cell = document.createElement('div');
-      cell.className = 'energy-cell';
-      cell.dataset.roundIndex = i;
-      
-      // 获取该轮次的主线模型颜色
-      const color = getEnergyColor(i);
-      
-      cell.innerHTML = `
-        <div class="empty" style="background:${color}"></div>
-        <div class="fill" style="background:${color}"></div>
-      `;
-      
-      cell.addEventListener('click', () => {
-        scrollToRound(i);
-      });
-
-      energyBar.appendChild(cell);
+      state.programmaticScrollTimer = setTimeout(() => {
+        state.isProgrammaticScroll = false;
+        state.programmaticScrollTimer = null;
+      }, 520);
+      round.scrollIntoView({ behavior: getScrollBehavior(), block: "start" });
     }
   }
 
-  function getEnergyColor(roundIndex) {
-    // TODO: 从数据中获取实际颜色
-    return MODEL_COLORS.default;
-  }
+  // ========== 大纲导航 ==========
+  function initOutlineSidebar() {
+    const sidebar = document.getElementById("outline-sidebar");
+    if (!sidebar) return;
 
-  function updateEnergyBar() {
-    const energyBar = document.getElementById('energy-bar');
-    if (!energyBar) return;
+    // 折叠/展开侧边栏
+    const handle = document.querySelector(".sidebar-handle");
+    const OUTLINE_SIDEBAR_OPEN_KEY = "cv_outline_sidebar_open";
+    const mobileQuery = window.matchMedia?.("(max-width: 768px)") ?? null;
 
-    const cells = energyBar.querySelectorAll('.energy-cell');
-    cells.forEach((cell, i) => {
-      const fill = cell.querySelector('.fill');
-      if (!fill) return;
+    function isMobile() {
+      return mobileQuery?.matches ?? false;
+    }
 
-      if (i < state.currentRoundIndex) {
-        // 已滚过的轮次
-        fill.style.height = '100%';
-        cell.classList.remove('active');
-      } else if (i === state.currentRoundIndex) {
-        // 当前轮次
-        fill.style.height = `${state.scrollProgress * 100}%`;
-        cell.classList.add('active');
+    function applySidebarOpen(open) {
+      state.outlineSidebarOpen = !!open;
+
+      if (isMobile()) {
+        sidebar.classList.toggle("mobile-visible", state.outlineSidebarOpen);
+        sidebar.classList.remove("collapsed");
+        document.body.classList.remove("sidebar-collapsed");
       } else {
-        // 未到达的轮次
-        fill.style.height = '0';
-        cell.classList.remove('active');
+        sidebar.classList.toggle("collapsed", !state.outlineSidebarOpen);
+        sidebar.classList.remove("mobile-visible");
+        document.body.classList.toggle("sidebar-collapsed", !state.outlineSidebarOpen);
       }
+
+      try {
+        localStorage.setItem(
+          OUTLINE_SIDEBAR_OPEN_KEY,
+          state.outlineSidebarOpen ? "1" : "0",
+        );
+      } catch (_) {}
+    }
+
+    function readInitialSidebarOpen() {
+      try {
+        const saved = localStorage.getItem(OUTLINE_SIDEBAR_OPEN_KEY);
+        if (saved === "1" || saved === "0") {
+          return saved === "1";
+        }
+      } catch (_) {}
+      return false;
+    }
+
+    applySidebarOpen(readInitialSidebarOpen());
+
+    if (mobileQuery?.addEventListener) {
+      mobileQuery.addEventListener("change", () => {
+        applySidebarOpen(state.outlineSidebarOpen);
+      });
+    } else if (mobileQuery?.addListener) {
+      mobileQuery.addListener(() => {
+        applySidebarOpen(state.outlineSidebarOpen);
+      });
+    }
+
+    handle?.addEventListener("click", () => {
+      applySidebarOpen(!state.outlineSidebarOpen);
+    });
+
+    const modeToggle = sidebar.querySelector(".outline-mode-toggle");
+    const expandToggle = sidebar.querySelector(".outline-expand-toggle");
+
+    const OUTLINE_COMPACT_KEY = "cv_outline_compact";
+
+    function applyOutlineCompact(isCompact) {
+      state.outlineCompact = !!isCompact;
+      document.body.classList.toggle("outline-compact", state.outlineCompact);
+      try {
+        localStorage.setItem(
+          OUTLINE_COMPACT_KEY,
+          state.outlineCompact ? "1" : "0",
+        );
+      } catch (_) {}
+    }
+
+    try {
+      const saved = localStorage.getItem(OUTLINE_COMPACT_KEY);
+      if (saved === "1" || saved === "0") {
+        applyOutlineCompact(saved === "1");
+      } else {
+        applyOutlineCompact(
+          window.matchMedia?.("(max-width: 520px)")?.matches ?? true,
+        );
+      }
+    } catch (_) {
+      applyOutlineCompact(
+        window.matchMedia?.("(max-width: 520px)")?.matches ?? true,
+      );
+    }
+
+    modeToggle?.addEventListener("click", () => {
+      applyOutlineCompact(!state.outlineCompact);
+    });
+
+    function syncExpandToggleState() {
+      const isAll = state.outlineExpansionMode === "all";
+      sidebar.classList.toggle("outline-all-expanded", isAll);
+      if (expandToggle) {
+        const label = isAll ? "收起全部" : "展开全部";
+        expandToggle.setAttribute("aria-label", label);
+        expandToggle.setAttribute("title", label);
+      }
+    }
+
+    expandToggle?.addEventListener("click", () => {
+      state.outlineExpansionMode =
+        state.outlineExpansionMode === "all" ? "none" : "all";
+      syncExpandToggleState();
+      state.outlineRoundExpansionOverrides = {};
+      applyOutlineExpansionState();
+    });
+
+    syncExpandToggleState();
+  }
+
+  function setRoundExpanded(item, expanded) {
+    item.classList.toggle("expanded", expanded);
+    const btn = item.querySelector(".outline-round");
+    btn?.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+
+  function getRoundOverride(roundIndex) {
+    if (!state.outlineRoundExpansionOverrides) return undefined;
+    const key = String(roundIndex);
+    if (
+      !Object.prototype.hasOwnProperty.call(
+        state.outlineRoundExpansionOverrides,
+        key,
+      )
+    ) {
+      return undefined;
+    }
+    return !!state.outlineRoundExpansionOverrides[key];
+  }
+
+  function setSingleRoundOverride(roundIndex, expanded) {
+    state.outlineRoundExpansionOverrides = { [String(roundIndex)]: !!expanded };
+  }
+
+  function applyOutlineExpansionState() {
+    const nav = document.querySelector(".outline-nav");
+    if (!nav) return;
+    nav.querySelectorAll(".outline-item").forEach((item) => {
+      const roundIndex = parseInt(item.dataset.roundIndex, 10);
+      let shouldExpand = false;
+      if (state.outlineExpansionMode === "all") {
+        shouldExpand = true;
+      } else if (state.outlineExpansionMode === "none") {
+        shouldExpand = false;
+      } else {
+        const override = getRoundOverride(roundIndex);
+        shouldExpand =
+          override !== undefined
+            ? override
+            : roundIndex === state.currentRoundIndex;
+      }
+      setRoundExpanded(item, shouldExpand);
     });
   }
 
-  // ========== 侧滑抽屉 ==========
-  function initEdgeDrawer() {
-    const drawer = document.getElementById('edge-drawer');
-    if (!drawer) return;
+  function renderOutlineNav(rounds) {
+    const nav = document.querySelector(".outline-nav");
+    if (!nav || !rounds || rounds.length === 0) return;
 
-    const trigger = drawer.querySelector('.drawer-trigger');
-    const upBtn = drawer.querySelector('.nav-btn.up');
-    const downBtn = drawer.querySelector('.nav-btn.down');
-    const ttsBtn = drawer.querySelector('.action-btn.tts');
-    const discussBtn = drawer.querySelector('.action-btn.discuss');
+    const html = rounds
+      .map((round, idx) => {
+        const roundKey =
+          typeof round?.index === "number" && Number.isFinite(round.index)
+            ? round.index
+            : idx;
+        const user = round.userMessage || {};
+        const replies = round.assistantReplies || [];
 
-    trigger?.addEventListener('click', () => {
-      drawer.classList.toggle('closed');
+        const plainQuestion = toPlainText(user.content || "");
+        const questionTitle = truncatePlainText(
+          plainQuestion || `Q${idx + 1}`,
+          52,
+        );
+
+        const repliesHtml = replies
+          .map((reply, replyIdx) => {
+            const modelColor = getModelColor(
+              reply.modelId || reply.modelName || "",
+            );
+            const isActive = idx === 0 && replyIdx === 0 ? "active" : "";
+            const replyPreview = truncatePlainText(
+              toPlainText(reply.content || ""),
+              120,
+            );
+            const modelName = reply.modelName || "AI";
+            const mainlineStar = reply.isMainline
+              ? '<span class="outline-leaf-mainline" aria-hidden="true">★</span>'
+              : "";
+
+            return `
+          <button
+            class="outline-leaf ${isActive}"
+            type="button"
+            data-round-index="${roundKey}"
+            data-reply-index="${replyIdx}"
+            style="--model-color: ${modelColor}"
+          >
+            <span class="outline-leaf-dot" aria-hidden="true"></span>
+            <span class="outline-leaf-body">
+              <span class="outline-leaf-meta">
+                <span class="outline-leaf-model">${escapeHtml(modelName)}</span>
+                ${mainlineStar}
+              </span>
+              <span class="outline-leaf-preview">${escapeHtml(replyPreview)}</span>
+            </span>
+          </button>
+        `;
+          })
+          .join("");
+
+        const isExpanded =
+          roundKey === state.currentRoundIndex ? "expanded" : "";
+        const isActive = roundKey === state.currentRoundIndex ? "active" : "";
+
+        return `
+        <div
+          class="outline-item ${isExpanded} ${isActive}"
+          data-round-index="${roundKey}"
+        >
+          <button
+            class="outline-round"
+            type="button"
+            data-round-index="${roundKey}"
+            aria-expanded="${roundKey === state.currentRoundIndex ? "true" : "false"}"
+          >
+            <span class="outline-round-rail" aria-hidden="true"></span>
+            <span class="outline-round-badge">Q${idx + 1}</span>
+            <span class="outline-round-title">${escapeHtml(questionTitle)}</span>
+            <span class="outline-round-count">${replies.length}</span>
+            <svg
+              class="outline-chevron"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M9 18l6-6-6-6"></path>
+            </svg>
+          </button>
+          <div class="outline-children">
+            ${repliesHtml}
+          </div>
+        </div>
+      `;
+      })
+      .join("");
+
+    nav.innerHTML = html;
+
+    // 绑定事件
+    nav.querySelectorAll(".outline-round").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const item = btn.closest(".outline-item");
+        const roundIndex = parseInt(item.dataset.roundIndex, 10);
+        const isExpanded = item.classList.contains("expanded");
+        const nextExpanded = !isExpanded;
+
+        if (state.outlineExpansionMode === "none") {
+          state.outlineExpansionMode = "auto";
+          state.outlineRoundExpansionOverrides = {};
+          setSingleRoundOverride(roundIndex, true);
+        } else if (state.outlineExpansionMode === "auto") {
+          setSingleRoundOverride(roundIndex, nextExpanded);
+        }
+
+        scrollToRound(roundIndex);
+        state.currentRoundIndex = roundIndex;
+        updateOutlineActive();
+      });
     });
 
-    upBtn?.addEventListener('click', () => {
-      if (state.currentRoundIndex > 0) {
-        scrollToRound(state.currentRoundIndex - 1);
+    nav.querySelectorAll(".outline-leaf").forEach((leaf) => {
+      leaf.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const roundIndex = parseInt(leaf.dataset.roundIndex, 10);
+        const replyIndex = parseInt(leaf.dataset.replyIndex, 10);
+        switchReply(roundIndex, replyIndex);
+      });
+    });
+    applyOutlineExpansionState();
+  }
+
+  function updateOutlineActive() {
+    const nav = document.querySelector(".outline-nav");
+    if (!nav) return;
+
+    // 更新问题高亮
+    nav.querySelectorAll(".outline-item").forEach((item) => {
+      const roundIndex = parseInt(item.dataset.roundIndex, 10);
+      item.classList.toggle("active", roundIndex === state.currentRoundIndex);
+    });
+
+    // 更新回复高亮
+    nav.querySelectorAll(".outline-leaf").forEach((leaf) => {
+      const roundIndex = parseInt(leaf.dataset.roundIndex, 10);
+      const replyIndex = parseInt(leaf.dataset.replyIndex, 10);
+      const isActive =
+        roundIndex === state.currentRoundIndex &&
+        replyIndex === state.currentReplyIndex;
+      leaf.classList.toggle("active", isActive);
+    });
+
+    applyOutlineExpansionState();
+
+    const currentItem = nav.querySelector(
+      `.outline-item[data-round-index="${state.currentRoundIndex}"]`,
+    );
+
+    // 【新增】导航区自动滚动到当前项，确保可见
+    if (currentItem) {
+      const navRect = nav.getBoundingClientRect();
+      const itemRect = currentItem.getBoundingClientRect();
+
+      // 只在当前项不在可视区域内时滚动
+      if (itemRect.top < navRect.top || itemRect.bottom > navRect.bottom) {
+        currentItem.scrollIntoView({
+          behavior: getScrollBehavior(),
+          block: "nearest",
+        });
+      }
+    }
+  }
+
+  // ========== 底部工具栏 ==========
+  function initToolbar() {
+    const toolbar = document.getElementById("content-toolbar");
+    if (!toolbar) return;
+
+    const prevBtn = toolbar.querySelector(".nav-btn.prev");
+    const nextBtn = toolbar.querySelector(".nav-btn.next");
+    const ttsBtn = toolbar.querySelector(".action-btn.tts");
+    const discussBtn = toolbar.querySelector(".action-btn.discuss");
+    const copyBtn = toolbar.querySelector(".action-btn.copy");
+
+    prevBtn?.addEventListener("click", () => {
+      if (state.currentReplyIndex > 0) {
+        switchReply(state.currentRoundIndex, state.currentReplyIndex - 1);
       }
     });
 
-    downBtn?.addEventListener('click', () => {
-      if (state.currentRoundIndex < state.totalRounds - 1) {
-        scrollToRound(state.currentRoundIndex + 1);
+    nextBtn?.addEventListener("click", () => {
+      const round = state.rounds[state.currentRoundIndex];
+      const maxReply = (round?.assistantReplies?.length || 1) - 1;
+      if (state.currentReplyIndex < maxReply) {
+        switchReply(state.currentRoundIndex, state.currentReplyIndex + 1);
       }
     });
 
-    ttsBtn?.addEventListener('click', () => {
+    ttsBtn?.addEventListener("click", () => {
       if (window.FlutterBridge && window.FlutterBridge.playTTS) {
         window.FlutterBridge.playTTS({ roundIndex: state.currentRoundIndex });
       }
     });
 
-    discussBtn?.addEventListener('click', () => {
+    discussBtn?.addEventListener("click", () => {
       if (window.FlutterBridge && window.FlutterBridge.openDiscussion) {
-        window.FlutterBridge.openDiscussion({ roundIndex: state.currentRoundIndex });
+        window.FlutterBridge.openDiscussion({
+          roundIndex: state.currentRoundIndex,
+        });
+      }
+    });
+
+    copyBtn?.addEventListener("click", () => {
+      const round = state.rounds[state.currentRoundIndex];
+      const reply = round?.assistantReplies?.[state.currentReplyIndex];
+      if (reply?.content) {
+        if (window.FlutterBridge && window.FlutterBridge.copyToClipboard) {
+          window.FlutterBridge.copyToClipboard({ text: reply.content });
+        } else {
+          navigator.clipboard.writeText(reply.content).then(() => {
+            console.log("[Toolbar] Copied to clipboard");
+          });
+        }
       }
     });
   }
 
-  function updateEdgeDrawer() {
-    const drawer = document.getElementById('edge-drawer');
-    if (!drawer) return;
+  function updateToolbar() {
+    const toolbar = document.getElementById("content-toolbar");
+    if (!toolbar) return;
 
-    const indicator = drawer.querySelector('.round-indicator');
-    const upBtn = drawer.querySelector('.nav-btn.up');
-    const downBtn = drawer.querySelector('.nav-btn.down');
+    const round = state.rounds[state.currentRoundIndex];
+    const totalReplies = round?.assistantReplies?.length || 0;
+
+    const indicator = toolbar.querySelector(".reply-indicator");
+    const prevBtn = toolbar.querySelector(".nav-btn.prev");
+    const nextBtn = toolbar.querySelector(".nav-btn.next");
 
     if (indicator) {
-      indicator.textContent = `${state.currentRoundIndex + 1}/${state.totalRounds}`;
+      indicator.textContent = `${state.currentReplyIndex + 1}/${totalReplies}`;
     }
 
-    if (upBtn) {
-      upBtn.disabled = state.currentRoundIndex <= 0;
+    if (prevBtn) {
+      prevBtn.disabled = state.currentReplyIndex <= 0;
     }
 
-    if (downBtn) {
-      downBtn.disabled = state.currentRoundIndex >= state.totalRounds - 1;
+    if (nextBtn) {
+      nextBtn.disabled = state.currentReplyIndex >= totalReplies - 1;
     }
   }
 
-  // ========== Sticky Header ==========
-  function initStickyHeader() {
-    // 滚动时检查是否需要显示 Sticky Header
-  }
-
-  function updateStickyHeader() {
-    const stickyHeader = document.getElementById('sticky-header');
-    if (!stickyHeader) return;
-
-    const currentRound = document.querySelector(`.round-card[data-round-index="${state.currentRoundIndex}"]`);
-    if (!currentRound) return;
-
-    const inlineTabBar = currentRound.querySelector('.tab-bar');
-    if (!inlineTabBar) {
-      stickyHeader.classList.add('hidden');
-      return;
-    }
-
-    const tabBarRect = inlineTabBar.getBoundingClientRect();
-    const isTabVisible = tabBarRect.top >= 0;
-
-    if (isTabVisible) {
-      stickyHeader.classList.add('hidden');
-    } else {
-      // 更新 Sticky Header 内容
-      const roundLabel = stickyHeader.querySelector('.round-label');
-      const tabList = stickyHeader.querySelector('.tab-list');
-      
-      if (roundLabel) {
-        roundLabel.textContent = `Q${state.currentRoundIndex + 1}`;
-      }
-
-      if (tabList) {
-        tabList.innerHTML = inlineTabBar.innerHTML;
-        // 重新绑定事件
-        tabList.querySelectorAll('.tab').forEach(tab => {
-          tab.addEventListener('click', (e) => {
-            const index = parseInt(tab.dataset.index, 10);
-            switchToSlide(currentRound, index);
-            // 同步 Sticky Header 的选中状态
-            tabList.querySelectorAll('.tab').forEach((t, i) => {
-              t.classList.toggle('active', i === index);
-            });
-          });
+  // ========== 代码高亮 ==========
+  function scheduleCodeHighlight(container) {
+    requestIdleCallback(
+      () => {
+        const codeBlocks = container.querySelectorAll("pre code");
+        codeBlocks.forEach((code) => {
+          if (window.Prism) {
+            window.Prism.highlightElement(code);
+          }
         });
-      }
-
-      stickyHeader.classList.remove('hidden');
-    }
+      },
+      { timeout: 500 },
+    );
   }
+
+  window.requestIdleCallback =
+    window.requestIdleCallback ||
+    function (cb, opts) {
+      const start = Date.now();
+      return setTimeout(() => {
+        cb({
+          didTimeout: false,
+          timeRemaining: () => Math.max(0, 50 - (Date.now() - start)),
+        });
+      }, opts?.timeout || 1);
+    };
 
   // ========== 滚动处理 ==========
   let scrollTicking = false;
@@ -623,9 +776,7 @@
     if (!scrollTicking) {
       requestAnimationFrame(() => {
         calculateCurrentRound();
-        updateEnergyBar();
-        updateEdgeDrawer();
-        updateStickyHeader();
+        updateOutlineActive();
         scrollTicking = false;
       });
       scrollTicking = true;
@@ -633,141 +784,159 @@
   }
 
   function calculateCurrentRound() {
-    const container = document.getElementById('conversation-container');
+    const container = document.getElementById("conversation-container");
     if (!container) return;
+    if (state.isProgrammaticScroll) return;
 
-    const rounds = container.querySelectorAll('.round-card');
-    const viewportTop = 60; // Sticky Header 高度
-
-    let currentIndex = 0;
-    let progress = 0;
+    const rounds = container.querySelectorAll(".round-card");
+    const viewportTop = 80;
 
     for (let i = 0; i < rounds.length; i++) {
       const round = rounds[i];
       const rect = round.getBoundingClientRect();
-      
+
       if (rect.top <= viewportTop && rect.bottom > viewportTop) {
-        currentIndex = i;
-        progress = (viewportTop - rect.top) / rect.height;
+        const newIndex = parseInt(round.dataset.roundIndex, 10);
+        if (newIndex !== state.currentRoundIndex) {
+          state.currentRoundIndex = newIndex;
+          if (state.outlineExpansionMode === "auto") {
+            state.outlineRoundExpansionOverrides = {};
+          }
+          // 获取该轮次当前显示的回复索引
+          const replySection = round.querySelector(".reply-section");
+          state.currentReplyIndex = parseInt(
+            replySection?.dataset.currentReply || "0",
+            10,
+          );
+          updateToolbar();
+        }
         break;
-      } else if (rect.top > viewportTop) {
-        currentIndex = Math.max(0, i - 1);
-        break;
-      } else if (i === rounds.length - 1) {
-        currentIndex = i;
-        progress = 1;
       }
     }
-
-    state.currentRoundIndex = currentIndex;
-    state.scrollProgress = Math.max(0, Math.min(1, progress));
   }
 
-  function scrollToRound(index) {
-    const round = document.querySelector(`.round-card[data-round-index="${index}"]`);
-    if (round) {
-      round.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+  function ensureRoundObserver() {
+    if (!("IntersectionObserver" in window)) return;
+    if (state.roundObserver) return;
+
+    state.roundObserver = new IntersectionObserver(
+      (entries) => {
+        if (state.isProgrammaticScroll) return;
+        const candidates = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        const chosen = candidates[0];
+        if (!chosen) return;
+
+        const newIndex = parseInt(chosen.target.dataset.roundIndex, 10);
+        if (Number.isNaN(newIndex)) return;
+        if (newIndex === state.currentRoundIndex) return;
+
+        state.currentRoundIndex = newIndex;
+        if (state.outlineExpansionMode === "auto") {
+          state.outlineRoundExpansionOverrides = {};
+        }
+        const replySection = chosen.target.querySelector(".reply-section");
+        state.currentReplyIndex = parseInt(
+          replySection?.dataset.currentReply || "0",
+          10,
+        );
+        updateToolbar();
+        updateOutlineActive();
+      },
+      {
+        root: null,
+        rootMargin: "-80px 0px -65% 0px",
+        threshold: [0, 0.1, 0.25, 0.5, 0.75],
+      },
+    );
+  }
+
+  function refreshRoundObserverTargets() {
+    ensureRoundObserver();
+    if (!state.roundObserver) return;
+    const rounds = document.querySelectorAll(".round-card");
+    rounds.forEach((el) => {
+      if (state.roundObserverTargets.has(el)) return;
+      state.roundObserver.observe(el);
+      state.roundObserverTargets.add(el);
+    });
   }
 
   // ========== 初始化 ==========
   function init() {
-    console.log('[Conversation] Initializing...');
-    
-    initMarkdownRenderer();
-    initEnergyBar();
-    initEdgeDrawer();
-    initStickyHeader();
-    initLazyLoader(); // 添加懒加载
+    console.log("[Conversation] Initializing...");
 
-    window.addEventListener('scroll', onScroll, { passive: true });
+    if (window.flutter_inappwebview) {
+      document.body.classList.add("host-flutter");
+    }
+
+    initMarkdownRenderer();
+    initOutlineSidebar();
+    initToolbar();
+
+    window.addEventListener("scroll", onScroll, { passive: true });
 
     state.isInitialized = true;
-    document.body.classList.add('framework-ready');
-    
-    console.log('[Conversation] Framework ready');
+    document.body.classList.add("framework-ready");
+
+    console.log("[Conversation] Framework ready");
   }
 
-  // ========== 懒加载（IntersectionObserver） ==========
-  let lazyObserver = null;
-  const pendingRounds = new Set();
-
-  function initLazyLoader() {
-    if (!('IntersectionObserver' in window)) {
-      console.warn('[Conversation] IntersectionObserver not supported');
-      return;
-    }
-
-    lazyObserver = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const roundIndex = parseInt(entry.target.dataset.roundIndex, 10);
-          if (!isNaN(roundIndex) && !state.loadedRounds.has(roundIndex)) {
-            requestRoundData([roundIndex]);
-          }
-          // 懒加载代码高亮
-          scheduleCodeHighlight(entry.target);
-        }
-      });
-    }, {
-      rootMargin: '200px 0px', // 提前 200px 加载
-      threshold: 0.01,
-    });
-  }
-
-  function observeRound(element) {
-    if (lazyObserver && element) {
-      lazyObserver.observe(element);
-    }
-  }
-
-  function requestRoundData(indices) {
-    const needed = indices.filter(i => !state.loadedRounds.has(i) && !pendingRounds.has(i));
-    if (needed.length === 0) return;
-
-    needed.forEach(i => pendingRounds.add(i));
-
-    if (window.FlutterBridge && window.FlutterBridge.requestRounds) {
-      window.FlutterBridge.requestRounds({ indices: needed });
-    }
-  }
-
-  // ========== 框架初始化（预热时调用） ==========
-  window.initFramework = function() {
+  // ========== 对外 API ==========
+  window.initFramework = function () {
     init();
   };
 
-  // ========== 加载对话数据（打开页面时调用） ==========
-  window.loadConversation = function(data) {
-    console.log('[Conversation] Loading conversation data...');
-    
-    // 清空现有内容
-    const container = document.getElementById('conversation-container');
+  window.loadConversation = function (data) {
+    console.log("[Conversation] Loading conversation data...", data);
+
+    const container = document.getElementById("conversation-container");
     if (container) {
-      container.innerHTML = '';
+      container.innerHTML = "";
     }
 
-    // 重置状态
-    state.loadedRounds.clear();
-    
-    // 注入新数据
+    if (state.roundObserver) {
+      state.roundObserver.disconnect();
+      state.roundObserver = null;
+    }
+    state.roundObserverTargets = new Set();
+
+    state.currentRoundIndex = 0;
+    state.currentReplyIndex = 0;
+
     window.initConversation(data);
   };
 
-  // ========== 初始化对话（首次加载或数据切换） ==========
-  window.initConversation = function(data) {
-    console.log('[Conversation] Initializing conversation...');
-    
-    const { topicId, topicName, isDarkMode, totalRounds, rounds, ...rest } = data;
+  window.initConversation = function (data) {
+    console.log("[Conversation] Initializing conversation...");
 
-    // 更新状态
+    const { topicId, topicName, isDarkMode, totalRounds, rounds, ...rest } =
+      data;
+
     state.topicId = topicId;
-    state.topicName = topicName || '';
+    state.topicName = topicName || "";
     state.isDarkMode = isDarkMode || false;
     state.totalRounds = totalRounds || (rounds ? rounds.length : 0);
+    state.rounds = rounds || [];
 
-    // 设置主题
-    document.body.classList.toggle('theme-dark', state.isDarkMode);
+    document.body.classList.toggle("theme-dark", state.isDarkMode);
+
+    const firstRoundIndex =
+      rounds && Array.isArray(rounds) && rounds.length
+        ? typeof rounds[0]?.index === "number"
+          ? rounds[0].index
+          : 0
+        : 0;
+    const initialRoundIndex =
+      rest.scrollToRoundIndex != null
+        ? rest.scrollToRoundIndex
+        : firstRoundIndex;
+    state.currentRoundIndex = initialRoundIndex;
+    state.currentReplyIndex = 0;
+    if (state.outlineExpansionMode === "auto") {
+      state.outlineRoundExpansionOverrides = {};
+    }
 
     // 渲染轮次
     if (rounds && Array.isArray(rounds)) {
@@ -776,148 +945,364 @@
       }
     }
 
-    // 初始化能量条
-    initEnergyBar();
+    // 渲染大纲导航
+    renderOutlineNav(rounds);
+    refreshRoundObserverTargets();
+    updateOutlineActive();
 
-    // 恢复高亮（交给 highlight-manager.js）
+    // 更新工具栏
+    updateToolbar();
+
+    // 恢复高亮
     if (rounds && window.HighlightManager) {
       for (const round of rounds) {
         if (round.highlights) {
-          for (const [messageId, highlights] of Object.entries(round.highlights)) {
+          for (const [messageId, highlights] of Object.entries(
+            round.highlights,
+          )) {
             window.HighlightManager.applyHighlights(messageId, highlights);
           }
         }
       }
     }
 
+    function findHighlightMessageId(highlightId) {
+      if (!highlightId || !rounds || !Array.isArray(rounds)) return null;
+      for (const round of rounds) {
+        const highlightsByMessage = round?.highlights;
+        if (!highlightsByMessage) continue;
+        for (const [messageId, highlights] of Object.entries(
+          highlightsByMessage,
+        )) {
+          if (!Array.isArray(highlights)) continue;
+          if (highlights.some((h) => h?.id === highlightId)) return messageId;
+        }
+      }
+      return null;
+    }
+
+    function findMessageLocation(messageId) {
+      if (!messageId || !rounds || !Array.isArray(rounds)) return null;
+      for (const round of rounds) {
+        const userId = round?.userMessage?.id;
+        if (userId && userId === messageId) {
+          return { roundIndex: round.index, replyIndex: null, role: "user" };
+        }
+        const replies = round?.assistantReplies || [];
+        for (let i = 0; i < replies.length; i++) {
+          if (replies[i]?.id === messageId) {
+            return {
+              roundIndex: round.index,
+              replyIndex: i,
+              role: "assistant",
+            };
+          }
+        }
+      }
+      return null;
+    }
+
+    function scrollToMessage(messageId) {
+      const el = document.querySelector(`[data-message-id="${messageId}"]`);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+      return true;
+    }
+
     // 处理初始滚动
-    if (rest.scrollToHighlightId && window.HighlightManager) {
+    const targetHighlightId = rest.scrollToHighlightId || null;
+    const targetMessageId =
+      findHighlightMessageId(targetHighlightId) ||
+      rest.scrollToMessageId ||
+      null;
+    const targetLocation = findMessageLocation(targetMessageId);
+
+    if (targetLocation && typeof targetLocation.roundIndex === "number") {
+      if (typeof targetLocation.replyIndex === "number") {
+        switchReply(targetLocation.roundIndex, targetLocation.replyIndex);
+      } else {
+        scrollToRound(targetLocation.roundIndex);
+      }
+    }
+
+    if (targetHighlightId && window.HighlightManager) {
       setTimeout(() => {
-        window.HighlightManager.scrollToHighlight(rest.scrollToHighlightId);
-      }, 100);
+        window.HighlightManager.scrollToHighlight(targetHighlightId);
+      }, 120);
+    } else if (targetMessageId) {
+      setTimeout(() => {
+        let didScroll = false;
+        if (window.HighlightManager) {
+          const start = rest.scrollToTextStart;
+          const end =
+            rest.scrollToTextEnd != null
+              ? rest.scrollToTextEnd
+              : start != null
+                ? start + 1
+                : null;
+          const quote = rest.scrollToQuotedText;
+          const occurrence =
+            rest.scrollToQuotedTextOccurrence != null
+              ? rest.scrollToQuotedTextOccurrence
+              : 0;
+
+          if (
+            start != null &&
+            end != null &&
+            typeof window.HighlightManager.scrollToTextRange === "function"
+          ) {
+            didScroll = window.HighlightManager.scrollToTextRange(
+              targetMessageId,
+              start,
+              end,
+            );
+          } else if (
+            quote &&
+            typeof window.HighlightManager.scrollToText === "function"
+          ) {
+            didScroll = window.HighlightManager.scrollToText(
+              targetMessageId,
+              quote,
+              occurrence,
+            );
+          }
+        }
+
+        if (
+          !didScroll &&
+          !scrollToMessage(targetMessageId) &&
+          rest.scrollToRoundIndex != null
+        ) {
+          scrollToRound(rest.scrollToRoundIndex);
+        }
+      }, 120);
     } else if (rest.scrollToRoundIndex != null) {
       setTimeout(() => {
         scrollToRound(rest.scrollToRoundIndex);
-      }, 100);
+      }, 120);
     }
 
     // 通知 Flutter 就绪
     if (window.FlutterBridge && window.FlutterBridge.onContentReady) {
       window.FlutterBridge.onContentReady({
         scrollHeight: document.body.scrollHeight,
-        roundCount: state.loadedRounds.size,
+        roundCount: state.rounds.length,
       });
     }
 
-    console.log('[Conversation] Initialization complete');
+    console.log("[Conversation] Initialization complete");
   };
 
-  // ========== 增量加载轮次 ==========
-  window.appendRounds = function(rounds) {
+  window.appendRounds = function (rounds) {
     if (!rounds || !Array.isArray(rounds)) return;
-
     for (const round of rounds) {
-      if (!state.loadedRounds.has(round.index)) {
-        renderRound(round);
-      }
+      renderRound(round);
     }
-
-    // 更新能量条
-    updateEnergyBar();
+    refreshRoundObserverTargets();
   };
 
-  // ========== 状态更新接口 ==========
-  window.setDarkMode = function(isDark) {
+  window.setDarkMode = function (isDark) {
     state.isDarkMode = isDark;
-    document.body.classList.toggle('theme-dark', isDark);
+    document.body.classList.toggle("theme-dark", isDark);
   };
 
   window.scrollToRound = scrollToRound;
 
-  // ========== FlutterBridge 实际绑定 ==========
-  // 通过 flutter_inappwebview 与 Flutter 通信
+  window.navigateTo = function (params) {
+    const p = params || {};
+    const rounds = state.rounds || [];
+
+    function findHighlightMessageId(highlightId) {
+      if (!highlightId || !rounds || !Array.isArray(rounds)) return null;
+      for (const round of rounds) {
+        const highlightsByMessage = round?.highlights;
+        if (!highlightsByMessage) continue;
+        for (const [messageId, highlights] of Object.entries(
+          highlightsByMessage,
+        )) {
+          if (!Array.isArray(highlights)) continue;
+          if (highlights.some((h) => h?.id === highlightId)) return messageId;
+        }
+      }
+      return null;
+    }
+
+    function findMessageLocation(messageId) {
+      if (!messageId || !rounds || !Array.isArray(rounds)) return null;
+      for (const round of rounds) {
+        const userId = round?.userMessage?.id;
+        if (userId && userId === messageId) {
+          return { roundIndex: round.index, replyIndex: null, role: "user" };
+        }
+        const replies = round?.assistantReplies || [];
+        for (let i = 0; i < replies.length; i++) {
+          if (replies[i]?.id === messageId) {
+            return {
+              roundIndex: round.index,
+              replyIndex: i,
+              role: "assistant",
+            };
+          }
+        }
+      }
+      return null;
+    }
+
+    function scrollToMessageId(messageId) {
+      const el = document.querySelector(`[data-message-id="${messageId}"]`);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+      return true;
+    }
+
+    const targetHighlightId = p.scrollToHighlightId || null;
+    const targetMessageId =
+      findHighlightMessageId(targetHighlightId) || p.scrollToMessageId || null;
+    const targetLocation = findMessageLocation(targetMessageId);
+
+    if (targetLocation && typeof targetLocation.roundIndex === "number") {
+      if (typeof targetLocation.replyIndex === "number") {
+        switchReply(targetLocation.roundIndex, targetLocation.replyIndex);
+      } else {
+        scrollToRound(targetLocation.roundIndex);
+      }
+    } else if (p.scrollToRoundIndex != null) {
+      scrollToRound(p.scrollToRoundIndex);
+    }
+
+    setTimeout(() => {
+      if (targetHighlightId && window.HighlightManager) {
+        window.HighlightManager.scrollToHighlight(targetHighlightId);
+        return;
+      }
+
+      if (targetMessageId) {
+        let didScroll = false;
+        if (window.HighlightManager) {
+          const start = p.scrollToTextStart;
+          const end =
+            p.scrollToTextEnd != null
+              ? p.scrollToTextEnd
+              : start != null
+                ? start + 1
+                : null;
+          const quote = p.scrollToQuotedText;
+          const occurrence =
+            p.scrollToQuotedTextOccurrence != null
+              ? p.scrollToQuotedTextOccurrence
+              : 0;
+
+          if (
+            start != null &&
+            end != null &&
+            typeof window.HighlightManager.scrollToTextRange === "function"
+          ) {
+            didScroll = window.HighlightManager.scrollToTextRange(
+              targetMessageId,
+              start,
+              end,
+            );
+          } else if (
+            quote &&
+            typeof window.HighlightManager.scrollToText === "function"
+          ) {
+            didScroll = window.HighlightManager.scrollToText(
+              targetMessageId,
+              quote,
+              occurrence,
+            );
+          }
+        }
+
+        if (!didScroll) {
+          if (
+            !scrollToMessageId(targetMessageId) &&
+            p.scrollToRoundIndex != null
+          ) {
+            scrollToRound(p.scrollToRoundIndex);
+          }
+        }
+        return;
+      }
+
+      if (p.scrollToRoundIndex != null) {
+        scrollToRound(p.scrollToRoundIndex);
+      }
+    }, 120);
+
+    return true;
+  };
+
+  // ========== FlutterBridge ==========
   window.FlutterBridge = {
     onContentReady: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onContentReady', data);
+        window.flutter_inappwebview.callHandler("onContentReady", data);
       } else {
-        console.log('[FlutterBridge] onContentReady:', data);
+        console.log("[FlutterBridge] onContentReady:", data);
       }
     },
     onScrollChanged: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onScrollChanged', data);
+        window.flutter_inappwebview.callHandler("onScrollChanged", data);
       }
     },
     onTabChanged: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onTabChanged', data);
+        window.flutter_inappwebview.callHandler("onTabChanged", data);
       }
     },
     onHighlightCreated: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onHighlightCreated', data);
+        window.flutter_inappwebview.callHandler("onHighlightCreated", data);
       }
     },
     onHighlightUpdated: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onHighlightUpdated', data);
+        window.flutter_inappwebview.callHandler("onHighlightUpdated", data);
       }
     },
     onHighlightDeleted: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onHighlightDeleted', data);
+        window.flutter_inappwebview.callHandler("onHighlightDeleted", data);
       }
     },
     onHighlightTapped: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onHighlightTapped', data);
-      }
-    },
-    onSearchResult: (data) => {
-      if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('onSearchResult', data);
+        window.flutter_inappwebview.callHandler("onHighlightTapped", data);
       }
     },
     playTTS: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('playTTS', data);
+        window.flutter_inappwebview.callHandler("playTTS", data);
       }
     },
     openDiscussion: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('openDiscussion', data);
+        window.flutter_inappwebview.callHandler("openDiscussion", data);
       }
     },
-    openNoteEditor: (data) => {
+    openAnnotationEditor: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('openNoteEditor', data);
-      }
-    },
-    showToast: (data) => {
-      if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('showToast', data);
+        window.flutter_inappwebview.callHandler("openAnnotationEditor", data);
       }
     },
     copyToClipboard: (data) => {
       if (window.flutter_inappwebview) {
-        window.flutter_inappwebview.callHandler('copyToClipboard', data);
+        window.flutter_inappwebview.callHandler("copyToClipboard", data);
       }
     },
-    requestRounds: async (data) => {
+    showToast: (data) => {
       if (window.flutter_inappwebview) {
-        const result = await window.flutter_inappwebview.callHandler('requestRounds', data);
-        return result ? JSON.parse(result) : null;
+        window.flutter_inappwebview.callHandler("showToast", data);
       }
-      return null;
     },
   };
 
   // ========== 自动初始化 ==========
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
   } else {
     init();
   }
-
 })();

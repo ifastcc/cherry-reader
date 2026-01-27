@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 import '../services/webdav_service.dart';
 import '../services/local_folder_sync_service.dart';
+import '../services/sync/sync_preferences.dart';
 import '../utils/platform_utils.dart';
 
 /// 首次启动引导页面
@@ -124,6 +125,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     // 保存用户选择的模式
     if (_selectedMode != null) {
       await WebDavService.setLoadMode(_selectedMode!);
+      await SyncPreferences.applyLegacyChoice(_selectedMode!);
 
       // 如果选择了 WebDAV，保存配置
       if (_selectedMode == DataLoadMode.webdav) {
@@ -1210,6 +1212,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               onPressed: () async {
                 // 设置为手动模式并跳过引导
                 await WebDavService.setLoadMode(DataLoadMode.manual);
+                await SyncPreferences.applyLegacyChoice(DataLoadMode.manual);
                 await OnboardingScreen.markOnboardingComplete();
                 if (mounted) {
                   Navigator.of(context).pushReplacementNamed('/home');

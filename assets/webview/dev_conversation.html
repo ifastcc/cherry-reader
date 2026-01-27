@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>对话详情（本地预览）</title>
+    <link rel="stylesheet" href="./vendor/prism-tomorrow.min.css" />
+    <link rel="stylesheet" href="./conversation.css" />
+    <link rel="stylesheet" href="./highlight.css" />
+  </head>
+  <body class="theme-light has-sidebar">
+    <aside id="outline-sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">
+          <svg
+            class="sidebar-title-icon"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M8 6h13"></path>
+            <path d="M8 12h13"></path>
+            <path d="M8 18h13"></path>
+            <path d="M3 6h.01"></path>
+            <path d="M3 12h.01"></path>
+            <path d="M3 18h.01"></path>
+          </svg>
+          <span class="sidebar-title-text">大纲</span>
+        </span>
+        <div class="sidebar-actions">
+          <button
+            class="sidebar-action outline-mode-toggle"
+            type="button"
+            title="密集/舒展"
+            aria-label="切换紧凑/详情显示"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 6h16"></path>
+              <path d="M4 12h10"></path>
+              <path d="M4 18h16"></path>
+            </svg>
+          </button>
+          <button
+            class="sidebar-action outline-expand-toggle"
+            type="button"
+            title="展开/折叠全部"
+            aria-label="展开或折叠全部"
+          >
+            <svg
+              class="outline-expand-toggle-icon"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M5 12h14"></path>
+              <path class="expand-vertical" d="M12 5v14"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <nav class="outline-nav"></nav>
+    </aside>
+
+    <button class="sidebar-handle" aria-label="展开或收起侧边栏">
+      <svg
+        class="sidebar-handle-icon"
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M9 18l6-6-6-6"></path>
+      </svg>
+    </button>
+
+    <main id="conversation-container"></main>
+
+    <footer id="content-toolbar">
+      <div class="toolbar-inner">
+        <div class="reply-nav">
+          <button class="nav-btn prev" title="上一个回复">◀</button>
+          <span class="reply-indicator">1/1</span>
+          <button class="nav-btn next" title="下一个回复">▶</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <button class="action-btn tts" title="朗读">
+          <span class="icon">🎧</span>
+          <span class="label">朗读</span>
+        </button>
+        <button class="action-btn discuss" title="讨论">
+          <span class="icon">💬</span>
+          <span class="label">讨论</span>
+        </button>
+        <button class="action-btn copy" title="复制">
+          <span class="icon">📋</span>
+          <span class="label">复制</span>
+        </button>
+      </div>
+    </footer>
+
+    <div id="highlight-editor" class="hidden">
+      <div class="editor-bar"></div>
+    </div>
+
+    <script src="./vendor/markdown-it.min.js"></script>
+    <script src="./vendor/prism-core.min.js"></script>
+    <script src="./vendor/prism-autoloader.min.js"></script>
+    <script src="./conversation.js"></script>
+    <script src="./highlight-manager.js"></script>
+
+    <script>
+      window.initFramework();
+      window.initConversation({
+        topicId: "dev",
+        topicName: "预览",
+        isDarkMode: false,
+        rounds: [
+          {
+            index: 0,
+            userMessage: {
+              id: "u0",
+              content:
+                "我有个问题：是不是过敏的人，更低的概率会得癌症？请基于证据给我一个结构化回答。",
+            },
+            assistantReplies: [
+              {
+                id: "a0",
+                modelId: "gpt-4o",
+                modelName: "GPT",
+                isMainline: true,
+                content:
+                  "结论：目前证据并不支持“过敏会显著降低癌症风险”的简单说法。\n\n- 关联：部分癌种可能存在弱相关，但方向不一致\n- 机制：免疫监视与慢性炎症存在拉扯\n- 建议：关注可控风险因素（吸烟、疫苗、筛查）",
+              },
+              {
+                id: "a1",
+                modelId: "claude",
+                modelName: "Claude",
+                isMainline: false,
+                content:
+                  "把问题拆成三层：\n1) 过敏类型（鼻炎、哮喘、湿疹）\n2) 癌种（肺、淋巴、皮肤等）\n3) 研究设计（队列/病例对照、混杂因素控制）\n\n因此更合理的结论是：不同组合下结论不同，不能泛化。",
+              },
+              {
+                id: "a2",
+                modelId: "gemini",
+                modelName: "Gemini",
+                isMainline: false,
+                content:
+                  "可能存在的偏差：诊断频率差异、健康行为差异、用药影响（激素/免疫调节）。\n\n如果你愿意，我可以按癌种列出更可引用的结论框架。",
+              },
+            ],
+          },
+          {
+            index: 1,
+            userMessage: {
+              id: "u1",
+              content: "如果我只有过敏性鼻炎，这个结论会更明确吗？",
+            },
+            assistantReplies: [
+              {
+                id: "a3",
+                modelId: "qwen",
+                modelName: "Qwen",
+                isMainline: true,
+                content:
+                  "过敏性鼻炎与“总体癌症风险”之间的关系依旧不够一致。\n\n更实用的是：把鼻炎控制好、避免二手烟、按年龄做筛查。",
+              },
+              {
+                id: "a4",
+                modelId: "deepseek",
+                modelName: "DeepSeek",
+                isMainline: false,
+                content:
+                  "建议你把家族史、吸烟史、职业暴露一并纳入评估，这些对风险解释力更强。",
+              },
+            ],
+          },
+          {
+            index: 2,
+            userMessage: {
+              id: "u2",
+              content: "请给我一份“如何读这种研究”的快速清单。",
+            },
+            assistantReplies: [
+              {
+                id: "a5",
+                modelId: "claude",
+                modelName: "Claude",
+                isMainline: true,
+                content:
+                  "快速清单：\n- 研究类型与样本量\n- 暴露定义是否清晰\n- 混杂控制是否充分\n- 结果是否可重复\n- 绝对风险 vs 相对风险",
+              },
+            ],
+          },
+        ],
+      });
+
+      setTimeout(() => {
+        const sidebar = document.getElementById("outline-sidebar");
+        const expandBtn = sidebar?.querySelector(".outline-expand-toggle");
+        const roundBtns = document.querySelectorAll(".outline-round");
+        const items = document.querySelectorAll(".outline-item");
+
+        const expandedCount = () =>
+          Array.from(items).filter((it) => it.classList.contains("expanded"))
+            .length;
+
+        const before = expandedCount();
+        expandBtn?.click();
+        const afterExpandAll = expandedCount();
+        expandBtn?.click();
+        const afterCollapseAll = expandedCount();
+
+        const firstRound = roundBtns[0];
+        const firstItem = firstRound?.closest(".outline-item");
+        const wasExpanded = firstItem?.classList.contains("expanded");
+        firstRound?.click();
+        const nowExpanded = firstItem?.classList.contains("expanded");
+
+        setTimeout(() => {
+          const secondRoundEl = document.querySelector('.round-card[data-round-index="1"]');
+          secondRoundEl?.scrollIntoView({ behavior: 'auto', block: 'start' });
+          setTimeout(() => {
+            const activeItem = document.querySelector('.outline-item.active');
+            console.log('[Outline Dev Check]', {
+              before,
+              afterExpandAll,
+              afterCollapseAll,
+              toggleFirstRound: { wasExpanded, nowExpanded },
+              allExpandedFlag: sidebar?.classList.contains('outline-all-expanded'),
+              activeRoundIndex: activeItem?.dataset?.roundIndex || null,
+            });
+          }, 80);
+        }, 120);
+      }, 80);
+    </script>
+  </body>
+</html>

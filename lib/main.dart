@@ -12,10 +12,13 @@ import 'services/version_service.dart';
 import 'services/mcp/mcp_server_service.dart';
 import 'services/tts_cache_migration.dart';
 import 'services/topic_index_service.dart';
+import 'services/webview_pool.dart';
 import 'utils/platform_utils.dart';
 
 import 'package:provider/provider.dart';
 import 'providers/tts_provider.dart';
+import 'providers/webview_navigation_controller.dart';
+import 'screens/webview_conversation_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,6 +55,12 @@ void main() async {
   // TTS 缓存迁移检查
   await TtsCacheMigration.migrateIfNeeded();
 
+  // WebView 预热
+  // 延迟 500ms 后异步预热，不阻塞应用启动
+  Future.delayed(const Duration(milliseconds: 500), () {
+    WebViewPool.instance.warmUp();
+  });
+
   // 检查是否需要显示引导页
   final showOnboarding = await OnboardingScreen.shouldShowOnboarding();
 
@@ -59,6 +68,7 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => TtsProvider()),
+        ChangeNotifierProvider(create: (_) => WebViewNavigationController()),
       ],
       child: CherryViewerApp(showOnboarding: showOnboarding),
     ),
@@ -172,7 +182,50 @@ class CherryViewerApp extends StatelessWidget {
           elevation: 2,
         ),
       ),
-      home: showOnboarding ? const OnboardingScreen() : const MainScreen(),
+      home: showOnboarding 
+          ? const OnboardingScreen() 
+          : const WebViewOverlayScreen(),
+    );
+  }
+}
+
+/// 带 WebView 覆盖层的主屏幕
+/// 
+/// 使用 Stack 实现 WebView 始终存活，通过 Visibility 控制显示
+class WebViewOverlayScreen extends StatelessWidget {
+  const WebViewOverlayScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<WebViewNavigationController>(
+      builder: (context, controller, child) {
+        return Stack(
+          children: [
+            // 底层：MainScreen（始终显示）
+            const MainScreen(),
+            
+            // 顶层：WebView 覆盖层
+            if (controller.currentParams != null)
+              Visibility(
+                visible: controller.isVisible,
+                maintainState: true, // 保持状态，不销毁
+                child: WebViewConversationScreen(
+                  key: ValueKey(controller.currentParams!.topicId),
+                  topicId: controller.currentParams!.topicId,
+                  topicName: controller.currentParams!.topicName,
+                  scrollToGroupIndex: controller.currentParams!.scrollToGroupIndex,
+                  scrollToMessageId: controller.currentParams!.scrollToMessageId,
+                  scrollToHighlightId: controller.currentParams!.scrollToHighlightId,
+                  scrollToTextStart: controller.currentParams!.scrollToTextStart,
+                  scrollToTextEnd: controller.currentParams!.scrollToTextEnd,
+                  scrollToQuotedText: controller.currentParams!.scrollToQuotedText,
+                  scrollToQuotedTextOccurrence: controller.currentParams!.scrollToQuotedTextOccurrence,
+                  onBack: () => controller.hideWebView(),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

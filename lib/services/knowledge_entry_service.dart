@@ -21,6 +21,7 @@ class KnowledgeEntryService {
 
   /// 【新架构】创建高亮 - 支持 selections
   Future<KnowledgeEntry> createHighlight({
+    String? entryId,
     required String messageId,
     required String quotedText,
     required int start,
@@ -40,6 +41,7 @@ class KnowledgeEntryService {
     List<SelectionRange>? selections,
   }) async {
     final entry = KnowledgeEntry.createHighlight(
+      entryId: entryId,
       messageId: messageId,
       quotedText: quotedText,
       start: start,
@@ -73,6 +75,7 @@ class KnowledgeEntryService {
 
   /// 创建标注
   Future<KnowledgeEntry> createAnnotation({
+    String? entryId,
     required String messageId,
     required String quotedText,
     required int start,
@@ -87,6 +90,7 @@ class KnowledgeEntryService {
     List<String>? tags,
   }) async {
     final entry = KnowledgeEntry.createAnnotation(
+      entryId: entryId,
       messageId: messageId,
       quotedText: quotedText,
       start: start,
@@ -112,20 +116,30 @@ class KnowledgeEntryService {
 
   /// 创建笔记
   Future<KnowledgeEntry> createNote({
+    String? entryId,
     required String content,
     String contentType = 'delta',
     String? plainText,
     List<String>? tags,
     String? messageId,
+    int? start,
+    int? end,
+    String? prefix,
+    String? suffix,
     String? topicId,
     String? topicName,
   }) async {
     final entry = KnowledgeEntry.createNote(
+      entryId: entryId,
       content: content,
       contentType: contentType,
       plainText: plainText,
       tags: tags,
       messageId: messageId,
+      start: start,
+      end: end,
+      prefix: prefix,
+      suffix: suffix,
       topicId: topicId,
       topicName: topicName,
     );
@@ -517,6 +531,20 @@ class KnowledgeEntryService {
     });
 
     // debugPrint('[KnowledgeEntryService] 删除条目: $entryId');
+  }
+
+  Future<void> deleteByMessageAndQuotedText(String messageId, String quotedText) async {
+    if (messageId.isEmpty || quotedText.isEmpty) return;
+    final isar = await _db.instance;
+
+    final entry = await isar.knowledgeEntrys
+        .filter()
+        .messageIdEqualTo(messageId)
+        .quotedTextEqualTo(quotedText)
+        .findFirst();
+    if (entry == null) return;
+
+    await deleteEntry(entry.entryId);
   }
 
   /// 删除指定 group 的所有条目

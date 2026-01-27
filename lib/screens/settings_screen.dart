@@ -10,15 +10,18 @@ import 'package:file_picker/file_picker.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/webdav_service.dart';
 import '../services/local_folder_sync_service.dart';
+import '../services/lan_http_sync/lan_http_sync_config.dart';
+import '../services/lan_http_sync/lan_http_sync_pull_prefs.dart';
+import '../services/lan_http_sync/lan_http_sync_server_service.dart';
+import '../services/sync/sync_preferences.dart';
+import '../services/sync/sync_source_type.dart';
 import '../services/streaming_tts_service.dart';
 import '../services/tts_cache_manager.dart';
 import '../services/ai_provider_service.dart';
 import '../services/cherry_export_service.dart';
 import '../services/isar_database.dart';
-import '../services/version_service.dart';
 import '../services/mcp/mcp_server_service.dart';
 import '../services/mcp/mcp_config.dart';
-import '../models/domain/data_version.dart';
 import '../models/isar/assistant_entity.dart';
 import '../models/isar/topic_entity.dart';
 import '../models/isar/message_entity.dart';
@@ -34,6 +37,9 @@ import '../services/insight_service.dart';
 import '../services/perspective_storage.dart';
 import '../models/isar/prompt_template_entity.dart';
 import '../models/isar/perspective_entity.dart';
+import 'lan_transfer_receive_screen.dart';
+import 'lan_transfer_send_screen.dart';
+import 'lan_http_sync_pull_screen.dart';
 
 // SharedPreferences 键名常量
 const String _keyApiUrl = 'openai_api_url';
@@ -42,7 +48,7 @@ const String _keyModel = 'openai_model';
 
 /// 设置页面 - 管理 AI 分析的 API 配置
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({Key? key}) : super(key: key);
+  const SettingsScreen({super.key});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -50,6 +56,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _formKey = GlobalKey<FormState>();
+  final ScrollController _scrollController = ScrollController();
 
   late TextEditingController _apiUrlController;
   late TextEditingController _apiKeyController;
@@ -60,13 +67,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _webdavUsernameController;
   late TextEditingController _webdavPasswordController;
   late TextEditingController _webdavPathController;
-  DataLoadMode _loadMode = DataLoadMode.manual;
   bool _isTestingConnection = false;
 
   // 本地文件夹配置
   late TextEditingController _localFolderPathController;
   bool _isValidatingFolder = false;
   bool _localFolderAutoLoad = true;  // 自动加载新版本（默认开启）
+
+  bool _autoWebDavEnabled = false;
+  bool _autoLocalFolderEnabled = false;
+  bool _autoLanReceiveEnabled = false;
+  bool _autoHttpPullEnabled = false;
+
+  final Map<SyncSourceType, bool> _syncSourceExpanded = {};
+  final Map<String, bool> _syncToolExpanded = {};
+
+  late TextEditingController _httpPullBaseUrlController;
+  late TextEditingController _httpPullTokenController;
+  bool _isTestingHttpPull = false;
+  String? _httpPullTestMessage;
+
+  LanHttpSyncConfig? _lanHttpSyncConfig;
+  LanHttpSyncServerStatus _lanHttpSyncStatus = const LanHttpSyncStopped();
+  StreamSubscription<LanHttpSyncServerStatus>? _lanHttpSyncStatusSubscription;
+  late TextEditingController _lanHttpSyncPortController;
 
   // TTS 配置
   // late TextEditingController _azureKeyController; // Deprecated: single key
@@ -102,6 +126,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavPasswordController = TextEditingController();
     _webdavPathController = TextEditingController();
     _localFolderPathController = TextEditingController();
+    _httpPullBaseUrlController = TextEditingController();
+    _httpPullTokenController = TextEditingController();
+    _lanHttpSyncPortController = TextEditingController();
     // _azureKeyController = TextEditingController();
     _azureRegionController = TextEditingController();
     _loadSettings();
@@ -112,6 +139,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 取消防抖 Timer 并立即保存 TTS 设置
     _ttsSaveTimer?.cancel();
     _saveTtsSettingsSync();
+    _lanHttpSyncStatusSubscription?.cancel();
 
     _apiUrlController.dispose();
     _apiKeyController.dispose();
@@ -121,12 +149,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavPasswordController.dispose();
     _webdavPathController.dispose();
     _localFolderPathController.dispose();
+    _httpPullBaseUrlController.dispose();
+    _httpPullTokenController.dispose();
+    _lanHttpSyncPortController.dispose();
     // _azureKeyController.dispose();
     for (var controller in _azureKeyControllers) {
       controller.dispose();
     }
     _azureRegionController.dispose();
     _previewPlayer.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -204,13 +236,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 加载 WebView 话题详情页开关
     final useWebViewConversation = prefs.getBool('use_webview_conversation') ?? false;
 
-    // 加载 WebDAV 配置
-    final loadMode = await WebDavService.getLoadMode();
+    await SyncPreferences.migrateFromLegacyIfNeeded();
+    final autoSources = await SyncPreferences.getAutoSources();
+
     final webdavConfig = await WebDavService.loadConfig();
 
     // 加载本地文件夹配置
     final localFolderConfig = await LocalFolderSyncService.loadConfig();
     final localFolderAutoLoad = await LocalFolderSyncService.getAutoLoad();
+
+    final httpPullPrefs = await LanHttpSyncPullPrefs.load();
+
+    final webdavConfigured = webdavConfig.isValid;
+    final localFolderConfigured = localFolderConfig.folderPath.trim().isNotEmpty;
+    final httpPullConfigured = httpPullPrefs.baseUrl.trim().isNotEmpty &&
+        httpPullPrefs.baseUrl.trim() != 'http://';
+
+    LanHttpSyncConfig? lanHttpSyncConfig;
+    LanHttpSyncServerStatus lanHttpSyncStatus = const LanHttpSyncStopped();
+    if (PlatformUtils.isDesktop) {
+      await LanHttpSyncServerService.instance.init();
+      lanHttpSyncConfig = LanHttpSyncServerService.instance.config;
+      lanHttpSyncStatus = LanHttpSyncServerService.instance.currentStatus;
+    }
 
     // 加载 TTS 设置
     final ttsJson = prefs.getString(TtsSettings.prefKey);
@@ -226,13 +274,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _apiUrlController.text = apiUrl;
       _apiKeyController.text = apiKey;
       _modelController.text = model;
-      _loadMode = loadMode;
+      _autoWebDavEnabled = autoSources[SyncSourceType.webdav] ?? false;
+      _autoLocalFolderEnabled = autoSources[SyncSourceType.localFolder] ?? false;
+      _autoLanReceiveEnabled = autoSources[SyncSourceType.lanReceive] ?? false;
+      _autoHttpPullEnabled = autoSources[SyncSourceType.httpPull] ?? false;
       _webdavUrlController.text = webdavConfig.url;
       _webdavUsernameController.text = webdavConfig.username;
       _webdavPasswordController.text = webdavConfig.password;
       _webdavPathController.text = webdavConfig.path;
       _localFolderPathController.text = localFolderConfig.folderPath;
       _localFolderAutoLoad = localFolderAutoLoad;
+      _httpPullBaseUrlController.text = httpPullPrefs.baseUrl;
+      _httpPullTokenController.text = httpPullPrefs.token;
+      _lanHttpSyncConfig = lanHttpSyncConfig;
+      _lanHttpSyncStatus = lanHttpSyncStatus;
+      _lanHttpSyncPortController.text =
+          (lanHttpSyncConfig?.port ?? LanHttpSyncConfig.defaultPort).toString();
+
+      _syncSourceExpanded[SyncSourceType.webdav] =
+          (autoSources[SyncSourceType.webdav] ?? false) && !webdavConfigured;
+      _syncSourceExpanded[SyncSourceType.localFolder] =
+          (autoSources[SyncSourceType.localFolder] ?? false) && !localFolderConfigured;
+      _syncSourceExpanded[SyncSourceType.httpPull] =
+          (autoSources[SyncSourceType.httpPull] ?? false) && !httpPullConfigured;
+      _syncSourceExpanded[SyncSourceType.lanReceive] =
+          (autoSources[SyncSourceType.lanReceive] ?? false) == true;
+      _syncToolExpanded['httpServer'] = (lanHttpSyncStatus is LanHttpSyncRunning);
       
       // Load Azure Keys
       _azureKeyControllers.clear();
@@ -253,6 +320,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _azureRegionController.text = _ttsSettings.azureRegion;
       _isLoading = false;
     });
+
+    if (PlatformUtils.isDesktop) {
+      _lanHttpSyncStatusSubscription?.cancel();
+      _lanHttpSyncStatusSubscription =
+          LanHttpSyncServerService.instance.statusStream.listen((status) {
+        if (!mounted) return;
+        setState(() {
+          _lanHttpSyncStatus = status;
+        });
+      });
+    }
   }
 
   @override
@@ -267,6 +345,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : Form(
               key: _formKey,
               child: ListView(
+                controller: _scrollController,
                 padding: const EdgeInsets.all(16),
                 children: [
                   // ========== 界面设置 ==========
@@ -276,9 +355,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   // ========== 数据与同步 ==========
                   _buildSectionHeader('数据与同步', Icons.cloud_sync_outlined),
-                  _buildWebDavSection(),
-                  const SizedBox(height: 12),
-                  _buildVersionManagementSection(),
+                  _buildSyncSettingsSection(),
                   const SizedBox(height: 24),
 
                   // ========== 知识管理 ==========
@@ -342,203 +419,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 构建版本管理部分
-  Widget _buildVersionManagementSection() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 使用 FutureBuilder 获取版本列表
-            FutureBuilder<List<DataVersion>>(
-              future: VersionService.instance.listVersions(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()),
-                  );
-                }
-
-                final versions = snapshot.data ?? [];
-
-                if (versions.isEmpty) {
-                  return Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Colors.grey[400], size: 18),
-                      const SizedBox(width: 8),
-                      Text('暂无版本数据', style: TextStyle(color: Colors.grey[500])),
-                    ],
-                  );
-                }
-
-                // 找到当前活跃版本
-                final activeVersion = versions.firstWhere(
-                  (v) => v.status == VersionStatus.active,
-                  orElse: () => versions.first,
-                );
-
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 当前版本信息
-                    Row(
-                      children: [
-                        Icon(Icons.check_circle, color: Colors.green[600], size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(activeVersion.displayName, style: const TextStyle(fontWeight: FontWeight.w500)),
-                              Text(
-                                '${activeVersion.topicCount} 话题 · ${activeVersion.formattedSize}',
-                                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (activeVersion.isLocked)
-                          Icon(Icons.lock, size: 16, color: Colors.orange[700]),
-                      ],
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // 锁定开关
-                    Row(
-                      children: [
-                        Text('锁定版本', style: TextStyle(fontSize: 13, color: Colors.grey[600])),
-                        const Spacer(),
-                        Switch(
-                          value: activeVersion.isLocked,
-                          onChanged: (value) async {
-                            await VersionService.instance.setVersionLocked(value);
-                            setState(() {});
-                          },
-                        ),
-                      ],
-                    ),
-
-                    // 历史版本列表
-                    if (versions.length > 1) ...[
-                      const Divider(),
-                      Text('历史版本', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.grey[600])),
-                      const SizedBox(height: 8),
-                      ...versions
-                          .where((v) => v.status != VersionStatus.active)
-                          .map((version) => _buildVersionListItem(version)),
-                    ],
-                  ],
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 构建版本列表项
-  Widget _buildVersionListItem(DataVersion version) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[200]!),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.archive, color: Colors.grey[400], size: 20),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(version.displayName),
-                Text(
-                  '${version.topicCount} 话题 • ${version.formattedSize}',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-              ],
-            ),
-          ),
-          TextButton(
-            onPressed: () async {
-              final success = await VersionService.instance.activateVersion(
-                version.versionId,
-                force: true,
-              );
-              if (success && mounted) {
-                setState(() {});
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('已切换到版本: ${version.displayName}'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            },
-            child: const Text('切换'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, size: 20),
-            color: Colors.red[300],
-            onPressed: () => _confirmDeleteVersion(version),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 确认删除版本
-  Future<void> _confirmDeleteVersion(DataVersion version) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除版本'),
-        content: Text('确定要删除版本 "${version.displayName}" 吗？\n\n此操作不可撤销。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true) {
-      try {
-        await VersionService.instance.deleteVersion(version.versionId);
-        if (mounted) {
-          setState(() {});
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('版本已删除'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('删除失败: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    }
-  }
-
   /// 构建 MCP Server 设置部分（仅桌面端）
   Widget _buildMCPServerSection() {
     return Card(
@@ -566,7 +446,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                 decoration: BoxDecoration(
-                                  color: isRunning ? Colors.green.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                                  color: isRunning
+                                      ? Colors.green.withValues(alpha: 26)
+                                      : Colors.grey.withValues(alpha: 26),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
@@ -701,7 +583,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             DropdownButtonFormField<AIToolType>(
-              value: selectedTool,
+              initialValue: selectedTool,
               decoration: const InputDecoration(
                 labelText: '选择 AI 工具',
                 isDense: true,
@@ -816,243 +698,950 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 构建 WebDAV 配置部分
-  Widget _buildWebDavSection() {
+  Widget _buildSyncSettingsSection() {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 模式切换
-            SegmentedButton<DataLoadMode>(
-              segments: [
-                const ButtonSegment(
-                  value: DataLoadMode.manual,
-                  label: Text('手动'),
-                  icon: Icon(Icons.folder_open, size: 18),
-                ),
-                if (PlatformUtils.supportsLocalFolderSync)
-                  const ButtonSegment(
-                    value: DataLoadMode.localFolder,
-                    label: Text('文件夹'),
-                    icon: Icon(Icons.folder_copy, size: 18),
-                  ),
-                const ButtonSegment(
-                  value: DataLoadMode.webdav,
-                  label: Text('WebDAV'),
-                  icon: Icon(Icons.cloud, size: 18),
-                ),
-              ],
-              selected: {_loadMode},
-              onSelectionChanged: (Set<DataLoadMode> selected) async {
-                final mode = selected.first;
-                setState(() => _loadMode = mode);
-                await WebDavService.setLoadMode(mode);
-              },
-            ),
-
-            // 本地文件夹配置表单
-            if (_loadMode == DataLoadMode.localFolder) ...[
-              const SizedBox(height: 24),
-
-              // 说明
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.blue[100]!),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.info_outline, color: Colors.blue[700], size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          '如何找到备份目录',
-                          style: TextStyle(
-                            color: Colors.blue[800],
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Cherry Studio：设置 → 数据设置 → 本地备份 → 备份目录',
-                      style: TextStyle(color: Colors.blue[800], fontSize: 13),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // 文件夹路径
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _localFolderPathController,
-                      readOnly: true,
-                      decoration: const InputDecoration(
-                        labelText: '备份文件夹路径',
-                        hintText: '点击右侧按钮选择文件夹',
-                        prefixIcon: Icon(Icons.folder),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.folder_open),
-                    onPressed: _selectLocalFolder,
-                    tooltip: '选择文件夹',
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 24),
-
-              // 自动加载开关
-              SwitchListTile(
-                title: const Text('检测到新版本时自动加载'),
-                subtitle: const Text('关闭后需手动点击状态栏加载'),
-                value: _localFolderAutoLoad,
-                onChanged: (value) async {
-                  setState(() => _localFolderAutoLoad = value);
-                  await LocalFolderSyncService.setAutoLoad(value);
-                },
-                contentPadding: EdgeInsets.zero,
-              ),
-
-              const SizedBox(height: 24),
-
-              // 验证和保存按钮
-              Row(
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: _isValidatingFolder ? null : _validateLocalFolder,
-                    icon: _isValidatingFolder
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.check_circle_outline),
-                    label: Text(_isValidatingFolder ? '验证中...' : '验证文件夹'),
-                  ),
-                  const SizedBox(width: 16),
-                  ElevatedButton.icon(
-                    onPressed: _saveLocalFolderConfig,
-                    icon: const Icon(Icons.save),
-                    label: const Text('保存配置'),
-                  ),
-                ],
-              ),
-            ],
-
-            // WebDAV 配置表单
-            if (_loadMode == DataLoadMode.webdav) ...[
-              const SizedBox(height: 24),
-
-              // WebDAV URL
-              TextFormField(
-                controller: _webdavUrlController,
-                decoration: const InputDecoration(
-                  labelText: 'WebDAV 地址',
-                  hintText: 'https://example.com/dav/',
-                  prefixIcon: Icon(Icons.link),
-                  border: OutlineInputBorder(),
-                  helperText: 'WebDAV 服务器地址',
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // 用户名
-              TextFormField(
-                controller: _webdavUsernameController,
-                decoration: const InputDecoration(
-                  labelText: '用户名',
-                  prefixIcon: Icon(Icons.person),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // 密码
-              TextFormField(
-                controller: _webdavPasswordController,
-                obscureText: _obscureWebdavPassword,
-                decoration: InputDecoration(
-                  labelText: '密码',
-                  prefixIcon: const Icon(Icons.lock),
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscureWebdavPassword
-                          ? Icons.visibility_off
-                          : Icons.visibility,
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        _obscureWebdavPassword = !_obscureWebdavPassword;
-                      });
-                    },
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // 路径
-              TextFormField(
-                controller: _webdavPathController,
-                decoration: const InputDecoration(
-                  labelText: '备份文件路径',
-                  hintText: '/cherry-studio',
-                  prefixIcon: Icon(Icons.folder),
-                  border: OutlineInputBorder(),
-                  helperText: 'Cherry Studio 备份文件所在目录',
-                ),
-              ),
-
-              const SizedBox(height: 24),
-
-              // 按钮行
-              Row(
-                children: [
-                  // 测试连接按钮
-                  OutlinedButton.icon(
-                    onPressed: _isTestingConnection ? null : _testWebDavConnection,
-                    icon: _isTestingConnection
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.wifi_find),
-                    label: Text(_isTestingConnection ? '测试中...' : '测试连接'),
-                  ),
-                  const SizedBox(width: 16),
-                  // 保存按钮
-                  ElevatedButton.icon(
-                    onPressed: _saveWebDavConfig,
-                    icon: const Icon(Icons.save),
-                    label: const Text('保存配置'),
-                  ),
-                ],
-              ),
+            _buildAutoSyncCard(),
+            const SizedBox(height: 14),
+            const Divider(height: 1),
+            const SizedBox(height: 14),
+            const Text('同步来源（可多选）',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            _buildSyncSourcesCard(),
+            if (PlatformUtils.isDesktop) ...[
+              const SizedBox(height: 14),
+              const Divider(height: 1),
+              const SizedBox(height: 14),
+              const Text('局域网工具',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              _buildSyncLanToolsCard(),
             ],
           ],
         ),
       ),
+    );
+  }
+
+  bool get _webdavConfigValid =>
+      _webdavUrlController.text.trim().isNotEmpty &&
+      _webdavUsernameController.text.trim().isNotEmpty &&
+      _webdavPasswordController.text.trim().isNotEmpty &&
+      _webdavPathController.text.trim().isNotEmpty;
+
+  bool get _localFolderConfigValid => _localFolderPathController.text.trim().isNotEmpty;
+
+  bool get _httpPullConfigValid {
+    final v = _httpPullBaseUrlController.text.trim();
+    return v.isNotEmpty && v != 'http://';
+  }
+
+  Future<void> _setAutoSource(SyncSourceType type, bool enabled) async {
+    setState(() {
+      switch (type) {
+        case SyncSourceType.webdav:
+          _autoWebDavEnabled = enabled;
+          break;
+        case SyncSourceType.localFolder:
+          _autoLocalFolderEnabled = enabled;
+          break;
+        case SyncSourceType.lanReceive:
+          _autoLanReceiveEnabled = enabled;
+          break;
+        case SyncSourceType.httpPull:
+          _autoHttpPullEnabled = enabled;
+          break;
+        case SyncSourceType.manualImport:
+          break;
+      }
+    });
+    await SyncPreferences.setAutoSourceEnabled(type, enabled);
+
+    if (!mounted) return;
+    if (!enabled) return;
+    final shouldReveal = switch (type) {
+      SyncSourceType.webdav => !_webdavConfigValid,
+      SyncSourceType.localFolder => !_localFolderConfigValid,
+      SyncSourceType.httpPull => !_httpPullConfigValid,
+      SyncSourceType.lanReceive => true,
+      SyncSourceType.manualImport => false,
+    };
+    if (shouldReveal) {
+      setState(() {
+        _syncSourceExpanded[type] = true;
+      });
+    }
+  }
+
+  String _buildSourceStatusText({
+    required bool enabled,
+    required bool configured,
+    String? extra,
+  }) {
+    final parts = <String>[
+      enabled ? '已启用' : '未启用',
+      configured ? '已配置' : '未配置',
+      if (extra != null && extra.trim().isNotEmpty) extra.trim(),
+    ];
+    return parts.join(' · ');
+  }
+
+  Widget _buildPanelActionRow(List<Widget> actions) {
+    if (actions.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: actions,
+    );
+  }
+
+  InputDecoration _panelInputDecoration({
+    required String labelText,
+    String? hintText,
+    IconData? prefixIcon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      labelText: labelText,
+      hintText: hintText,
+      prefixIcon: prefixIcon == null ? null : Icon(prefixIcon),
+      suffixIcon: suffixIcon,
+      border: const OutlineInputBorder(),
+      isDense: true,
+    );
+  }
+
+  Widget _buildAutoSyncCard() {
+    final selected = <String>[];
+    if (_autoLocalFolderEnabled) selected.add('本地文件夹');
+    if (_autoWebDavEnabled) selected.add('WebDAV');
+    if (_autoHttpPullEnabled) selected.add('HTTP 拉取');
+    if (_autoLanReceiveEnabled) selected.add('局域网接收');
+
+    final summary = selected.isEmpty ? '未选择来源' : selected.join(' + ');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Row(
+          children: [
+            Expanded(
+              child: Text(
+                '同步',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '应用会自动按已选来源检查并导入“最新版本”；也可以在首页选择 ZIP 手动导入。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.4),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          '来源：$summary',
+          style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSyncSourcesCard() {
+    final items = <Widget>[
+      _buildSyncSourceItem(
+        type: SyncSourceType.webdav,
+        icon: Icons.cloud_sync_outlined,
+        description: '从 WebDAV 拉取最新备份',
+        enabled: _autoWebDavEnabled,
+        configured: _webdavConfigValid,
+        body: _buildWebDavConfigCard(),
+      ),
+      if (PlatformUtils.supportsLocalFolderSync)
+        _buildSyncSourceItem(
+          type: SyncSourceType.localFolder,
+          icon: Icons.folder_copy_outlined,
+          description: '监听本地备份目录并导入',
+          enabled: _autoLocalFolderEnabled,
+          configured: _localFolderConfigValid,
+          body: _buildLocalFolderConfigCard(),
+        ),
+      if (PlatformUtils.isMobile)
+        _buildSyncSourceItem(
+          type: SyncSourceType.httpPull,
+          icon: Icons.download_outlined,
+          description: '从桌面端 HTTP 同步源下载最新备份',
+          enabled: _autoHttpPullEnabled,
+          configured: _httpPullConfigValid,
+          body: _buildHttpPullConfigCard(),
+        ),
+      if (PlatformUtils.isMobile)
+        _buildSyncSourceItem(
+          type: SyncSourceType.lanReceive,
+          icon: Icons.wifi_tethering_outlined,
+          description: '接收电脑推送的备份 ZIP',
+          enabled: _autoLanReceiveEnabled,
+          configured: true,
+          body: _buildLanReceiveSourceCard(),
+        ),
+    ];
+
+    final children = <Widget>[];
+    for (var i = 0; i < items.length; i++) {
+      if (i > 0) children.add(const Divider(height: 1));
+      children.add(items[i]);
+    }
+
+    return Column(children: children);
+  }
+
+  Widget _buildSyncLanToolsCard() {
+    final items = <Widget>[
+      _buildSyncToolItem(
+        id: 'httpServer',
+        icon: Icons.router_outlined,
+        title: 'HTTP 同步源（桌面端）',
+        subtitle: () {
+          final status = _lanHttpSyncStatus;
+          final isRunning = status is LanHttpSyncRunning;
+          final port = isRunning
+              ? status.port
+              : (_lanHttpSyncConfig?.port ?? LanHttpSyncConfig.defaultPort);
+          return isRunning ? '运行中：$port' : '未运行';
+        }(),
+        body: _buildLanHttpSyncServerCard(),
+      ),
+      _buildSyncToolItem(
+        id: 'lanPush',
+        icon: Icons.send_outlined,
+        title: '局域网推送',
+        subtitle: PlatformUtils.isDesktop ? '桌面端推送 / HTTP 同步源' : '手机端接收 / HTTP 拉取',
+        body: _buildLanSyncSection(),
+      ),
+    ];
+
+    final children = <Widget>[];
+    for (var i = 0; i < items.length; i++) {
+      if (i > 0) children.add(const Divider(height: 1));
+      children.add(items[i]);
+    }
+
+    return Column(children: children);
+  }
+
+  Widget _buildSyncSourceItem({
+    required SyncSourceType type,
+    required IconData icon,
+    required String description,
+    required bool enabled,
+    required bool configured,
+    required Widget body,
+  }) {
+    final expanded = _syncSourceExpanded[type] ?? false;
+    final status = _buildSourceStatusText(enabled: enabled, configured: configured);
+
+    return Column(
+      children: [
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          leading: Checkbox(
+            value: enabled,
+            onChanged: (v) => _setAutoSource(type, v == true),
+          ),
+          title: Row(
+            children: [
+              Icon(icon, size: 20, color: Colors.grey[700]),
+              const SizedBox(width: 10),
+              Expanded(child: Text(type.label, style: const TextStyle(fontWeight: FontWeight.w600))),
+            ],
+          ),
+          subtitle: Text(
+            '$status · $description',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.35),
+          ),
+          trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
+          onTap: () {
+            setState(() => _syncSourceExpanded[type] = !expanded);
+          },
+        ),
+        AnimatedCrossFade(
+          firstChild: const SizedBox.shrink(),
+          secondChild: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: body,
+          ),
+          crossFadeState: expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+          duration: const Duration(milliseconds: 200),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSyncToolItem({
+    required String id,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Widget body,
+  }) {
+    final expanded = _syncToolExpanded[id] ?? false;
+    return Column(
+      children: [
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          leading: Icon(icon, color: Colors.grey[700]),
+          title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+          subtitle: Text(
+            subtitle,
+            style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.35),
+          ),
+          trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
+          onTap: () {
+            setState(() => _syncToolExpanded[id] = !expanded);
+          },
+        ),
+        AnimatedCrossFade(
+          firstChild: const SizedBox.shrink(),
+          secondChild: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: body,
+          ),
+          crossFadeState: expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+          duration: const Duration(milliseconds: 200),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWebDavConfigCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '用于从 WebDAV 拉取 Cherry Studio 备份文件。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _webdavUrlController,
+          decoration: _panelInputDecoration(
+            labelText: 'WebDAV 地址',
+            hintText: 'https://example.com/dav/',
+            prefixIcon: Icons.link,
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _webdavUsernameController,
+          decoration: _panelInputDecoration(
+            labelText: '用户名',
+            prefixIcon: Icons.person,
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _webdavPasswordController,
+          obscureText: _obscureWebdavPassword,
+          decoration: _panelInputDecoration(
+            labelText: '密码',
+            prefixIcon: Icons.lock,
+            suffixIcon: IconButton(
+              icon: Icon(_obscureWebdavPassword ? Icons.visibility_off : Icons.visibility),
+              onPressed: () {
+                setState(() {
+                  _obscureWebdavPassword = !_obscureWebdavPassword;
+                });
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _webdavPathController,
+          decoration: _panelInputDecoration(
+            labelText: '备份文件路径',
+            hintText: '/cherry-studio',
+            prefixIcon: Icons.folder,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildPanelActionRow([
+          OutlinedButton.icon(
+            onPressed: _isTestingConnection ? null : _testWebDavConnection,
+            icon: _isTestingConnection
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.wifi_find),
+            label: Text(_isTestingConnection ? '测试中...' : '测试连接'),
+          ),
+          ElevatedButton.icon(
+            onPressed: _saveWebDavConfig,
+            icon: const Icon(Icons.save),
+            label: const Text('保存配置'),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget _buildLocalFolderConfigCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '监听桌面端 Cherry Studio 的备份目录，检测到新备份即可导入。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue[100]!),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.blue[700], size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Cherry Studio：设置 → 数据设置 → 本地备份 → 备份目录',
+                  style: TextStyle(color: Colors.blue[800], fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: _localFolderPathController,
+                readOnly: true,
+                decoration: _panelInputDecoration(
+                  labelText: '备份目录',
+                  hintText: '点击右侧按钮选择文件夹',
+                  prefixIcon: Icons.folder,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.folder_open),
+              onPressed: _selectLocalFolder,
+              tooltip: '选择文件夹',
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('检测到新版本时自动导入'),
+          subtitle: Text(
+            '关闭后需在首页手动触发导入',
+            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          ),
+          value: _localFolderAutoLoad,
+          onChanged: (value) async {
+            setState(() => _localFolderAutoLoad = value);
+            await LocalFolderSyncService.setAutoLoad(value);
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildPanelActionRow([
+          OutlinedButton.icon(
+            onPressed: _isValidatingFolder ? null : _validateLocalFolder,
+            icon: _isValidatingFolder
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.check_circle_outline),
+            label: Text(_isValidatingFolder ? '验证中...' : '验证文件夹'),
+          ),
+          ElevatedButton.icon(
+            onPressed: _saveLocalFolderConfig,
+            icon: const Icon(Icons.save),
+            label: const Text('保存配置'),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Future<void> _saveHttpPullPrefs() async {
+    await LanHttpSyncPullPrefs.save(
+      baseUrl: _httpPullBaseUrlController.text,
+      token: _httpPullTokenController.text,
+    );
+  }
+
+  Future<void> _testHttpPull() async {
+    if (_isTestingHttpPull) return;
+    setState(() {
+      _isTestingHttpPull = true;
+      _httpPullTestMessage = '测试中...';
+    });
+    await _saveHttpPullPrefs();
+
+    final info = await LanHttpSyncPullPrefs.fetchLatestInfo(
+      baseUrl: _httpPullBaseUrlController.text,
+      token: _httpPullTokenController.text,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _isTestingHttpPull = false;
+      _httpPullTestMessage = info == null
+          ? '不可用：请检查地址、令牌、网络'
+          : '可用：${info.name} · ${(info.size / 1024 / 1024).toStringAsFixed(1)}MB';
+    });
+  }
+
+  Future<void> _importHttpPullFromClipboard() async {
+    final data = await Clipboard.getData('text/plain');
+    final raw = data?.text ?? '';
+    final parsed = LanHttpSyncPullPrefs.parseImportText(raw);
+    if (parsed == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('剪贴板内容不可识别：请复制桌面端“导入串/下载地址”'), duration: Duration(seconds: 2)),
+      );
+      return;
+    }
+
+    _httpPullBaseUrlController.text = parsed.baseUrl;
+    _httpPullTokenController.text = parsed.token;
+    await _saveHttpPullPrefs();
+
+    if (!mounted) return;
+    setState(() => _httpPullTestMessage = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已从剪贴板导入'), duration: Duration(seconds: 2)),
+    );
+  }
+
+  Widget _buildHttpPullConfigCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '适合不方便用 WebDAV 时：桌面端开启同步源，手机端通过 HTTP 下载最新备份。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _httpPullBaseUrlController,
+          decoration: _panelInputDecoration(
+            labelText: '桌面端地址',
+            hintText: 'http://192.168.1.10:9531',
+            prefixIcon: Icons.link,
+          ),
+          onChanged: (_) => _saveHttpPullPrefs(),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _httpPullTokenController,
+          decoration: _panelInputDecoration(
+            labelText: '令牌（可选）',
+            prefixIcon: Icons.key,
+          ),
+          onChanged: (_) => _saveHttpPullPrefs(),
+        ),
+        const SizedBox(height: 12),
+        _buildPanelActionRow([
+          OutlinedButton.icon(
+            onPressed: _importHttpPullFromClipboard,
+            icon: const Icon(Icons.content_paste),
+            label: const Text('从剪贴板导入'),
+          ),
+          OutlinedButton.icon(
+            onPressed: _isTestingHttpPull ? null : _testHttpPull,
+            icon: _isTestingHttpPull
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.wifi_find),
+            label: Text(_isTestingHttpPull ? '测试中...' : '测试连接'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              await _saveHttpPullPrefs();
+              if (!mounted) return;
+              await Navigator.push<void>(
+                context,
+                MaterialPageRoute(builder: (_) => const LanHttpSyncPullScreen()),
+              );
+            },
+            icon: const Icon(Icons.download),
+            label: const Text('打开下载页'),
+          ),
+        ]),
+        if (_httpPullTestMessage != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            _httpPullTestMessage!,
+            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildLanReceiveSourceCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '电脑端可扫描并推送备份 ZIP 到手机；手机端需要打开接收页。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
+        ),
+        const SizedBox(height: 12),
+        _buildPanelActionRow([
+          OutlinedButton.icon(
+            onPressed: () async {
+              final received = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(builder: (_) => const LanTransferReceiveScreen()),
+              );
+              if (!mounted) return;
+              if (received == true) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✅ 已接收备份文件，返回首页后点右上角“同步”导入'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+                Navigator.of(context).pop();
+                return;
+              }
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('保持接收页打开，发送完成后返回首页可导入（右上角“同步”）'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            icon: const Icon(Icons.wifi_tethering_outlined),
+            label: const Text('打开接收页'),
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Future<void> _applyLanHttpSyncConfig(LanHttpSyncConfig next) async {
+    await LanHttpSyncServerService.instance.updateConfig(next);
+    if (!PlatformUtils.isDesktop) return;
+
+    if (!next.enabled) {
+      await LanHttpSyncServerService.instance.stop();
+      return;
+    }
+    if (LanHttpSyncServerService.instance.currentStatus is LanHttpSyncRunning) {
+      await LanHttpSyncServerService.instance.restart(port: next.port);
+    } else {
+      await LanHttpSyncServerService.instance.start(port: next.port);
+    }
+  }
+
+  Widget _buildLanHttpSyncServerCard() {
+    final cfg = _lanHttpSyncConfig;
+    final status = _lanHttpSyncStatus;
+    final isRunning = status is LanHttpSyncRunning;
+    final enabled = cfg?.enabled ?? false;
+    final addresses = isRunning ? status.addresses : const <String>[];
+    final port = isRunning ? status.port : (cfg?.port ?? LanHttpSyncConfig.defaultPort);
+    final token = cfg?.token ?? '';
+    final preferredAddress = addresses.isEmpty
+        ? null
+        : addresses.firstWhere(
+            (e) => !(e.startsWith('127.') || e == 'localhost'),
+            orElse: () => addresses.first,
+          );
+    final preferredBaseUrl =
+        preferredAddress == null ? '' : 'http://$preferredAddress:$port';
+    final importText = preferredBaseUrl.isEmpty
+        ? ''
+        : LanHttpSyncPullPrefs.buildImportString(baseUrl: preferredBaseUrl, token: token);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('运行 HTTP 同步源'),
+          subtitle: Text(
+            !enabled
+                ? '已关闭'
+                : (status is LanHttpSyncRunning)
+                    ? '运行中：$port'
+                    : (status is LanHttpSyncError)
+                        ? '启动失败：${status.message}'
+                        : '启动中...',
+            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          ),
+          value: enabled,
+          onChanged: (value) async {
+            final current = _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
+            final next = current.copyWith(enabled: value, autoStart: value);
+            setState(() => _lanHttpSyncConfig = next);
+            await _applyLanHttpSyncConfig(next);
+          },
+        ),
+        Text(
+          '打开开关即启动 HTTP 服务；手机端可通过「HTTP 拉取」下载最新备份。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
+        ),
+        const SizedBox(height: 12),
+        const Divider(height: 24),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _lanHttpSyncPortController,
+                decoration: _panelInputDecoration(
+                  labelText: '端口',
+                  prefixIcon: Icons.numbers,
+                ),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              ),
+            ),
+            const SizedBox(width: 12),
+            ElevatedButton(
+              onPressed: () async {
+                final raw = _lanHttpSyncPortController.text.trim();
+                final nextPort = int.tryParse(raw);
+                if (nextPort == null || nextPort <= 0 || nextPort > 65535) return;
+                final current = _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
+                final next = current.copyWith(port: nextPort);
+                setState(() => _lanHttpSyncConfig = next);
+                await _applyLanHttpSyncConfig(next);
+              },
+              child: const Text('保存端口'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          token.isEmpty ? '令牌：无' : '令牌：$token',
+          style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 10),
+        _buildPanelActionRow([
+          OutlinedButton.icon(
+            onPressed: token.isEmpty
+                ? null
+                : () async {
+                    await Clipboard.setData(ClipboardData(text: token));
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('已复制令牌'), duration: Duration(seconds: 2)),
+                    );
+                  },
+            icon: const Icon(Icons.copy),
+            label: const Text('复制令牌'),
+          ),
+          TextButton.icon(
+            onPressed: () async {
+              final current = _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
+              final next = current.copyWith(token: LanHttpSyncConfig.generateToken());
+              setState(() => _lanHttpSyncConfig = next);
+              await _applyLanHttpSyncConfig(next);
+            },
+            icon: const Icon(Icons.refresh),
+            label: const Text('重置令牌'),
+          ),
+        ]),
+        if (addresses.isNotEmpty) ...[
+          const Divider(height: 24),
+          Text(
+            '当前 URL',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700]),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  preferredBaseUrl,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+                ),
+              ),
+              IconButton(
+                onPressed: preferredBaseUrl.isEmpty
+                    ? null
+                    : () async {
+                        await Clipboard.setData(ClipboardData(text: preferredBaseUrl));
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已复制 URL'), duration: Duration(seconds: 2)),
+                        );
+                      },
+                icon: const Icon(Icons.copy),
+                tooltip: '复制',
+              ),
+            ],
+          ),
+          if (importText.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              '导入串（复制到手机端「HTTP 拉取」即可一键导入）',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: SelectableText(
+                    importText,
+                    style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: importText));
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('已复制导入串'), duration: Duration(seconds: 2)),
+                    );
+                  },
+                  icon: const Icon(Icons.copy),
+                  tooltip: '复制',
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Text(
+            '下载地址',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700]),
+          ),
+          const SizedBox(height: 8),
+          ...addresses.map((addr) {
+            final url = 'http://$addr:$port/lan-sync/latest.zip';
+            final withToken = token.isEmpty ? url : '$url?token=$token';
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SelectableText(
+                      withToken,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: withToken));
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('已复制下载地址'), duration: Duration(seconds: 2)),
+                      );
+                    },
+                    icon: const Icon(Icons.copy),
+                    tooltip: '复制',
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildLanSyncSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          PlatformUtils.isDesktop
+              ? '桌面端可扫描手机并推送备份；手机端需要打开接收页。'
+              : '手机端需要保持接收页打开，电脑端才能发现并发送备份。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
+        ),
+        const SizedBox(height: 12),
+        if (PlatformUtils.isMobile) ...[
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.wifi_tethering_outlined),
+            title: const Text('手机端：打开接收页'),
+            subtitle: Text(
+              '打开后电脑端即可发现并发送备份 ZIP',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final received = await Navigator.push<bool>(
+                context,
+                MaterialPageRoute(builder: (_) => const LanTransferReceiveScreen()),
+              );
+              if (!mounted) return;
+              if (received == true) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✅ 已接收备份文件，返回首页后点右上角“同步”导入'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+                Navigator.of(context).pop();
+                return;
+              }
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('保持接收页打开，发送完成后返回首页可导入（右上角“同步”）'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+        ] else ...[
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.send_outlined),
+            title: const Text('桌面端：扫描并推送到手机'),
+            subtitle: Text(
+              '选择备份来源（WebDAV/本地目录/手动 ZIP）→ 推送到手机',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              await Navigator.push<void>(
+                context,
+                MaterialPageRoute(builder: (_) => const LanTransferSendScreen()),
+              );
+            },
+          ),
+          const Divider(height: 24),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.wifi_tethering_outlined),
+            title: const Text('移动端：需要打开接收页'),
+            subtitle: Text(
+              '在手机上：设置 → 数据与同步 → 局域网同步工具 → 手机端：打开接收页',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
+            trailing: const Icon(Icons.info_outline),
+            onTap: null,
+          ),
+        ],
+      ],
     );
   }
 
@@ -1514,13 +2103,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               );
 
-              if (confirmed == true && mounted) {
-                await OnboardingScreen.resetOnboarding();
-                Navigator.of(context).pushNamedAndRemoveUntil(
-                  '/onboarding',
-                  (route) => false,
-                );
-              }
+              if (confirmed != true || !mounted) return;
+              await OnboardingScreen.resetOnboarding();
+              if (!mounted) return;
+              Navigator.of(context).pushNamedAndRemoveUntil(
+                '/onboarding',
+                (route) => false,
+              );
             },
           ),
           const Divider(height: 1),
@@ -1675,7 +2264,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
               );
-            }).toList(),
+            }),
             
             // Add Key Button
             OutlinedButton.icon(
@@ -1998,6 +2587,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       debugPrint('Error stopping preview player: $e');
     }
+    if (!mounted) return;
 
     if (_isPreviewingVoice && _previewingVoiceName == voiceName) {
       setState(() {
@@ -2077,6 +2667,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 如果没有加载声音，尝试自动加载
     if (_availableVoices.isEmpty) {
        await _fetchVoices();
+       if (!mounted) return;
        if (_availableVoices.isEmpty) return; // 加载失败或取消
     }
 
@@ -2258,11 +2849,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildVoiceTile(Map<String, String> voice, bool isFavorite, StateSetter setDialogState, Key? key) {
-    final shortName = voice['shortName'] as String;
-    final localName = voice['localName'] as String;
-    final locale = voice['locale'] as String?;
-    final gender = voice['gender'] as String?;
+  Widget _buildVoiceTile(
+    Map<String, String> voice,
+    bool isFavorite,
+    StateSetter setDialogState,
+    Key? key,
+  ) {
+    final shortName = voice['shortName']!;
+    final localName = voice['localName']!;
+    final locale = voice['locale'];
     final isSelected = shortName == _ttsSettings.defaultVoiceName;
     final isPreviewing = _isPreviewingVoice && _previewingVoiceName == shortName;
 
@@ -2408,10 +3003,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 );
               }
 
-              Navigator.pop(context);
+              if (!mounted) return;
+              Navigator.of(this.context).pop();
               setState(() {}); // 刷新界面
 
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(
                   content: Text('AI 偏好已保存'),
                   backgroundColor: Colors.green,
@@ -2489,6 +3085,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (mounted) {
           final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
           await ttsProvider.reloadSettings();
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('已切换到「$label」节奏'),

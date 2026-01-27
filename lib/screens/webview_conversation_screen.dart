@@ -1,10 +1,19 @@
+import 'dart:math';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:provider/provider.dart';
 import '../models/highlight_data.dart';
+import '../models/knowledge_item.dart';
+import '../models/isar/unified_conversation_entity.dart';
+import '../providers/tts_provider.dart';
 import '../services/conversation_bridge.dart';
 import '../services/highlight_service.dart';
+import '../services/knowledge_entry_service.dart';
 import '../services/topic_service.dart';
+import '../widgets/knowledge/quick_capture_sheet.dart';
+import 'tts_player_screen.dart';
+import 'ai_chat_screen.dart';
 
 /// WebView 版话题详情页
 /// 
@@ -19,6 +28,14 @@ class WebViewConversationScreen extends StatefulWidget {
   final int? scrollToGroupIndex;
   final String? scrollToMessageId;
   final String? scrollToHighlightId;
+  final int? scrollToTextStart;
+  final int? scrollToTextEnd;
+  final String? scrollToQuotedText;
+  final int? scrollToQuotedTextOccurrence;
+  
+  /// 返回回调（用于 Stack 架构）
+  /// 如果提供，则调用此回调而非 Navigator.pop
+  final VoidCallback? onBack;
 
   const WebViewConversationScreen({
     super.key,
@@ -27,6 +44,11 @@ class WebViewConversationScreen extends StatefulWidget {
     this.scrollToGroupIndex,
     this.scrollToMessageId,
     this.scrollToHighlightId,
+    this.scrollToTextStart,
+    this.scrollToTextEnd,
+    this.scrollToQuotedText,
+    this.scrollToQuotedTextOccurrence,
+    this.onBack,
   });
 
   @override
@@ -36,6 +58,7 @@ class WebViewConversationScreen extends StatefulWidget {
 class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
   InAppWebViewController? _controller;
   ConversationBridge? _bridge;
+  Map<String, dynamic>? _pendingNavigationPayload;
   
   bool _isLoading = true;
   bool _isSearchMode = false;
@@ -62,9 +85,50 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant WebViewConversationScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.topicId != oldWidget.topicId) return;
+
+    final shouldNavigate = widget.scrollToGroupIndex != oldWidget.scrollToGroupIndex ||
+        widget.scrollToMessageId != oldWidget.scrollToMessageId ||
+        widget.scrollToHighlightId != oldWidget.scrollToHighlightId ||
+        widget.scrollToTextStart != oldWidget.scrollToTextStart ||
+        widget.scrollToTextEnd != oldWidget.scrollToTextEnd ||
+        widget.scrollToQuotedText != oldWidget.scrollToQuotedText ||
+        widget.scrollToQuotedTextOccurrence != oldWidget.scrollToQuotedTextOccurrence;
+
+    if (shouldNavigate) {
+      _pendingNavigationPayload = _buildNavigationPayload();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _tryNavigate());
+    }
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Map<String, dynamic> _buildNavigationPayload() {
+    return <String, dynamic>{
+      'scrollToRoundIndex': widget.scrollToGroupIndex,
+      'scrollToMessageId': widget.scrollToMessageId,
+      'scrollToHighlightId': widget.scrollToHighlightId,
+      'scrollToTextStart': widget.scrollToTextStart,
+      'scrollToTextEnd': widget.scrollToTextEnd,
+      'scrollToQuotedText': widget.scrollToQuotedText,
+      'scrollToQuotedTextOccurrence': widget.scrollToQuotedTextOccurrence,
+    };
+  }
+
+  Future<void> _tryNavigate() async {
+    if (_controller == null || _pendingNavigationPayload == null) return;
+    if (_isLoading) return;
+    final payload = _pendingNavigationPayload;
+    _pendingNavigationPayload = null;
+    await _controller!.evaluateJavascript(
+      source: 'window.navigateTo(${jsonEncode(payload)})',
+    );
   }
 
   /// 【新增】优雅退出：先淡出遮盖再 pop
@@ -197,6 +261,25 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
     debugPrint('[WebViewConversation] Loaded highlights for ${_highlightsMap.length} messages');
   }
 
+  Future<void> _refreshHighlightsForMessage(String messageId) async {
+    if (messageId.isEmpty) return;
+    final highlightService = HighlightService();
+    final highlights = await highlightService.loadHighlights(messageId);
+
+    if (highlights.isNotEmpty) {
+      _highlightsMap[messageId] =
+          highlights.map((h) => ConversationDataConverter.convertHighlight(h.toJson())).toList();
+    } else {
+      _highlightsMap.remove(messageId);
+    }
+
+    final payload = _highlightsMap[messageId] ?? const <Map<String, dynamic>>[];
+    await _controller?.evaluateJavascript(
+      source:
+          'window.HighlightManager && window.HighlightManager.applyHighlights(${jsonEncode(messageId)}, ${jsonEncode(payload)})',
+    );
+  }
+
   void _setupBridge(InAppWebViewController controller) {
     _bridge = ConversationBridge(controller);
     
@@ -205,6 +288,7 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
       setState(() {
         _isLoading = false;
       });
+      _tryNavigate();
     };
 
     _bridge!.onScrollChanged = (data) {
@@ -218,6 +302,10 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
 
     _bridge!.onTabChanged = (data) {
       debugPrint('[WebViewConversation] Tab changed: $data');
+    };
+
+    _bridge!.onTextSelected = (data) {
+      debugPrint('[WebViewConversation] Text selected: $data');
     };
 
     _bridge!.onHighlightCreated = (data) async {
@@ -235,6 +323,28 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
       await _deleteHighlight(data);
     };
 
+    _bridge!.onOpenAnnotationEditor = (data) async {
+      final selectedText = data['text'] as String? ?? '';
+      final messageId = data['messageId'] as String? ?? '';
+      final selectionStart = data['selectionStart'] as int?;
+      final selectionEnd = data['selectionEnd'] as int?;
+      if (!mounted || messageId.isEmpty) return;
+
+      await QuickCaptureSheet.show(
+        context: context,
+        selectedText: selectedText,
+        selectionStart: selectionStart,
+        selectionEnd: selectionEnd,
+        messageId: messageId,
+        topicId: widget.topicId,
+        topicName: widget.topicName,
+        initialType: KnowledgeType.annotation,
+        onCreated: () {
+          _refreshHighlightsForMessage(messageId);
+        },
+      );
+    };
+
     _bridge!.onSearchResult = (data) {
       setState(() {
         _searchTotal = data['total'] as int? ?? 0;
@@ -242,14 +352,57 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
       });
     };
 
-    _bridge!.onPlayTTS = (data) {
+    _bridge!.onPlayTTS = (data) async {
       debugPrint('[WebViewConversation] Play TTS: $data');
-      // TODO: 调用 TTS 服务
+      final roundIndex = data['roundIndex'] as int? ?? _currentRoundIndex;
+      
+      // 获取当前轮次的 assistant 回复内容
+      if (roundIndex >= 0 && roundIndex < _groups.length) {
+        final group = _groups[roundIndex];
+        final replies = group['assistantReplies'] as List? ?? [];
+        if (replies.isNotEmpty) {
+          // 默认使用第一个回复（主线）
+          final reply = replies.first as Map<String, dynamic>;
+          final content = reply['content'] as String? ?? '';
+          final messageId = reply['id'] as String? ?? '';
+          
+          if (content.isNotEmpty && mounted) {
+            // 使用 TtsProvider 启动朗读
+            final ttsProvider = context.read<TtsProvider>();
+            await ttsProvider.startReading(
+              messageId: messageId,
+              text: content,
+              title: widget.topicName,
+            );
+            
+            // 跳转到 TTS 播放页面
+            if (mounted) {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TtsPlayerScreen()),
+              );
+            }
+          }
+        }
+      }
     };
 
     _bridge!.onOpenDiscussion = (data) {
       debugPrint('[WebViewConversation] Open discussion: $data');
-      // TODO: 跳转到讨论页面
+      final roundIndex = data['roundIndex'] as int? ?? _currentRoundIndex;
+      final replyIndex = data['replyIndex'] as int? ?? 0;
+      
+      // 获取对应的回复数据
+      if (roundIndex >= 0 && roundIndex < _groups.length) {
+        final group = _groups[roundIndex];
+        final replies = group['assistantReplies'] as List? ?? [];
+        if (replyIndex >= 0 && replyIndex < replies.length) {
+          final reply = replies[replyIndex] as Map<String, dynamic>;
+          _openSingleMessageDiscussion(reply);
+        } else if (replies.isNotEmpty) {
+          // 默认使用第一个回复
+          _openSingleMessageDiscussion(replies.first as Map<String, dynamic>);
+        }
+      }
     };
 
     _bridge!.onRequestRounds = (indices) async {
@@ -273,22 +426,52 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
   Future<void> _injectConversationData() async {
     if (_bridge == null || _groups.isEmpty) return;
 
+    int? targetGroupIndex = widget.scrollToGroupIndex;
+    if (targetGroupIndex == null && widget.scrollToMessageId != null) {
+      targetGroupIndex = _findGroupIndexForMessageId(widget.scrollToMessageId!);
+      if (targetGroupIndex == -1) {
+        targetGroupIndex = null;
+      }
+    }
+
+    final initialLoadCount = min(
+      _groups.length,
+      max(3, (targetGroupIndex ?? -1) + 1),
+    );
+
     // 转换数据格式
     final data = ConversationDataConverter.convertConversation(
       topicId: widget.topicId,
       topicName: widget.topicName,
       isDarkMode: Theme.of(context).brightness == Brightness.dark,
-      groups: _groups.take(3).toList(), // 首屏只加载 3 轮
+      groups: _groups.take(initialLoadCount).toList(),
       highlightsMap: _highlightsMap,
       scrollToRoundIndex: widget.scrollToGroupIndex,
       scrollToMessageId: widget.scrollToMessageId,
       scrollToHighlightId: widget.scrollToHighlightId,
+      scrollToTextStart: widget.scrollToTextStart,
+      scrollToTextEnd: widget.scrollToTextEnd,
+      scrollToQuotedText: widget.scrollToQuotedText,
+      scrollToQuotedTextOccurrence: widget.scrollToQuotedTextOccurrence,
     );
 
     // 更新总轮次数
     data['totalRounds'] = _groups.length;
 
     await _bridge!.initConversation(data);
+  }
+
+  int _findGroupIndexForMessageId(String messageId) {
+    for (int i = 0; i < _groups.length; i++) {
+      final group = _groups[i];
+      final user = group['userMessage'] as Map<String, dynamic>?;
+      if (user?['id'] == messageId) return i;
+      final replies = group['assistantReplies'] as List? ?? [];
+      for (final reply in replies) {
+        if (reply is Map && reply['id'] == messageId) return i;
+      }
+    }
+    return -1;
   }
 
   // ========== 高亮操作 ==========
@@ -301,20 +484,15 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
       final highlightService = HighlightService();
       
       // 构建 HighlightData
-      final ranges = (data['ranges'] as List?)?.map((r) => HighlightRange(
-        blockIndex: r['blockIndex'] as int? ?? 0,
-        start: r['start'] as int? ?? 0,
-        end: r['end'] as int? ?? 0,
-        text: r['text'] as String? ?? '',
-      )).toList() ?? [];
-      
       final highlight = HighlightData(
         id: data['id'] as String?,
         messageId: messageId,
+        start: data['start'] as int? ?? 0,
+        end: data['end'] as int? ?? 0,
         text: data['text'] as String? ?? '',
         color: data['color'] as String? ?? '#FFF176',
         style: data['style'] as String? ?? 'background',
-        ranges: ranges,
+        ranges: const [],
         prefix: data['prefix'] as String? ?? '',
         suffix: data['suffix'] as String? ?? '',
       );
@@ -363,11 +541,55 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
       
       final highlightService = HighlightService();
       await highlightService.removeHighlight(messageId, highlightId);
+      highlightService.clearCache(messageId);
+
+      final text = data['text'] as String? ?? '';
+      if (text.isNotEmpty) {
+        final entryService = KnowledgeEntryService();
+        final entry = await entryService.getEntry(highlightId);
+        if (entry == null) {
+          await entryService.deleteByMessageAndQuotedText(messageId, text);
+          highlightService.clearCache(messageId);
+        }
+      }
       
       debugPrint('[WebViewConversation] Highlight deleted: $highlightId');
     } catch (e) {
       debugPrint('[WebViewConversation] Failed to delete highlight: $e');
     }
+  }
+
+  // ========== 讨论 ==========
+  
+  void _openSingleMessageDiscussion(Map<String, dynamic> reply) {
+    final model = reply['model'] as Map<String, dynamic>?;
+    final modelName = model?['name'] as String? ?? reply['modelName'] as String? ?? 'Assistant';
+    final messageId = reply['id'] as String? ?? '';
+    final content = reply['content'] as String? ?? '';
+
+    // 构建上下文数据
+    final contextData = {
+      'rounds': [
+        {
+          'index': 0,
+          'question': null,
+          'replies': [reply],
+        }
+      ],
+    };
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AIChatScreen(
+          initialContextId: messageId,
+          initialContextSnapshot: content,
+          initialTitle: '讨论: $modelName',
+          initialContextData: contextData,
+          contextTypeFilter: ConversationContextType.singleMessage,
+        ),
+      ),
+    );
   }
 
   // ========== 搜索 ==========
@@ -398,16 +620,21 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
     final bgColor = isDark ? const Color(0xFF1a1a1a) : const Color(0xFFF8F9FA);
     
     return PopScope(
-      canPop: false,
+      canPop: widget.onBack == null, // 如果没有 onBack，允许正常 pop
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
         
-        // 先显示遮盖
+        // 使用 onBack 回调（Stack 架构）
+        if (widget.onBack != null) {
+          widget.onBack!();
+          return;
+        }
+        
+        // 兼容 Navigator.push 模式：先显示遮盖再 pop
         setState(() {
           _isExiting = true;
         });
         
-        // 等待一小段时间让遮盖层渲染
         await Future.delayed(const Duration(milliseconds: 100));
         
         if (mounted) {
@@ -430,8 +657,16 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
                     transparentBackground: false,
                     supportZoom: false,
                     useHybridComposition: true,
+                    cacheEnabled: false,
+                    clearCache: true,
                     allowsInlineMediaPlayback: true,
                     mediaPlaybackRequiresUserGesture: false,
+                    verticalScrollBarEnabled: false,
+                    horizontalScrollBarEnabled: false,
+                    disallowOverScroll: true,
+                    overScrollMode: OverScrollMode.NEVER,
+                    alwaysBounceVertical: false,
+                    alwaysBounceHorizontal: false,
                   ),
                   onWebViewCreated: (controller) {
                     _controller = controller;
@@ -516,6 +751,16 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
     }
 
     return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () {
+          if (widget.onBack != null) {
+            widget.onBack!();
+          } else {
+            Navigator.of(context).maybePop();
+          }
+        },
+      ),
       title: Text(
         widget.topicName,
         maxLines: 1,

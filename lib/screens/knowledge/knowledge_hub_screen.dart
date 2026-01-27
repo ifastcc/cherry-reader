@@ -321,10 +321,8 @@ class KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
   // ==================== 事件处理 ====================
 
   void _handleItemTap(KnowledgeItem item) {
-    if (item.type == KnowledgeType.highlight) {
-      if (item.hasSource) {
-        _handleSourceTap(item);
-      }
+    if (item.hasSource && item.sourceTopicId != null && item.sourceMessageId != null) {
+      _handleSourceTap(item);
       return;
     }
 
@@ -355,7 +353,11 @@ class KnowledgeHubScreenState extends State<KnowledgeHubScreen> {
           topicName: item.sourceTopicName ?? '未知话题',
           scrollToMessageId: item.sourceMessageId,
           // 【精确定位】传递高亮 ID，用于定位到具体高亮位置
-          scrollToHighlightId: item.type == KnowledgeType.highlight ? item.id : null,
+          scrollToHighlightId: item.type == KnowledgeType.note ? null : item.id,
+          scrollToTextStart: item.originalEntry?.start,
+          scrollToTextEnd: item.originalEntry?.end,
+          scrollToQuotedText: item.quotedText,
+          scrollToQuotedTextOccurrence: 0,
         ),
       ),
     );

@@ -1,5 +1,3 @@
-import '../../services/webdav_service.dart' show DataLoadMode;
-
 /// 简化的状态栏阶段（只有 4 种用户可感知的状态）
 enum StatusBarPhase {
   /// 正常/空闲（灰色）
@@ -20,8 +18,7 @@ class StatusBarState {
   /// 当前阶段
   final StatusBarPhase phase;
 
-  /// 数据加载模式
-  final DataLoadMode loadMode;
+  final String modeLabel;
 
   /// 同步进度 0-1（仅 syncing 阶段使用）
   final double? progress;
@@ -46,7 +43,7 @@ class StatusBarState {
 
   const StatusBarState({
     required this.phase,
-    required this.loadMode,
+    required this.modeLabel,
     this.progress,
     this.syncMessage,
     this.errorDetail,
@@ -58,7 +55,7 @@ class StatusBarState {
 
   /// 创建空闲状态
   factory StatusBarState.idle({
-    required DataLoadMode loadMode,
+    required String modeLabel,
     String? versionDisplay,
     int? topicCount,
     int? todayTopicCount,
@@ -66,7 +63,7 @@ class StatusBarState {
   }) {
     return StatusBarState(
       phase: StatusBarPhase.idle,
-      loadMode: loadMode,
+      modeLabel: modeLabel,
       versionDisplay: versionDisplay,
       topicCount: topicCount,
       todayTopicCount: todayTopicCount,
@@ -76,7 +73,7 @@ class StatusBarState {
 
   /// 创建同步中状态
   factory StatusBarState.syncing({
-    required DataLoadMode loadMode,
+    required String modeLabel,
     double? progress,
     String? message,
     String? versionDisplay,
@@ -84,7 +81,7 @@ class StatusBarState {
   }) {
     return StatusBarState(
       phase: StatusBarPhase.syncing,
-      loadMode: loadMode,
+      modeLabel: modeLabel,
       progress: progress,
       syncMessage: message,
       versionDisplay: versionDisplay,
@@ -94,13 +91,13 @@ class StatusBarState {
 
   /// 创建"有新版本"状态
   factory StatusBarState.hasUpdate({
-    required DataLoadMode loadMode,
+    required String modeLabel,
     String? versionDisplay,
     int? topicCount,
   }) {
     return StatusBarState(
       phase: StatusBarPhase.hasUpdate,
-      loadMode: loadMode,
+      modeLabel: modeLabel,
       versionDisplay: versionDisplay,
       topicCount: topicCount,
     );
@@ -108,14 +105,14 @@ class StatusBarState {
 
   /// 创建错误状态
   factory StatusBarState.error({
-    required DataLoadMode loadMode,
+    required String modeLabel,
     required String errorDetail,
     String? versionDisplay,
     int? topicCount,
   }) {
     return StatusBarState(
       phase: StatusBarPhase.error,
-      loadMode: loadMode,
+      modeLabel: modeLabel,
       errorDetail: errorDetail,
       versionDisplay: versionDisplay,
       topicCount: topicCount,
@@ -152,7 +149,7 @@ class StatusBarState {
         if (parts.isNotEmpty) {
           return parts.join(' · ');
         }
-        return _modeText;
+        return modeLabel;
       case StatusBarPhase.syncing:
         return syncMessage ?? '同步中...';
       case StatusBarPhase.hasUpdate:
@@ -204,16 +201,8 @@ class StatusBarState {
     }
   }
 
-  String get _modeText {
-    return switch (loadMode) {
-      DataLoadMode.webdav => 'WebDAV',
-      DataLoadMode.localFolder => '本地同步',
-      DataLoadMode.manual => '手动模式',
-    };
-  }
-
   @override
   String toString() {
-    return 'StatusBarState(phase: $phase, loadMode: $loadMode, progress: $progress)';
+    return 'StatusBarState(phase: $phase, modeLabel: $modeLabel, progress: $progress)';
   }
 }

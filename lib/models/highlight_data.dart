@@ -47,13 +47,18 @@ class HighlightRange {
 /// 用于 WebView 通信的标准格式
 /// - color: CSS 十六进制字符串 '#FFF176'
 /// - style: 'background' | 'underline' | 'wavy' | 'box' | 'dashed'
-/// - ranges: 简化的 Block 内偏移
+/// - start/end: 相对 message 容器 textContent 的全局字符偏移
+/// - ranges: 兼容用于原生卡片的 Block 内偏移（可为空）
 class HighlightData {
   /// 唯一标识（UUID）
   final String id;
 
   /// 关联的消息 ID
   final String messageId;
+
+  /// 相对 message 容器的全局字符偏移
+  final int start;
+  final int end;
 
   /// 完整高亮文本
   final String text;
@@ -79,6 +84,8 @@ class HighlightData {
   HighlightData({
     String? id,
     required this.messageId,
+    required this.start,
+    required this.end,
     required this.text,
     required this.color,
     this.style = 'background',
@@ -92,6 +99,8 @@ class HighlightData {
   Map<String, dynamic> toJson() => {
         'id': id,
         'messageId': messageId,
+        'start': start,
+        'end': end,
         'text': text,
         'color': color,
         'style': style,
@@ -111,6 +120,8 @@ class HighlightData {
     return HighlightData(
       id: json['id'] as String?,
       messageId: json['messageId'] as String,
+      start: json['start'] as int? ?? 0,
+      end: json['end'] as int? ?? 0,
       text: json['text'] as String,
       color: json['color'] as String,
       style: json['style'] as String? ?? 'background',
@@ -137,6 +148,8 @@ class HighlightData {
   HighlightData copyWith({
     String? id,
     String? messageId,
+    int? start,
+    int? end,
     String? text,
     String? color,
     String? style,
@@ -148,6 +161,8 @@ class HighlightData {
     return HighlightData(
       id: id ?? this.id,
       messageId: messageId ?? this.messageId,
+      start: start ?? this.start,
+      end: end ?? this.end,
       text: text ?? this.text,
       color: color ?? this.color,
       style: style ?? this.style,
