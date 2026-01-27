@@ -1,6 +1,6 @@
 name: cherry_reader
 description: An immersive reader for Cherry Studio chat history with annotations and AI insights
-version: 1.0.0+1
+version: 1.0.1+1
 
 environment:
   sdk: ^3.8.0
