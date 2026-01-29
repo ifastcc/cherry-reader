@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 class WebViewNavigationParams {
   final String topicId;
   final String topicName;
+  final String? conversationDataJson;
   final int? scrollToGroupIndex;
   final String? scrollToMessageId;
   final String? scrollToHighlightId;
@@ -15,6 +16,7 @@ class WebViewNavigationParams {
   const WebViewNavigationParams({
     required this.topicId,
     required this.topicName,
+    this.conversationDataJson,
     this.scrollToGroupIndex,
     this.scrollToMessageId,
     this.scrollToHighlightId,
@@ -70,6 +72,7 @@ class WebViewNavigationController extends ChangeNotifier {
   void showWebView({
     required String topicId,
     required String topicName,
+    String? conversationDataJson,
     int? scrollToGroupIndex,
     String? scrollToMessageId,
     String? scrollToHighlightId,
@@ -81,6 +84,7 @@ class WebViewNavigationController extends ChangeNotifier {
     final newParams = WebViewNavigationParams(
       topicId: topicId,
       topicName: topicName,
+      conversationDataJson: conversationDataJson,
       scrollToGroupIndex: scrollToGroupIndex,
       scrollToMessageId: scrollToMessageId,
       scrollToHighlightId: scrollToHighlightId,

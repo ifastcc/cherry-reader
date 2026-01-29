@@ -1,0 +1,10 @@
+You have tons of conversations with AI every day: brainstorming, problem solving, learning. But most chats are “use once and forget”.
+
+Cherry Reader turns your Cherry Studio conversations into a searchable, highlightable knowledge library so you can revisit and accumulate real insights over time.
+
+Key features:
+
+- AI insights: multiple analysis perspectives, filters by assistant and time range, streaming output with history
+- Immersive reading: read AI conversations like articles, built-in TTS, export to EPUB for Kindle/Books
+- Highlights & notes: color-coded highlights, local persistence, quick access to everything you marked
+- Multi-model compare: side-by-side answers, consensus and differences extraction

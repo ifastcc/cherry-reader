@@ -1,0 +1,21 @@
+本次更新：
+- 0b945a2 修复移动端运行报错
+- 91d8867 feat: WebView architecture refactor, LAN sync, and highlight improvements
+- 1c561fd 再次重构webview版本初步成功
+- bd14bc1 准备重构webview
+- 1cab498 移除高亮功能
+- c11bbb3 准备引入webview
+- f58b705 进一步优化高亮功能
+- 668c94b 重构高亮功能;2C
+- aa92cea 初步重构标注
+- 0e66de3 优化tts朗读和显示效果
+- f68c85a feat: optimize performance, redesign settings UI, and implement interactive markdown highlighting
+- 795b491 UI: Refactor TopicCard layout & improve date formatting in HomeScreen
+- 0ed0006 优化笔记页面
+- e682788 优化话题详情导航条
+- c6e9b5c 优化洞察视角
+- cc891a9 feat: Topic 支持多 Assistant 归属 & UI 组件优化
+- f801a3d feat: 引入知识库，统一高亮/标注/笔记
+- bf68360 添加标注模块
+- 41f66ea refactor(insight): 重构视角管理，支持自定义分组 & 更新文档截图
+- d209faf docs: 精简 README，移除安装部分和 App Store 链接

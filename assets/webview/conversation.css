@@ -74,6 +74,7 @@ body {
   overflow-x: hidden;
   overscroll-behavior: none;
   scroll-behavior: auto;
+  scrollbar-width: none;
 }
 
 body {
@@ -120,11 +121,11 @@ body.has-sidebar.sidebar-collapsed #conversation-container {
 
 .sidebar-handle {
   position: fixed;
-  left: calc(var(--sidebar-width) - 14px);
+  left: calc(var(--sidebar-width) - 8px);
   top: 50%;
   transform: translateY(-50%);
-  width: 28px;
-  height: 44px;
+  width: 36px;
+  height: 54px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   background: color-mix(in srgb, var(--bg-primary) 86%, transparent);
@@ -148,11 +149,21 @@ body.has-sidebar.sidebar-collapsed #conversation-container {
 
 .sidebar-handle-icon {
   transform: translateX(0);
+  width: 20px;
+  height: 20px;
 }
 
 body.has-sidebar.sidebar-collapsed .sidebar-handle {
-  left: 0;
+  left: -8px;
   opacity: 0.96;
+}
+
+body.force-mobile .sidebar-handle {
+  left: -8px;
+}
+
+body.force-mobile #outline-sidebar.mobile-visible + .sidebar-handle {
+  left: calc(var(--sidebar-width) - 8px);
 }
 
 body.has-sidebar.sidebar-collapsed .sidebar-handle-icon {
@@ -160,6 +171,20 @@ body.has-sidebar.sidebar-collapsed .sidebar-handle-icon {
 }
 
 body.has-sidebar:not(.sidebar-collapsed) .sidebar-handle-icon {
+  transform: rotate(180deg) translateX(1px);
+}
+
+body.force-mobile
+  #outline-sidebar:not(.mobile-visible)
+  + .sidebar-handle
+  .sidebar-handle-icon {
+  transform: translateX(1px);
+}
+
+body.force-mobile
+  #outline-sidebar.mobile-visible
+  + .sidebar-handle
+  .sidebar-handle-icon {
   transform: rotate(180deg) translateX(1px);
 }
 
@@ -785,6 +810,9 @@ body.has-sidebar:not(.sidebar-collapsed) #conversation-container {
 }
 
 body.host-flutter .markdown-body pre {
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
   -webkit-overflow-scrolling: auto;
 }
 
@@ -796,11 +824,17 @@ body.host-flutter .markdown-body pre {
   color: #e0e0e0;
 }
 
+body.host-flutter .markdown-body pre code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .markdown-body table {
   width: 100%;
   margin: 1.2em 0;
   border-collapse: collapse;
   font-size: 0.95em;
+  table-layout: fixed;
 }
 
 .markdown-body th,
@@ -808,6 +842,7 @@ body.host-flutter .markdown-body pre {
   padding: 0.7em 1em;
   border: 1px solid var(--border-color);
   text-align: left;
+  word-break: break-word;
 }
 
 .markdown-body th {
@@ -872,18 +907,18 @@ body.sidebar-collapsed #content-toolbar {
   align-items: center;
   gap: 8px;
   background: var(--bg-secondary);
-  padding: 4px 8px;
+  padding: 6px 10px;
   border-radius: 20px;
 }
 
 .reply-nav .nav-btn {
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border: none;
   background: transparent;
   border-radius: 50%;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 14px;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
@@ -1061,8 +1096,8 @@ body.sidebar-collapsed #content-toolbar {
 
 /* ========== 滚动条样式 ========== */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 0;
+  height: 0;
 }
 
 ::-webkit-scrollbar-track {
@@ -1070,12 +1105,12 @@ body.sidebar-collapsed #content-toolbar {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
+  background: transparent;
+  border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
+  background: transparent;
 }
 
 /* ========== 选中文本样式 ========== */
@@ -1088,9 +1123,60 @@ body.sidebar-collapsed #content-toolbar {
 }
 
 /* ========== 响应式适配 ========== */
+body.force-mobile {
+  --sidebar-width: 260px;
+}
+
+body.force-mobile #outline-sidebar {
+  transform: translateX(-100%);
+  box-shadow: none;
+}
+
+body.force-mobile #outline-sidebar.mobile-visible {
+  transform: translateX(0);
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.15);
+}
+
+body.force-mobile.has-sidebar #conversation-container {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+body.force-mobile #conversation-container {
+  padding: 16px;
+}
+
+body.force-mobile #content-toolbar {
+  left: 0;
+}
+
+body.force-mobile .action-btn .label {
+  display: none;
+}
+
+body.force-mobile .action-btn {
+  padding: 10px;
+}
+
 @media (max-width: 768px) {
   :root {
     --sidebar-width: 260px;
+  }
+
+  .sidebar-handle {
+    left: -8px;
+  }
+
+  #outline-sidebar.mobile-visible + .sidebar-handle {
+    left: calc(var(--sidebar-width) - 8px);
+  }
+
+  #outline-sidebar:not(.mobile-visible) + .sidebar-handle .sidebar-handle-icon {
+    transform: translateX(1px);
+  }
+
+  #outline-sidebar.mobile-visible + .sidebar-handle .sidebar-handle-icon {
+    transform: rotate(180deg) translateX(1px);
   }
 
   #outline-sidebar {

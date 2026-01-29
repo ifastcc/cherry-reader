@@ -1,0 +1,20 @@
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/sysrandom-1.0.5/ext/sysrandom
+/opt/homebrew/opt/ruby/bin/ruby extconf.rb
+creating Makefile
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/sysrandom-1.0.5/ext/sysrandom
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-foniht sitelibdir\=./.gem.20260127-72842-foniht clean
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/sysrandom-1.0.5/ext/sysrandom
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-foniht sitelibdir\=./.gem.20260127-72842-foniht
+compiling randombytes_sysrandom.c
+compiling sysrandom_ext.c
+linking shared-object sysrandom_ext.bundle
+ld: warning: search path '/opt/homebrew/Cellar/openssl@3/3.4.0/lib' not found
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/sysrandom-1.0.5/ext/sysrandom
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-foniht sitelibdir\=./.gem.20260127-72842-foniht install
+/usr/bin/install -c -m 0755 sysrandom_ext.bundle ./.gem.20260127-72842-foniht
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/sysrandom-1.0.5/ext/sysrandom
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-foniht sitelibdir\=./.gem.20260127-72842-foniht clean

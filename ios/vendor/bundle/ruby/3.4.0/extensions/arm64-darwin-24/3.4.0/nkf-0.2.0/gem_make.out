@@ -1,0 +1,19 @@
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/nkf-0.2.0/ext/nkf
+/opt/homebrew/opt/ruby/bin/ruby extconf.rb
+creating Makefile
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/nkf-0.2.0/ext/nkf
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-rjemqk sitelibdir\=./.gem.20260127-72842-rjemqk clean
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/nkf-0.2.0/ext/nkf
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-rjemqk sitelibdir\=./.gem.20260127-72842-rjemqk
+compiling nkf.c
+linking shared-object nkf.bundle
+ld: warning: search path '/opt/homebrew/Cellar/openssl@3/3.4.0/lib' not found
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/nkf-0.2.0/ext/nkf
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-rjemqk sitelibdir\=./.gem.20260127-72842-rjemqk install
+/usr/bin/install -c -m 0755 nkf.bundle ./.gem.20260127-72842-rjemqk
+
+current directory: /Users/kbaicai/Documents/mmdev/cherryviewer/flutter_viewer/ios/vendor/bundle/ruby/3.4.0/gems/nkf-0.2.0/ext/nkf
+make DESTDIR\= sitearchdir\=./.gem.20260127-72842-rjemqk sitelibdir\=./.gem.20260127-72842-rjemqk clean

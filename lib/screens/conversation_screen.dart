@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import 'dart:async';
 import 'dart:ui'; // For ImageFilter
 import '../services/cherry_extractor.dart';
@@ -256,6 +257,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
       // 延迟一帧后显示 WebView，避免在 initState 中直接操作
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
+          String? conversationDataJson;
+          if (widget.extractor != null) {
+            try {
+              final conv = widget.extractor!.extractTopicConversation(
+                widget.topicId,
+              );
+              if (conv != null) {
+                conversationDataJson = jsonEncode(conv);
+              }
+            } catch (_) {}
+          }
+
           // 【Stack 架构】使用 Controller 显示 WebView
           final controller = Provider.of<WebViewNavigationController>(
             context, 
@@ -264,6 +277,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
           controller.showWebView(
             topicId: widget.topicId,
             topicName: widget.topicName,
+            conversationDataJson: conversationDataJson,
             scrollToGroupIndex: widget.scrollToRoundIndex,
             scrollToMessageId: widget.scrollToMessageId,
             scrollToHighlightId: widget.scrollToHighlightId,

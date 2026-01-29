@@ -213,6 +213,8 @@ class WebViewOverlayScreen extends StatelessWidget {
                   key: ValueKey(controller.currentParams!.topicId),
                   topicId: controller.currentParams!.topicId,
                   topicName: controller.currentParams!.topicName,
+                  conversationDataJson:
+                      controller.currentParams!.conversationDataJson,
                   scrollToGroupIndex: controller.currentParams!.scrollToGroupIndex,
                   scrollToMessageId: controller.currentParams!.scrollToMessageId,
                   scrollToHighlightId: controller.currentParams!.scrollToHighlightId,

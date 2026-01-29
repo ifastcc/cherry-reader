@@ -1,19 +1,117 @@
 default_platform(:ios)
 
+require 'shellwords'
+require 'tmpdir'
+
 platform :ios do
-  desc "Push a new beta build to TestFlight"
-  lane :beta do
-    increment_build_number(xcodeproj: "Runner.xcodeproj")
-    build_app(workspace: "Runner.xcworkspace", scheme: "Runner")
-    upload_to_testflight
+  private_lane :project_root_path do
+    File.expand_path('../..', __dir__)
   end
 
-  desc "Push a new release build to the App Store"
-  lane :release do
-    build_app(workspace: "Runner.xcworkspace", scheme: "Runner")
+  private_lane :asc_api_key do
+    app_store_connect_api_key(
+      key_id: ENV.fetch('ASC_KEY_ID'),
+      issuer_id: ENV.fetch('ASC_ISSUER_ID'),
+      key_content: ENV.fetch('ASC_KEY_CONTENT'),
+      is_key_content_base64: true,
+    )
+  end
+
+  private_lane :find_ipa do
+    ipa = Dir[File.join(project_root_path, 'build/ios/ipa/*.ipa')].sort.last
+    UI.user_error!('No .ipa found at build/ios/ipa. Run fastlane ios build_ipa first.') if ipa.nil?
+    ipa
+  end
+
+  private_lane :create_ipa_from_xcode_dist_pipeline do
+    tmp_dir = Dir.tmpdir
+    log_dirs = Dir.glob(File.join(tmp_dir, 'Runner_*.xcdistributionlogs')).sort_by { |p| File.mtime(p) }
+    UI.user_error!("No Xcode distribution logs found in #{tmp_dir}") if log_dirs.empty?
+
+    pipeline_log = File.join(log_dirs.last, 'IDEDistributionPipeline.log')
+    UI.user_error!("Missing IDEDistributionPipeline.log at #{pipeline_log}") unless File.exist?(pipeline_log)
+
+    match = File.read(pipeline_log).match(%r{#{Regexp.escape(tmp_dir)}/XcodeDistPipeline\..*?/Root})
+    UI.user_error!("Unable to locate XcodeDistPipeline Root in #{pipeline_log}") if match.nil?
+
+    root = match[0]
+    ipa_path = File.join(project_root_path, 'build/ios/ipa/Runner.ipa')
+
+    sh("rm -rf #{Shellwords.shellescape(File.join(project_root_path, 'build/ios/ipa'))} && mkdir -p #{Shellwords.shellescape(File.join(project_root_path, 'build/ios/ipa'))} && cd #{Shellwords.shellescape(root)} && /usr/bin/zip -qry #{Shellwords.shellescape(ipa_path)} Payload")
+  end
+
+  private_lane :sanitize_screenshots do
+    screenshots_root = File.join(project_root_path, 'ios/fastlane/screenshots')
+    pngs = Dir[File.join(screenshots_root, '**/*.png')]
+    if pngs.empty?
+      UI.message('No PNG screenshots found, skipping sanitize_screenshots')
+    else
+      pngs.each do |png|
+        jpg = png.sub(/\.png\z/i, '.jpg')
+        sh("sips -s format jpeg #{Shellwords.shellescape(png)} --out #{Shellwords.shellescape(jpg)}")
+        File.delete(png) if File.exist?(jpg)
+      end
+    end
+  end
+
+  lane :screenshots do
+    device_name = ENV['FASTLANE_DEVICE_NAME'] || 'iPhone 17 Pro'
+    locale = ENV['FASTLANE_LOCALE'] || 'en-US'
+    locale_dir = locale.gsub(/[^A-Za-z0-9-]/, '')
+    device_id = ENV['IOS_SIMULATOR_UDID'] || ENV['IOS_DEVICE_ID']
+
+    screenshots_dir = Shellwords.shellescape(File.join(project_root_path, "ios/fastlane/screenshots/#{locale_dir}"))
+    device_flag = device_id.to_s.strip.empty? ? '' : "-d #{Shellwords.shellescape(device_id)}"
+
+    sh(
+      "cd #{Shellwords.shellescape(project_root_path)} && rm -rf #{screenshots_dir} && mkdir -p #{screenshots_dir} && " \
+      "FASTLANE_LOCALE=#{Shellwords.shellescape(locale_dir)} " \
+      "FASTLANE_DEVICE_NAME=#{Shellwords.shellescape(device_name)} " \
+      "flutter drive --driver=test_driver/screenshot_test.dart " \
+      "--target=integration_test/screenshot_test.dart #{device_flag}",
+    )
+  end
+
+  lane :build_ipa do
+    ipa_dir = File.join(project_root_path, 'build/ios/ipa')
+    sh("rm -rf #{Shellwords.shellescape(ipa_dir)}")
+    sh("cd #{Shellwords.shellescape(project_root_path)} && flutter pub get")
+    sh("cd #{Shellwords.shellescape(project_root_path)} && flutter build ipa --release --export-options-plist=ios/ExportOptions.plist")
+    create_ipa_from_xcode_dist_pipeline if Dir[File.join(project_root_path, 'build/ios/ipa/*.ipa')].empty?
+  end
+
+  lane :beta do
+    build_ipa
+    upload_to_testflight(
+      api_key: asc_api_key,
+      ipa: find_ipa,
+      changelog: (ENV['TESTFLIGHT_CHANGELOG'].to_s.strip.empty? ? nil : ENV['TESTFLIGHT_CHANGELOG']),
+      skip_waiting_for_build_processing: true,
+    )
+  end
+
+  lane :metadata do
+    sanitize_screenshots
     upload_to_app_store(
-      force: true, # Skip HTML report verification
-      # submit_for_review: true
+      api_key: asc_api_key,
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      precheck_include_in_app_purchases: false,
+      force: true,
+      submit_for_review: false,
+    )
+  end
+
+  lane :release do
+    build_ipa
+    upload_to_app_store(
+      api_key: asc_api_key,
+      ipa: find_ipa,
+      skip_metadata: true,
+      skip_screenshots: true,
+      precheck_include_in_app_purchases: false,
+      force: true,
+      submit_for_review: false,
     )
   end
 end

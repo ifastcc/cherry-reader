@@ -25,6 +25,7 @@ import 'ai_chat_screen.dart';
 class WebViewConversationScreen extends StatefulWidget {
   final String topicId;
   final String topicName;
+  final String? conversationDataJson;
   final int? scrollToGroupIndex;
   final String? scrollToMessageId;
   final String? scrollToHighlightId;
@@ -41,6 +42,7 @@ class WebViewConversationScreen extends StatefulWidget {
     super.key,
     required this.topicId,
     required this.topicName,
+    this.conversationDataJson,
     this.scrollToGroupIndex,
     this.scrollToMessageId,
     this.scrollToHighlightId,
@@ -63,6 +65,7 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
   bool _isLoading = true;
   bool _isSearchMode = false;
   bool _isExiting = false; // 【新增】退出时的淡出遮盖
+  String? _fatalError;
   int _searchTotal = 0;
   int _searchCurrent = -1;
   final TextEditingController _searchController = TextEditingController();
@@ -149,10 +152,32 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
   /// 加载对话数据
   Future<void> _loadConversationData() async {
     try {
+      if (widget.conversationDataJson != null &&
+          widget.conversationDataJson!.isNotEmpty) {
+        final decoded = jsonDecode(widget.conversationDataJson!);
+        if (decoded is Map<String, dynamic>) {
+          _groups = _extractGroups(decoded);
+          await _loadHighlights();
+          if (mounted) {
+            setState(() {
+              _conversationData = decoded;
+              _fatalError = null;
+            });
+          }
+          return;
+        }
+      }
+
       // 使用 TopicService 加载对话数据
       final conv = await _topicService.getTopicFullData(widget.topicId);
       if (conv == null) {
         debugPrint('[WebViewConversation] Conversation not found: ${widget.topicId}');
+        if (mounted) {
+          setState(() {
+            _fatalError = 'Conversation not found: ${widget.topicId}';
+            _isLoading = false;
+          });
+        }
         return;
       }
       
@@ -164,9 +189,16 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
       
       setState(() {
         _conversationData = conv;
+        _fatalError = null;
       });
     } catch (e) {
       debugPrint('[WebViewConversation] Failed to load data: $e');
+      if (mounted) {
+        setState(() {
+          _fatalError = 'Failed to load conversation: $e';
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -648,8 +680,54 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
           color: bgColor,
           child: Stack(
             children: [
+              if (_fatalError != null)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _fatalError!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: isDark ? Colors.white70 : Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.center,
+                          children: [
+                            OutlinedButton(
+                              onPressed: () {
+                                setState(() {
+                                  _fatalError = null;
+                                  _isLoading = true;
+                                });
+                                _loadConversationData();
+                              },
+                              child: const Text('重试'),
+                            ),
+                            OutlinedButton(
+                              onPressed: () {
+                                if (widget.onBack != null) {
+                                  widget.onBack!();
+                                } else {
+                                  Navigator.of(context).maybePop();
+                                }
+                              },
+                              child: const Text('返回'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               // WebView
-              if (_conversationData != null && !_isExiting)
+              if (_fatalError == null && _conversationData != null && !_isExiting)
                 InAppWebView(
                   initialFile: 'assets/webview/conversation.html',
                   initialSettings: InAppWebViewSettings(
@@ -672,9 +750,36 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
                     _controller = controller;
                     _setupBridge(controller);
                   },
+                  onLoadStart: (controller, url) {
+                    debugPrint('[WebViewConversation] Load start: $url');
+                  },
                   onLoadStop: (controller, url) async {
+                    await controller.evaluateJavascript(
+                      source: 'window.initFramework && window.initFramework()',
+                    );
                     await _bridge?.setDarkMode(isDark);
                     await _injectConversationData();
+                  },
+                  onReceivedError: (controller, request, error) {
+                    debugPrint('[WebViewConversation] Load error: ${error.description}');
+                    if (mounted) {
+                      setState(() {
+                        _fatalError = 'WebView load error: ${error.description}';
+                        _isLoading = false;
+                      });
+                    }
+                  },
+                  onReceivedHttpError: (controller, request, errorResponse) {
+                    debugPrint(
+                      '[WebViewConversation] HTTP error: ${errorResponse.statusCode} ${errorResponse.reasonPhrase}',
+                    );
+                    if (mounted) {
+                      setState(() {
+                        _fatalError =
+                            'WebView HTTP error: ${errorResponse.statusCode} ${errorResponse.reasonPhrase ?? ''}';
+                        _isLoading = false;
+                      });
+                    }
                   },
                   onConsoleMessage: (controller, consoleMessage) {
                     debugPrint('[WebView Console] ${consoleMessage.message}');

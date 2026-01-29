@@ -12,6 +12,79 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+MODE="${1:-}"
+DRY_RUN="0"
+if [[ "${2:-}" == "--dry-run" ]] || [[ "${MODE:-}" == "--dry-run" ]]; then
+    DRY_RUN="1"
+    if [[ "${MODE:-}" == "--dry-run" ]]; then
+        MODE=""
+    fi
+fi
+
+run_cmd() {
+    if [[ "$DRY_RUN" == "1" ]]; then
+        echo -e "${BLUE}[dry-run]${NC} $*"
+        return 0
+    fi
+    "$@"
+}
+
+pick_ios_device_id() {
+    if ! command -v python3 &> /dev/null; then
+        return 1
+    fi
+
+    DEVICES_JSON="$(flutter devices --machine 2>/dev/null || true)"
+    if [[ -z "$DEVICES_JSON" ]]; then
+        return 1
+    fi
+
+    python3 -c '
+import json, sys
+try:
+    devices = json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(1)
+
+def is_ios_physical(d):
+    return d.get("targetPlatform") == "ios" and d.get("isSupported") and not d.get("emulator")
+
+for d in devices:
+    if is_ios_physical(d):
+        print(d.get("id", ""))
+        sys.exit(0)
+sys.exit(1)
+' <<<"$DEVICES_JSON"
+}
+
+pick_ios_device_name() {
+    if ! command -v python3 &> /dev/null; then
+        return 1
+    fi
+
+    DEVICES_JSON="$(flutter devices --machine 2>/dev/null || true)"
+    if [[ -z "$DEVICES_JSON" ]]; then
+        return 1
+    fi
+
+    python3 -c '
+import json, sys
+try:
+    devices = json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(1)
+
+def is_ios_physical(d):
+    return d.get("targetPlatform") == "ios" and d.get("isSupported") and not d.get("emulator")
+
+for d in devices:
+    if is_ios_physical(d):
+        print(d.get("name", "iOS Device"))
+        sys.exit(0)
+sys.exit(1)
+' <<<"$DEVICES_JSON"
+}
+
 echo -e "${BLUE}🍒 Cherry Viewer Flutter 启动脚本${NC}"
 echo ""
 
@@ -28,29 +101,39 @@ echo ""
 
 # 检查依赖
 echo -e "${BLUE}📦 检查依赖...${NC}"
-flutter pub get
+run_cmd flutter pub get
 echo ""
 
 # 生成 JSON 序列化代码
 echo -e "${BLUE}🔨 生成 JSON 序列化代码...${NC}"
-if ! flutter pub run build_runner build --delete-conflicting-outputs; then
+if ! run_cmd flutter pub run build_runner build --delete-conflicting-outputs; then
     echo -e "${YELLOW}⚠️  代码生成失败，但继续运行${NC}"
 fi
 echo ""
 
 # 选择运行平台
 echo -e "${BLUE}📱 可用设备:${NC}"
-flutter devices
+run_cmd flutter devices
 echo ""
 
 # 默认运行 macOS 桌面版
-if [[ "$1" == "web" ]]; then
+if [[ "$MODE" == "web" ]]; then
     echo -e "${GREEN}🌐 启动 Web 版本...${NC}"
-    flutter run -d chrome
-elif [[ "$1" == "ios" ]]; then
+    run_cmd flutter run -d chrome
+elif [[ "$MODE" == "ios" ]]; then
+    DEVICE_ID="$(pick_ios_device_id || true)"
+    DEVICE_NAME="$(pick_ios_device_name || true)"
+    if [[ -n "$DEVICE_ID" ]]; then
+        echo -e "${GREEN}📱 启动 iOS 真机: ${DEVICE_NAME} (${DEVICE_ID})...${NC}"
+        run_cmd flutter run -d "$DEVICE_ID" --debug
+    else
+        echo -e "${YELLOW}⚠️  未发现 iOS 真机，启动 iOS 模拟器...${NC}"
+        run_cmd flutter run -d ios --debug
+    fi
+elif [[ "$MODE" == "ios-sim" ]]; then
     echo -e "${GREEN}📱 启动 iOS 模拟器...${NC}"
-    flutter run -d ios
-elif [[ "$1" == "profile" ]]; then
+    run_cmd flutter run -d ios --debug
+elif [[ "$MODE" == "profile" ]]; then
     # ==================== Profile 模式 ====================
     echo -e "${GREEN}🔬 启动 Profile 性能分析模式...${NC}"
     echo ""
@@ -89,7 +172,7 @@ elif [[ "$1" == "profile" ]]; then
         DART_DEFINES="$DART_DEFINES --dart-define=OPENAI_API_KEY=$OPENAI_API_KEY"
     fi
 
-    flutter run $RUN_ARGS $DART_DEFINES
+    run_cmd flutter run $RUN_ARGS $DART_DEFINES
 else
     echo -e "${GREEN}🖥️  启动 macOS 桌面版...${NC}"
 
@@ -113,8 +196,8 @@ else
     echo ""
 
     if [[ -n "$OPENAI_API_KEY" ]]; then
-        flutter run $RUN_ARGS --dart-define=OPENAI_API_KEY="$OPENAI_API_KEY"
+        run_cmd flutter run $RUN_ARGS --dart-define=OPENAI_API_KEY="$OPENAI_API_KEY"
     else
-        flutter run $RUN_ARGS
+        run_cmd flutter run $RUN_ARGS
     fi
 fi

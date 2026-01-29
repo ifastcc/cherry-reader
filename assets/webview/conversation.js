@@ -333,18 +333,38 @@
   function initOutlineSidebar() {
     const sidebar = document.getElementById("outline-sidebar");
     if (!sidebar) return;
+    document.body.classList.add("has-sidebar");
 
     // 折叠/展开侧边栏
     const handle = document.querySelector(".sidebar-handle");
     const OUTLINE_SIDEBAR_OPEN_KEY = "cv_outline_sidebar_open";
     const mobileQuery = window.matchMedia?.("(max-width: 768px)") ?? null;
 
+    function getEffectiveViewportWidth() {
+      const w = window.visualViewport?.width;
+      return typeof w === "number" && w > 0 ? w : window.innerWidth || 0;
+    }
+
     function isMobile() {
+      const width = getEffectiveViewportWidth();
+      if (width) return width <= 768;
       return mobileQuery?.matches ?? false;
+    }
+
+    let viewportSyncPending = false;
+    function scheduleViewportSync() {
+      if (viewportSyncPending) return;
+      viewportSyncPending = true;
+      requestAnimationFrame(() => {
+        viewportSyncPending = false;
+        applySidebarOpen(state.outlineSidebarOpen);
+      });
     }
 
     function applySidebarOpen(open) {
       state.outlineSidebarOpen = !!open;
+
+      document.body.classList.toggle("force-mobile", isMobile());
 
       if (isMobile()) {
         sidebar.classList.toggle("mobile-visible", state.outlineSidebarOpen);
@@ -353,7 +373,10 @@
       } else {
         sidebar.classList.toggle("collapsed", !state.outlineSidebarOpen);
         sidebar.classList.remove("mobile-visible");
-        document.body.classList.toggle("sidebar-collapsed", !state.outlineSidebarOpen);
+        document.body.classList.toggle(
+          "sidebar-collapsed",
+          !state.outlineSidebarOpen,
+        );
       }
 
       try {
@@ -377,18 +400,36 @@
     applySidebarOpen(readInitialSidebarOpen());
 
     if (mobileQuery?.addEventListener) {
-      mobileQuery.addEventListener("change", () => {
-        applySidebarOpen(state.outlineSidebarOpen);
-      });
+      mobileQuery.addEventListener("change", scheduleViewportSync);
     } else if (mobileQuery?.addListener) {
-      mobileQuery.addListener(() => {
-        applySidebarOpen(state.outlineSidebarOpen);
-      });
+      mobileQuery.addListener(scheduleViewportSync);
     }
+
+    window.visualViewport?.addEventListener?.("resize", scheduleViewportSync);
+    window.addEventListener("resize", scheduleViewportSync, { passive: true });
 
     handle?.addEventListener("click", () => {
       applySidebarOpen(!state.outlineSidebarOpen);
     });
+
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (!state.outlineSidebarOpen) return;
+        if (!isMobile()) return;
+
+        const selection = window.getSelection?.();
+        if (selection && !selection.isCollapsed) return;
+
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (sidebar.contains(target)) return;
+        if (handle && handle.contains(target)) return;
+
+        applySidebarOpen(false);
+      },
+      true,
+    );
 
     const modeToggle = sidebar.querySelector(".outline-mode-toggle");
     const expandToggle = sidebar.querySelector(".outline-expand-toggle");
@@ -865,6 +906,7 @@
 
   // ========== 初始化 ==========
   function init() {
+    if (state.isInitialized) return;
     console.log("[Conversation] Initializing...");
 
     if (window.flutter_inappwebview) {

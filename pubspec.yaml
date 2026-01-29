@@ -1,6 +1,7 @@
 name: cherry_reader
 description: An immersive reader for Cherry Studio chat history with annotations and AI insights
-version: 1.0.1+1
+version: 1.0.1+6
+publish_to: none
 
 environment:
   sdk: ^3.8.0
@@ -10,65 +11,69 @@ dependencies:
     sdk: flutter
 
   # UI 相关
-  scroll_to_index: ^3.0.1         # 支持滚动到指定索引（包装标签 + 两阶段滚动）
-  gpt_markdown_custom:            # 自定义 gpt_markdown fork（支持多色高亮）
+  scroll_to_index: ^3.0.1 # 支持滚动到指定索引（包装标签 + 两阶段滚动）
+  gpt_markdown_custom: # 自定义 gpt_markdown fork（支持多色高亮）
     path: packages/gpt_markdown_custom
-  markdown: ^7.1.1                # Markdown 解析
-  flutter_quill: ^11.0.0            # 富文本编辑器（笔记功能，需要 11.x 兼容 Flutter 3.38）
+  markdown: ^7.1.1 # Markdown 解析
+  flutter_quill: ^11.0.0 # 富文本编辑器（笔记功能，需要 11.x 兼容 Flutter 3.38）
 
   # 数据处理
-  archive: ^3.4.9                 # ZIP 文件解压(对应 Python zipfile)
-  path: ^1.8.3                    # 路径处理
-  uuid: ^4.2.1                    # UUID 生成
+  archive: ^3.4.9 # ZIP 文件解压(对应 Python zipfile)
+  path: ^1.8.3 # 路径处理
+  uuid: ^4.2.1 # UUID 生成
 
   # 文件操作
-  file_picker: ^8.1.6             # 文件选择器（需要 8.x 支持新 Flutter embedding API）
-  path_provider: ^2.1.1           # 获取应用目录
-  watcher: ^1.1.0                 # 文件系统监听（桌面端本地文件夹同步）
+  file_picker: ^8.1.6 # 文件选择器（需要 8.x 支持新 Flutter embedding API）
+  path_provider: ^2.1.1 # 获取应用目录
+  watcher: ^1.1.0 # 文件系统监听（桌面端本地文件夹同步）
 
   # 网络请求
-  http: ^1.1.0                    # HTTP 客户端
-  dio: ^5.4.0                     # 更强大的 HTTP 客户端(支持流式响应)
-  webdav_client: ^1.0.6           # WebDAV 客户端
+  http: ^1.1.0 # HTTP 客户端
+  dio: ^5.4.0 # 更强大的 HTTP 客户端(支持流式响应)
+  webdav_client: ^1.0.6 # WebDAV 客户端
 
   # MCP Server (HTTP 服务器)
-  shelf: ^1.4.1                   # Dart 官方 HTTP 服务器框架
-  shelf_router: ^1.1.4            # 路由支持
+  shelf: ^1.4.1 # Dart 官方 HTTP 服务器框架
+  shelf_router: ^1.1.4 # 路由支持
 
   # 状态管理
-  provider: ^6.1.1                # 状态管理(简单易用)
+  provider: ^6.1.1 # 状态管理(简单易用)
 
   # 国际化
-  intl: any                       # 日期格式化等（版本由 flutter_localizations 决定）
+  intl: any # 日期格式化等（版本由 flutter_localizations 决定）
 
   # JSON 处理
-  json_annotation: ^4.8.1         # JSON 序列化注解
+  json_annotation: ^4.8.1 # JSON 序列化注解
 
   # 缓存
-  shared_preferences: ^2.2.2      # 持久化存储
+  shared_preferences: ^2.2.2 # 持久化存储
 
   # 音频播放
-  just_audio: ^0.9.40             # 音频播放
-  crypto: ^3.0.3                  # 加密（MD5等）
+  just_audio: ^0.9.40 # 音频播放
+  crypto: ^3.0.3 # 加密（MD5等）
 
   # 数据库 (使用 community 维护版本)
-  isar_community: ^3.3.0          # 高性能数据库 (community fork)
-  isar_community_flutter_libs: ^3.3.0  # Isar Flutter 平台库
+  isar_community: ^3.3.0 # 高性能数据库 (community fork)
+  isar_community_flutter_libs: ^3.3.0 # Isar Flutter 平台库
 
   # 环境变量
-  flutter_dotenv: ^5.1.0          # .env 文件支持
+  flutter_dotenv: ^5.1.0 # .env 文件支持
   url_launcher: ^6.3.2
-  connectivity_plus: ^6.0.0       # 网络状态检测
-  flutter_inappwebview: ^6.1.5    # WebView 组件（话题详情页 WebView 版本）
+  connectivity_plus: ^6.0.0 # 网络状态检测
+  flutter_inappwebview: ^6.1.5 # WebView 组件（话题详情页 WebView 版本）
   bonsoir: ^5.1.5
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_driver:
+    sdk: flutter
   flutter_lints: ^3.0.0
-  build_runner: ^2.4.6            # 代码生成
-  json_serializable: ^6.7.1       # JSON 序列化代码生成
-  isar_community_generator: ^3.3.0  # Isar 代码生成
+  build_runner: ^2.4.6 # 代码生成
+  json_serializable: ^6.7.1 # JSON 序列化代码生成
+  isar_community_generator: ^3.3.0 # Isar 代码生成
   flutter_launcher_icons: ^0.14.4
 
 flutter:
