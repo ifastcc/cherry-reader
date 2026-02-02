@@ -5,12 +5,13 @@ mark.highlight {
   --hl-color: rgba(255, 241, 118, 0.6);
   background: transparent;
   padding: 0;
-  cursor: inherit;
+  /* 使用 auto 而非 inherit，避免在 PlatformView 事件冲突时产生抖动 */
+  cursor: auto;
   transition: filter 0.2s;
 }
 
 body.is-selecting mark.highlight {
-  cursor: text;
+  cursor: auto;
 }
 
 mark.highlight:hover {
@@ -99,6 +100,12 @@ mark.search-match mark.highlight {
 mark.highlight mark.search-match.current,
 mark.search-match.current mark.highlight {
   background: rgba(255, 152, 0, 0.7) !important;
+}
+
+body.platform-ios #conversation-container,
+body.platform-ios .markdown-body,
+body.platform-ios .question-text {
+  -webkit-touch-callout: none;
 }
 
 /* ========== 选中文本工具栏（高亮/标注/复制）========== */

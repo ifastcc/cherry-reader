@@ -87,6 +87,8 @@ body {
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 显式设置 auto，避免 macOS 上切换 I-beam 时产生抖动 */
+  cursor: auto;
 }
 
 /* ========== 大纲导航侧边栏 ========== */
@@ -586,15 +588,13 @@ body.has-sidebar:not(.sidebar-collapsed) #conversation-container {
   min-height: 100vh;
   max-width: var(--content-max-width);
   margin: 0 auto;
-  cursor: default;
-}
-
-#conversation-container * {
-  cursor: inherit;
+  /* 强制硬件加速层，有助于稳定 PlatformView 渲染 */
+  -webkit-transform: translate3d(0, 0, 0);
+  transform: translate3d(0, 0, 0);
 }
 
 #conversation-container .token.entity {
-  cursor: inherit !important;
+  cursor: text;
 }
 
 /* 轮次卡片 - 简化版 */
@@ -606,6 +606,9 @@ body.has-sidebar:not(.sidebar-collapsed) #conversation-container {
   box-shadow: var(--shadow-md);
   border: 1px solid var(--border-color);
   transition: box-shadow 0.2s ease;
+  /* 稳定渲染内容 */
+  -webkit-transform: translate3d(0, 0, 0);
+  transform: translate3d(0, 0, 0);
 }
 
 .round-card:hover {
@@ -618,7 +621,6 @@ body.has-sidebar:not(.sidebar-collapsed) #conversation-container {
   display: flex;
   background: var(--accent-light);
   border-bottom: 1px solid var(--border-color);
-  cursor: default;
 }
 
 .question-section.collapsed .question-text {
@@ -907,18 +909,18 @@ body.sidebar-collapsed #content-toolbar {
   align-items: center;
   gap: 8px;
   background: var(--bg-secondary);
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-radius: 20px;
 }
 
 .reply-nav .nav-btn {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   border: none;
   background: transparent;
   border-radius: 50%;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   color: var(--text-secondary);
   display: flex;
   align-items: center;

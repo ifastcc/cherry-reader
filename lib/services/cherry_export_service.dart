@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:isar_community/isar.dart';
+import 'package:path/path.dart' as p;
 
 import 'isar_database.dart';
 import '../models/isar/assistant_entity.dart';
 import '../models/isar/topic_entity.dart';
 import '../models/isar/message_entity.dart';
 import '../models/isar/message_block_entity.dart';
+import '../models/isar/file_entity.dart';
 
 /// Cherry Studio 数据导出服务
 ///
@@ -106,7 +108,25 @@ class CherryExportService {
     }
 
     // 4. 获取 files（如果有的话）
-    // TODO: 如果有 FileEntity，也需要导出
+    final filesData = <Map<String, dynamic>>[];
+    final fileEntities = await isar.fileEntitys.where().findAll();
+    for (final f in fileEntities) {
+      final fileName = (f.fileName == null || f.fileName!.isEmpty)
+          ? f.fileId
+          : f.fileName!;
+      final zipPath = f.hasLocalCache ? 'Data/Files/${p.basename(f.localPath!)}' : null;
+      filesData.add({
+        'id': f.fileId,
+        'name': fileName,
+        'origin_name': fileName,
+        if (zipPath != null) 'path': zipPath,
+        if (f.fileSize != null) 'size': f.fileSize,
+        'type': f.isImage ? 'image' : 'file',
+        'created_at': _msToIso(f.createdAt),
+        'count': f.referenceCount,
+        if (f.sha256 != null) 'sha256': f.sha256,
+      });
+    }
 
     // 5. 构建完整的导出数据
     final exportData = {
@@ -122,7 +142,7 @@ class CherryExportService {
       'indexedDB': {
         'topics': topicsData,
         'message_blocks': allBlocks,
-        'files': <dynamic>[],
+        'files': filesData,
         'settings': <dynamic>[],
         'knowledge_notes': <dynamic>[],
         'translate_history': <dynamic>[],
@@ -137,6 +157,7 @@ class CherryExportService {
   /// 导出为 ZIP 文件
   Future<void> exportToZip(String outputPath) async {
     final jsonData = await exportFromIsar();
+    final isar = await _db.instance;
 
     final archive = Archive();
     final dataJsonBytes = utf8.encode(jsonData);
@@ -145,6 +166,20 @@ class CherryExportService {
       dataJsonBytes.length,
       dataJsonBytes,
     ));
+
+    archive.addFile(ArchiveFile('Data/', 0, <int>[]));
+    archive.addFile(ArchiveFile('Data/Files/', 0, <int>[]));
+
+    final fileEntities = await isar.fileEntitys.where().findAll();
+    for (final f in fileEntities) {
+      if (!f.hasLocalCache) continue;
+      final localPath = f.localPath!;
+      final localFile = File(localPath);
+      if (!await localFile.exists()) continue;
+      final bytes = await localFile.readAsBytes();
+      final entryName = 'Data/Files/${p.basename(localPath)}';
+      archive.addFile(ArchiveFile(entryName, bytes.length, bytes));
+    }
 
     final zipData = ZipEncoder().encode(archive);
     if (zipData == null) {

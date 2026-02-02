@@ -728,62 +728,64 @@ class _WebViewConversationScreenState extends State<WebViewConversationScreen> {
                 ),
               // WebView
               if (_fatalError == null && _conversationData != null && !_isExiting)
-                InAppWebView(
-                  initialFile: 'assets/webview/conversation.html',
-                  initialSettings: InAppWebViewSettings(
-                    javaScriptEnabled: true,
-                    transparentBackground: false,
-                    supportZoom: false,
-                    useHybridComposition: true,
-                    cacheEnabled: false,
-                    clearCache: true,
-                    allowsInlineMediaPlayback: true,
-                    mediaPlaybackRequiresUserGesture: false,
-                    verticalScrollBarEnabled: false,
-                    horizontalScrollBarEnabled: false,
-                    disallowOverScroll: true,
-                    overScrollMode: OverScrollMode.NEVER,
-                    alwaysBounceVertical: false,
-                    alwaysBounceHorizontal: false,
+                MouseRegion(
+                  cursor: SystemMouseCursors.basic, // 强制 Flutter 层使用标准箭头，具体的 I-beam 由 WebView 内部 CSS 控制
+                  child: InAppWebView(
+                    initialFile: 'assets/webview/conversation.html',
+                    initialSettings: InAppWebViewSettings(
+                      javaScriptEnabled: true,
+                      transparentBackground: false,
+                      supportZoom: false,
+                      cacheEnabled: false,
+                      clearCache: true,
+                      allowsInlineMediaPlayback: true,
+                      mediaPlaybackRequiresUserGesture: false,
+                      verticalScrollBarEnabled: false,
+                      horizontalScrollBarEnabled: false,
+                      disallowOverScroll: true,
+                      overScrollMode: OverScrollMode.NEVER,
+                      alwaysBounceVertical: false,
+                      alwaysBounceHorizontal: false,
+                    ),
+                    onWebViewCreated: (controller) {
+                      _controller = controller;
+                      _setupBridge(controller);
+                    },
+                    onLoadStart: (controller, url) {
+                      debugPrint('[WebViewConversation] Load start: $url');
+                    },
+                    onLoadStop: (controller, url) async {
+                      await controller.evaluateJavascript(
+                        source: 'window.initFramework && window.initFramework()',
+                      );
+                      await _bridge?.setDarkMode(isDark);
+                      await _injectConversationData();
+                    },
+                    onReceivedError: (controller, request, error) {
+                      debugPrint('[WebViewConversation] Load error: ${error.description}');
+                      if (mounted) {
+                        setState(() {
+                          _fatalError = 'WebView load error: ${error.description}';
+                          _isLoading = false;
+                        });
+                      }
+                    },
+                    onReceivedHttpError: (controller, request, errorResponse) {
+                      debugPrint(
+                        '[WebViewConversation] HTTP error: ${errorResponse.statusCode} ${errorResponse.reasonPhrase}',
+                      );
+                      if (mounted) {
+                        setState(() {
+                          _fatalError =
+                              'WebView HTTP error: ${errorResponse.statusCode} ${errorResponse.reasonPhrase ?? ''}';
+                          _isLoading = false;
+                        });
+                      }
+                    },
+                    onConsoleMessage: (controller, consoleMessage) {
+                      debugPrint('[WebView Console] ${consoleMessage.message}');
+                    },
                   ),
-                  onWebViewCreated: (controller) {
-                    _controller = controller;
-                    _setupBridge(controller);
-                  },
-                  onLoadStart: (controller, url) {
-                    debugPrint('[WebViewConversation] Load start: $url');
-                  },
-                  onLoadStop: (controller, url) async {
-                    await controller.evaluateJavascript(
-                      source: 'window.initFramework && window.initFramework()',
-                    );
-                    await _bridge?.setDarkMode(isDark);
-                    await _injectConversationData();
-                  },
-                  onReceivedError: (controller, request, error) {
-                    debugPrint('[WebViewConversation] Load error: ${error.description}');
-                    if (mounted) {
-                      setState(() {
-                        _fatalError = 'WebView load error: ${error.description}';
-                        _isLoading = false;
-                      });
-                    }
-                  },
-                  onReceivedHttpError: (controller, request, errorResponse) {
-                    debugPrint(
-                      '[WebViewConversation] HTTP error: ${errorResponse.statusCode} ${errorResponse.reasonPhrase}',
-                    );
-                    if (mounted) {
-                      setState(() {
-                        _fatalError =
-                            'WebView HTTP error: ${errorResponse.statusCode} ${errorResponse.reasonPhrase ?? ''}';
-                        _isLoading = false;
-                      });
-                    }
-                  },
-                  onConsoleMessage: (controller, consoleMessage) {
-                    debugPrint('[WebView Console] ${consoleMessage.message}');
-                  },
                 ),
               
               // 加载指示器

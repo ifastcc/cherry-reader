@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 import 'package:isar_community/isar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/isar/assistant_entity.dart';
@@ -7,6 +10,7 @@ import '../models/isar/message_entity.dart';
 import '../models/isar/message_block_entity.dart';
 import '../models/isar/file_entity.dart';
 import 'cherry_extractor.dart';
+import 'data_persistence_manager.dart';
 import 'isar_database.dart';
 
 /// 数据导入服务
@@ -251,12 +255,39 @@ class DataImportService {
         // 创建时间
         final createdAt = _parseTimestamp(file['created_at']);
 
+        String? localPath;
+        String? sha256Hex;
+        String? url;
+
+        final sourcePath = file['sourcePath'] as String? ?? file['source_path'] as String?;
+        if (sourcePath != null && sourcePath.isNotEmpty) {
+          try {
+            final src = File(sourcePath);
+            if (await src.exists()) {
+              final bytes = await src.readAsBytes();
+              sha256Hex = sha256.convert(bytes).toString();
+              final targetNameFromZipPath = file['path'] as String?;
+              final targetFileName = targetNameFromZipPath != null && targetNameFromZipPath.isNotEmpty
+                  ? p.basename(targetNameFromZipPath)
+                  : (fileName ?? fileId);
+              localPath = await DataPersistenceManager.copyAttachmentToAppDirectory(
+                sourcePath: sourcePath,
+                targetFileName: targetFileName,
+              );
+            }
+          } catch (_) {}
+        }
+
+        url = file['url'] as String?;
+
         final entity = FileEntity.fromData(
           fileId: fileId,
           fileName: fileName,
           mimeType: mimeType,
           fileSize: fileSize,
-          localPath: file['path'] as String?, // Cherry Studio 原始路径
+          sha256: sha256Hex,
+          localPath: localPath ?? (file['path'] as String?), // Cherry Studio 原始路径/或本地缓存路径
+          url: url,
           referenceCount: referenceCount,
           createdAt: createdAt,
         );

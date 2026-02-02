@@ -152,3 +152,69 @@ String cleanMarkdownForDisplay(String text) {
     matchEnd: snippetMatchEnd,
   );
 }
+
+String fixMarkdownStrongAfterCjkPunctuation(String text) {
+  if (text.isEmpty) return text;
+  if (!text.contains('**')) return text;
+
+  final opener = RegExp(
+    r'([0-9A-Za-z\u4E00-\u9FFF])\*\*(?=[:;,.!?，。！？：；、（）【】《》「」『』、“”‘’…—])',
+  );
+  final closer = RegExp(
+    r'([:;,.!?，。！？：；、（）【】《》「」『』、“”‘’…—])\*\*(?=[0-9A-Za-z\u4E00-\u9FFF])',
+  );
+
+  String fixInlineCode(String line) {
+    final buffer = StringBuffer();
+    var i = 0;
+    while (i < line.length) {
+      final tickAt = line.indexOf('`', i);
+      if (tickAt == -1) {
+        buffer.write(
+          line
+              .substring(i)
+              .replaceAllMapped(opener, (m) => '${m.group(1)}<!-- -->**')
+              .replaceAllMapped(closer, (m) => '${m.group(1)}**<!-- -->'),
+        );
+        break;
+      }
+
+      buffer.write(
+        line
+            .substring(i, tickAt)
+            .replaceAllMapped(opener, (m) => '${m.group(1)}<!-- -->**')
+            .replaceAllMapped(closer, (m) => '${m.group(1)}**<!-- -->'),
+      );
+
+      var run = 1;
+      while (tickAt + run < line.length && line.codeUnitAt(tickAt + run) == 0x60) {
+        run++;
+      }
+      final fence = '`' * run;
+      final closeAt = line.indexOf(fence, tickAt + run);
+      if (closeAt == -1) {
+        buffer.write(line.substring(tickAt));
+        break;
+      }
+
+      buffer.write(line.substring(tickAt, closeAt + run));
+      i = closeAt + run;
+    }
+    return buffer.toString();
+  }
+
+  final lines = text.split('\n');
+  var inFence = false;
+  for (var idx = 0; idx < lines.length; idx++) {
+    final raw = lines[idx];
+    final trimmed = raw.trimLeft();
+    if (trimmed.startsWith('```')) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) {
+      lines[idx] = fixInlineCode(raw);
+    }
+  }
+  return lines.join('\n');
+}

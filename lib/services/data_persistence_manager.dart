@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import 'dart:io';
 import 'isar_database.dart';
 import 'topic_service.dart';
@@ -20,6 +21,33 @@ class DataPersistenceManager {
   /// 获取App的Documents目录
   static Future<Directory> getAppDocumentsDirectory() async {
     return await getApplicationDocumentsDirectory();
+  }
+
+  static Future<Directory> getAttachmentsDirectory() async {
+    final dir = await getAppDocumentsDirectory();
+    final attachments = Directory(p.join(dir.path, 'attachments'));
+    if (!await attachments.exists()) {
+      await attachments.create(recursive: true);
+    }
+    return attachments;
+  }
+
+  static Future<String> copyAttachmentToAppDirectory({
+    required String sourcePath,
+    required String targetFileName,
+  }) async {
+    final sourceFile = File(sourcePath);
+    if (!await sourceFile.exists()) {
+      throw Exception('附件文件不存在: $sourcePath');
+    }
+
+    final dir = await getAttachmentsDirectory();
+    final destPath = p.join(dir.path, targetFileName);
+    final destFile = File(destPath);
+    if (!await destFile.exists()) {
+      await sourceFile.copy(destPath);
+    }
+    return destPath;
   }
 
   /// 获取App内部的数据文件路径

@@ -63,6 +63,93 @@
     return target.parentElement?.closest?.(selector) || null;
   }
 
+  function isIOS() {
+    const ua = navigator.userAgent || "";
+    if (/iP(hone|od|ad)/.test(ua)) return true;
+    return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text == null ? "" : String(text);
+    return div.innerHTML;
+  }
+
+  function unwrapMarks(container) {
+    if (!container) return;
+    const marks = container.querySelectorAll("mark");
+    marks.forEach((mark) => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      while (mark.firstChild) {
+        parent.insertBefore(mark.firstChild, mark);
+      }
+      parent.removeChild(mark);
+    });
+  }
+
+  function rangeToHtml(range) {
+    try {
+      const fragment = range.cloneContents();
+      const wrapper = document.createElement("div");
+      wrapper.appendChild(fragment);
+      unwrapMarks(wrapper);
+      return wrapper.innerHTML;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  async function tryCopyRich({ text, html }) {
+    const plain = text == null ? "" : String(text);
+    const rich = html == null ? "" : String(html);
+
+    try {
+      if (navigator.clipboard && window.ClipboardItem && rich) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/html": new Blob([rich], { type: "text/html" }),
+            "text/plain": new Blob([plain], { type: "text/plain" }),
+          }),
+        ]);
+        return true;
+      }
+    } catch (_) {}
+
+    try {
+      if (navigator.clipboard && plain) {
+        await navigator.clipboard.writeText(plain);
+        return true;
+      }
+    } catch (_) {}
+
+    try {
+      const temp = document.createElement("div");
+      temp.style.position = "fixed";
+      temp.style.left = "-10000px";
+      temp.style.top = "0";
+      temp.style.width = "1px";
+      temp.style.height = "1px";
+      temp.style.overflow = "hidden";
+      temp.contentEditable = "true";
+      temp.innerHTML = rich || escapeHtml(plain);
+      document.body.appendChild(temp);
+
+      const selection = window.getSelection();
+      const r = document.createRange();
+      r.selectNodeContents(temp);
+      selection?.removeAllRanges();
+      selection?.addRange(r);
+
+      const ok = document.execCommand("copy");
+      selection?.removeAllRanges();
+      document.body.removeChild(temp);
+      return !!ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ========== 高亮恢复 ==========
   function applyHighlights(messageId, highlights) {
     if (!highlights || !Array.isArray(highlights)) return;
@@ -406,6 +493,19 @@
   function setupSelectionListener() {
     let isPointerDown = false;
 
+    function isHighlightToolbarVisible() {
+      const toolbar = document.getElementById("highlight-toolbar");
+      return !!toolbar && !toolbar.classList.contains("hidden");
+    }
+
+    function dismissSelectionToolbarIfNeeded(e) {
+      if (!isHighlightToolbarVisible()) return;
+      if (closestTarget(e.target, "#highlight-toolbar")) return;
+      if (closestTarget(e.target, "#highlight-editor")) return;
+      hideHighlightToolbar();
+      highlightState.currentSelection = null;
+    }
+
     document.addEventListener(
       "mousedown",
       () => {
@@ -460,9 +560,40 @@
       }
     });
 
+    document.addEventListener(
+      "mousedown",
+      dismissSelectionToolbarIfNeeded,
+      true,
+    );
+    document.addEventListener(
+      "touchstart",
+      dismissSelectionToolbarIfNeeded,
+      true,
+    );
+    document.addEventListener(
+      "contextmenu",
+      (e) => {
+        if (!isIOS()) return;
+        e.preventDefault();
+      },
+      true,
+    );
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (!isHighlightToolbarVisible()) return;
+        hideHighlightToolbar();
+        highlightState.currentSelection = null;
+      },
+      { passive: true },
+    );
+
     function processSelection() {
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed) {
+        if (highlightState.currentSelection && isHighlightToolbarVisible()) {
+          return;
+        }
         hideHighlightToolbar();
         highlightState.currentSelection = null;
         return;
@@ -507,6 +638,7 @@
         start: offsets.start,
         end: offsets.end,
         text: exact,
+        html: rangeToHtml(range),
         prefix: fullText.substring(
           Math.max(0, offsets.start - 50),
           offsets.start,
@@ -529,10 +661,15 @@
       if (!isPointerDown) {
         const rect = range.getBoundingClientRect();
         showHighlightToolbar(rect);
+        if (isIOS()) {
+          setTimeout(() => {
+            window.getSelection()?.removeAllRanges();
+          }, 0);
+        }
       }
     }
 
-    const debouncedProcess = debounce(processSelection, 120);
+    const debouncedProcess = debounce(processSelection, 200);
     document.addEventListener("selectionchange", debouncedProcess);
     document.addEventListener(
       "mouseup",
@@ -691,10 +828,14 @@
         const action = actionBtn.dataset.action;
         const sel = highlightState.currentSelection;
 
-        if (action === "copy" && window.FlutterBridge?.copyToClipboard) {
-          window.FlutterBridge.copyToClipboard({
-            text: sel.text,
-            showToast: true,
+        if (action === "copy") {
+          tryCopyRich({ text: sel.text, html: sel.html }).then((ok) => {
+            if (!ok && window.FlutterBridge?.copyToClipboard) {
+              window.FlutterBridge.copyToClipboard({
+                text: sel.text,
+                showToast: true,
+              });
+            }
           });
           hideHighlightToolbar();
           window.getSelection()?.removeAllRanges();
@@ -1228,6 +1369,9 @@
   // ========== 初始化 ==========
   function init() {
     console.log("[HighlightManager] Initializing...");
+    if (isIOS()) {
+      document.body.classList.add("platform-ios");
+    }
     setupSelectionListener();
     setupToolbarEvents();
     setupHighlightClickListener();

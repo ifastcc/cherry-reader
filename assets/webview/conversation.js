@@ -77,6 +77,66 @@
     }
   }
 
+  function fixCjkStrongPunctuation(markdown) {
+    if (!markdown || typeof markdown !== "string") return markdown;
+    if (markdown.indexOf("**") === -1) return markdown;
+
+    const openerRe =
+      /([0-9A-Za-z\u4E00-\u9FFF])\*\*(?=[:;,.!?，。！？：；、（）【】《》「」『』、“”‘’…—])/g;
+    const closerRe =
+      /([:;,.!?，。！？：；、（）【】《》「」『』、“”‘’…—])\*\*(?=[0-9A-Za-z\u4E00-\u9FFF])/g;
+
+    function fixInlineCode(line) {
+      let out = "";
+      let i = 0;
+      while (i < line.length) {
+        const tickAt = line.indexOf("`", i);
+        if (tickAt === -1) {
+          out += line
+            .slice(i)
+            .replace(openerRe, "$1<!-- -->**")
+            .replace(closerRe, "$1**<!-- -->");
+          break;
+        }
+
+        out += line
+          .slice(i, tickAt)
+          .replace(openerRe, "$1<!-- -->**")
+          .replace(closerRe, "$1**<!-- -->");
+
+        let run = 1;
+        while (tickAt + run < line.length && line[tickAt + run] === "`") run++;
+        const fence = "`".repeat(run);
+
+        const closeAt = line.indexOf(fence, tickAt + run);
+        if (closeAt === -1) {
+          out += line.slice(tickAt);
+          break;
+        }
+
+        out += line.slice(tickAt, closeAt + run);
+        i = closeAt + run;
+      }
+      return out;
+    }
+
+    const lines = markdown.split("\n");
+    let inFence = false;
+    for (let idx = 0; idx < lines.length; idx++) {
+      const raw = lines[idx];
+      const trimmed = raw.trimStart();
+      if (trimmed.startsWith("```")) {
+        inFence = !inFence;
+        continue;
+      }
+      if (!inFence) {
+        lines[idx] = fixInlineCode(raw);
+      }
+    }
+
+    return lines.join("\n");
+  }
+
   function renderMarkdown(content, messageId) {
     if (!md) {
       initMarkdownRenderer();
@@ -86,7 +146,8 @@
       return `<p data-block-index="0">${escapeHtml(content)}</p>`;
     }
 
-    const tokens = md.parse(content, {});
+    const fixedContent = fixCjkStrongPunctuation(content);
+    const tokens = md.parse(fixedContent, {});
 
     let blockIndex = 0;
     function processTokens(tokens) {
@@ -117,6 +178,84 @@
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  function unwrapMarks(container) {
+    if (!container) return;
+    const marks = container.querySelectorAll("mark");
+    marks.forEach((mark) => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      while (mark.firstChild) {
+        parent.insertBefore(mark.firstChild, mark);
+      }
+      parent.removeChild(mark);
+    });
+  }
+
+  function sanitizeHtmlForClipboard(html) {
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = html || "";
+    unwrapMarks(wrapper);
+    wrapper.querySelectorAll("*").forEach((el) => {
+      const attrs = Array.from(el.attributes || []);
+      for (const attr of attrs) {
+        if (attr && attr.name && attr.name.startsWith("data-")) {
+          el.removeAttribute(attr.name);
+        }
+      }
+    });
+    return wrapper.innerHTML;
+  }
+
+  async function tryCopyRich({ text, html }) {
+    const plain = text == null ? "" : String(text);
+    const rich = html == null ? "" : String(html);
+
+    try {
+      if (navigator.clipboard && window.ClipboardItem && rich) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/html": new Blob([rich], { type: "text/html" }),
+            "text/plain": new Blob([plain], { type: "text/plain" }),
+          }),
+        ]);
+        return true;
+      }
+    } catch (_) {}
+
+    try {
+      if (navigator.clipboard && plain) {
+        await navigator.clipboard.writeText(plain);
+        return true;
+      }
+    } catch (_) {}
+
+    try {
+      const temp = document.createElement("div");
+      temp.style.position = "fixed";
+      temp.style.left = "-10000px";
+      temp.style.top = "0";
+      temp.style.width = "1px";
+      temp.style.height = "1px";
+      temp.style.overflow = "hidden";
+      temp.contentEditable = "true";
+      temp.innerHTML = rich || escapeHtml(plain);
+      document.body.appendChild(temp);
+
+      const selection = window.getSelection();
+      const r = document.createRange();
+      r.selectNodeContents(temp);
+      selection?.removeAllRanges();
+      selection?.addRange(r);
+
+      const ok = document.execCommand("copy");
+      selection?.removeAllRanges();
+      document.body.removeChild(temp);
+      return !!ok;
+    } catch (_) {
+      return false;
+    }
   }
 
   function getModelColor(modelId) {
@@ -747,15 +886,20 @@
     copyBtn?.addEventListener("click", () => {
       const round = state.rounds[state.currentRoundIndex];
       const reply = round?.assistantReplies?.[state.currentReplyIndex];
-      if (reply?.content) {
-        if (window.FlutterBridge && window.FlutterBridge.copyToClipboard) {
-          window.FlutterBridge.copyToClipboard({ text: reply.content });
-        } else {
-          navigator.clipboard.writeText(reply.content).then(() => {
-            console.log("[Toolbar] Copied to clipboard");
-          });
+      if (!reply) return;
+
+      const roundEl = document.querySelector(
+        `.round-card[data-round-index="${state.currentRoundIndex}"]`,
+      );
+      const replyEl = roundEl?.querySelector(".reply-content.markdown-body");
+      const html = sanitizeHtmlForClipboard(replyEl?.innerHTML || "");
+      const text = (replyEl?.innerText || reply.content || "").trim();
+
+      tryCopyRich({ text, html }).then((ok) => {
+        if (!ok && window.FlutterBridge?.copyToClipboard) {
+          window.FlutterBridge.copyToClipboard({ text, showToast: true });
         }
-      }
+      });
     });
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:gpt_markdown_custom/gpt_markdown.dart';
+import '../utils/text_cleaner.dart';
 
 /// 统一的 Markdown 渲染器
 ///
@@ -41,7 +42,7 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
   final bool enableVirtualization;
 
   const UnifiedMarkdownRenderer({
-    Key? key,
+    super.key,
     required this.data,
     this.textStyle,
     this.textAlign,
@@ -51,12 +52,13 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
     this.scrollable = false,
     this.virtualizeThreshold = 10000,
     this.enableVirtualization = true,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? const Color(0xFFE8E8E8) : const Color(0xFF1A1A2E);
+    final normalizedData = fixMarkdownStrongAfterCjkPunctuation(data);
     
     // 创建自定义主题 - Cherry Studio 风格
     final themeData = _buildThemeData(context, isDark, textColor);
@@ -72,7 +74,7 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
     
     // 【性能优化】长内容虚拟化渲染
     final shouldVirtualize = enableVirtualization && 
-                              data.length > virtualizeThreshold;
+                              normalizedData.length > virtualizeThreshold;
 
     Widget markdownWidget;
     
@@ -80,12 +82,13 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
       // 长内容：使用增量渲染
       markdownWidget = _buildVirtualizedContent(
         context, 
+        normalizedData,
         themeData, 
         defaultTextStyle,
       );
     } else {
       // 短内容：直接渲染
-      markdownWidget = _buildDirectContent(themeData, defaultTextStyle);
+      markdownWidget = _buildDirectContent(normalizedData, themeData, defaultTextStyle);
     }
 
     // 根据 scrollable 和 padding 包装
@@ -158,13 +161,14 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
   
   /// 直接渲染（短内容）
   Widget _buildDirectContent(
+    String markdown,
     GptMarkdownThemeData themeData,
     TextStyle defaultTextStyle,
   ) {
     return GptMarkdownTheme(
       gptThemeData: themeData,
       child: GptMarkdownV2(
-        data: data,
+        data: markdown,
         config: GptMarkdownConfig(
           style: defaultTextStyle,
           textAlign: textAlign,
@@ -180,11 +184,12 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
   /// 策略：将长内容分成多个段落，使用 RepaintBoundary 隔离重绘
   Widget _buildVirtualizedContent(
     BuildContext context,
+    String markdown,
     GptMarkdownThemeData themeData,
     TextStyle defaultTextStyle,
   ) {
     // 按段落分割（使用双换行作为分隔符）
-    final chunks = _splitIntoChunks(data);
+    final chunks = _splitIntoChunks(markdown);
     
     return GptMarkdownTheme(
       gptThemeData: themeData,

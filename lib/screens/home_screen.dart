@@ -19,6 +19,7 @@ import '../services/sync/sync_candidate.dart';
 import '../services/sync/sync_preferences.dart';
 import '../services/sync/sync_source_type.dart';
 import '../services/timeline_compute_service.dart';
+import '../services/import/source_adapter.dart';
 import '../models/domain/data_version.dart';
 import '../models/domain/status_bar_state.dart';
 import '../models/computed_timeline.dart';
@@ -775,9 +776,19 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 保存到缓存 (创建新版本)
   Future<void> _saveToCache(CherryExtractor extractor, String filePath) async {
     try {
-      final file = File(filePath);
-      final modifiedAt = await file.lastModified();
-      final filename = filePath.split(Platform.pathSeparator).last;
+      final type = await FileSystemEntity.type(filePath, followLinks: false);
+      DateTime modifiedAt;
+      String filename;
+
+      if (type == FileSystemEntityType.directory) {
+        final dir = Directory(filePath);
+        modifiedAt = (await dir.stat()).modified;
+        filename = filePath.split(Platform.pathSeparator).last;
+      } else {
+        final file = File(filePath);
+        modifiedAt = await file.lastModified();
+        filename = filePath.split(Platform.pathSeparator).last;
+      }
 
       debugPrint('📦 启动后台导入以创建版本: $filename');
       // 不等待其完成，让它在后台运行，UI 通过 Stream 更新状态
@@ -974,9 +985,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['zip', 'json'],
+      allowedExtensions: ['zip', 'json', 'md'],
       initialDirectory: initialDirectory,
-      dialogTitle: '选择 Cherry Studio 导出文件',
+      dialogTitle: '选择 ZIP/JSON/Markdown 文件',
     );
 
     if (result == null || result.files.isEmpty) return;
@@ -992,9 +1003,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       debugPrint('📂 用户选择的文件: $filePath');
 
-      final appFilePath = await DataPersistenceManager.copyFileToAppDirectory(
-        filePath,
-      );
+      final lower = filePath.toLowerCase();
+      final shouldCopyToApp = lower.endsWith('.zip') || lower.endsWith('.json');
+      final effectivePath = shouldCopyToApp
+          ? await DataPersistenceManager.copyFileToAppDirectory(filePath)
+          : filePath;
 
       try {
         var fileDir = File(filePath).parent.path;
@@ -1004,7 +1017,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         debugPrint('保存目录失败: $e');
       }
 
-      final success = await _loadFile(appFilePath, saveCache: true);
+      final success = await _loadFile(effectivePath, saveCache: true);
 
       if (success) {
         final stat = await File(filePath).stat();
@@ -1029,7 +1042,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       } else if (_statusError != null &&
           (_statusError!.contains('ZIP') || _statusError!.contains('FormatException'))) {
         debugPrint('❌ 用户选择的文件损坏');
-        await _handleCorruptedFile(appFilePath);
+        await _handleCorruptedFile(effectivePath);
       }
     } catch (e) {
       setState(() {
@@ -1037,6 +1050,51 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _isLoading = false;
       });
       debugPrint('文件导入失败: $e');
+    }
+  }
+
+  Future<void> _pickAndLoadFolder() async {
+    String? initialDirectory;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastDir = prefs.getString('last_opened_directory');
+      if (lastDir != null && await Directory(lastDir).exists()) {
+        initialDirectory = lastDir;
+      } else {
+        initialDirectory =
+            Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+      }
+    } catch (e) {
+      initialDirectory = null;
+    }
+
+    final folderPath = await FilePicker.platform.getDirectoryPath(
+      initialDirectory: initialDirectory,
+      dialogTitle: '选择导入目录',
+    );
+    if (folderPath == null || folderPath.isEmpty) return;
+
+    setState(() {
+      _isLoading = true;
+      _statusError = null;
+    });
+
+    try {
+      debugPrint('📂 用户选择的目录: $folderPath');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('last_opened_directory', folderPath);
+      } catch (e) {
+        debugPrint('保存目录失败: $e');
+      }
+
+      await _loadFile(folderPath, saveCache: true);
+    } catch (e) {
+      setState(() {
+        _statusError = '目录导入失败: $e';
+        _isLoading = false;
+      });
+      debugPrint('目录导入失败: $e');
     }
   }
 
@@ -1055,14 +1113,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     try {
       final startTime = DateTime.now();
-
-      final isZip = filePath.endsWith('.zip');
-      final extractor = CherryExtractor(
-        zipPath: isZip ? filePath : null,
-        dataJsonPath: isZip ? null : filePath,
-      );
-
-      await extractor.load();
+      final adapter = SourceAdapter();
+      final extractor = await adapter.loadExtractor(filePath);
 
       // 【被动导入】自动从加载的数据中导入 AI Providers
       // 不需要重新解包 ZIP，直接从 extractor.rawData 中提取
@@ -1137,7 +1189,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         await _saveToCache(extractor, filePath);
         // 保存时间戳
         try {
-           await DataPersistenceManager.saveFileTimestamp(filePath);
+          if (await FileSystemEntity.isFile(filePath)) {
+            await DataPersistenceManager.saveFileTimestamp(filePath);
+          }
         } catch (_) {}
       }
       return true; // 加载成功
@@ -1203,10 +1257,18 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.upload_file_outlined),
-                title: const Text('选择 ZIP/JSON 导入'),
+                title: const Text('选择 ZIP/JSON/MD 导入'),
                 onTap: () {
                   Navigator.pop(context);
                   _pickAndLoadFile();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.folder_open),
+                title: const Text('选择目录导入'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickAndLoadFolder();
                 },
               ),
               const SizedBox(height: 12),
