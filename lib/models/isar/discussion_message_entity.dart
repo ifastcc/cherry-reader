@@ -1,21 +1,11 @@
-import 'package:isar_community/isar.dart';
-
-part 'discussion_message_entity.g.dart';
-
 /// 讨论消息实体
 ///
 /// 存储讨论线程中的单条消息
-@collection
 class DiscussionMessageEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 消息ID（UUID）
-  @Index()
   late String messageId;
 
   /// 所属讨论ID
-  @Index()
   late String discussionId;
 
   /// 消息角色（user, assistant, system）

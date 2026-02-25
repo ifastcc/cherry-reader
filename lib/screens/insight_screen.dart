@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/domain/insight_models.dart';
 import '../models/isar/perspective_entity.dart';
 import '../widgets/unified_markdown_renderer.dart';
 import '../services/insight_service.dart';

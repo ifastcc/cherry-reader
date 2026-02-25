@@ -2,7 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'dart:io';
-import 'isar_database.dart';
+import 'app_db.dart';
 import 'topic_service.dart';
 
 /// 数据持久化管理器
@@ -16,7 +16,7 @@ class DataPersistenceManager {
   static const String _appDataFileName = 'cherry_studio_data.zip';
   static const String _cacheVersion = 'cache_version_v3'; // 版本控制
 
-  static final IsarDatabase _db = IsarDatabase();
+  static final AppDb _db = AppDb();
 
   /// 获取App的Documents目录
   static Future<Directory> getAppDocumentsDirectory() async {

@@ -1,17 +1,8 @@
-import 'package:isar_community/isar.dart';
-
-part 'insight_entity.g.dart';
-
 /// 洞察实体
 ///
 /// 存储 AI 生成的洞察分析结果
-@collection
 class InsightEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 洞察唯一标识
-  @Index(unique: true)
   late String insightId;
 
   /// 使用的视角 ID
@@ -39,7 +30,6 @@ class InsightEntity {
   late String timeRangeLabel;
 
   /// 创建时间（毫秒时间戳）
-  @Index()
   late int createdAt;
 
   /// 构造函数

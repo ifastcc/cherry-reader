@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'dart:async';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -19,13 +20,9 @@ import '../services/streaming_tts_service.dart';
 import '../services/tts_cache_manager.dart';
 import '../services/ai_provider_service.dart';
 import '../services/cherry_export_service.dart';
-import '../services/isar_database.dart';
+import '../services/app_db.dart';
 import '../services/mcp/mcp_server_service.dart';
 import '../services/mcp/mcp_config.dart';
-import '../models/isar/assistant_entity.dart';
-import '../models/isar/topic_entity.dart';
-import '../models/isar/message_entity.dart';
-import '../models/isar/message_block_entity.dart';
 import '../models/tts_settings.dart';
 import '../providers/tts_provider.dart';
 import '../utils/platform_utils.dart';
@@ -40,6 +37,8 @@ import '../models/isar/perspective_entity.dart';
 import 'lan_transfer_receive_screen.dart';
 import 'lan_transfer_send_screen.dart';
 import 'lan_http_sync_pull_screen.dart';
+import '../services/sync/server_sync_service.dart';
+import '../services/app_db.dart';
 
 // SharedPreferences 键名常量
 const String _keyApiUrl = 'openai_api_url';
@@ -78,6 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _autoLocalFolderEnabled = false;
   bool _autoLanReceiveEnabled = false;
   bool _autoHttpPullEnabled = false;
+  bool _autoServerSyncEnabled = false;
 
   final Map<SyncSourceType, bool> _syncSourceExpanded = {};
   final Map<String, bool> _syncToolExpanded = {};
@@ -86,6 +86,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _httpPullTokenController;
   bool _isTestingHttpPull = false;
   String? _httpPullTestMessage;
+
+  // 同步服务器配置
+  late TextEditingController _serverSyncUrlController;
+  late TextEditingController _serverSyncTokenController;
+  bool _isTestingServerSync = false;
+  bool _isSyncingNow = false;
+  String? _serverSyncTestMessage;
 
   LanHttpSyncConfig? _lanHttpSyncConfig;
   LanHttpSyncServerStatus _lanHttpSyncStatus = const LanHttpSyncStopped();
@@ -129,6 +136,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _httpPullBaseUrlController = TextEditingController();
     _httpPullTokenController = TextEditingController();
     _lanHttpSyncPortController = TextEditingController();
+    _serverSyncUrlController = TextEditingController();
+    _serverSyncTokenController = TextEditingController();
     // _azureKeyController = TextEditingController();
     _azureRegionController = TextEditingController();
     _loadSettings();
@@ -152,6 +161,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _httpPullBaseUrlController.dispose();
     _httpPullTokenController.dispose();
     _lanHttpSyncPortController.dispose();
+    _serverSyncUrlController.dispose();
+    _serverSyncTokenController.dispose();
     // _azureKeyController.dispose();
     for (var controller in _azureKeyControllers) {
       controller.dispose();
@@ -247,10 +258,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final httpPullPrefs = await LanHttpSyncPullPrefs.load();
 
+    // 加载同步服务器配置
+    final serverSyncUrl = await ServerSyncService.getServerUrl();
+    final serverSyncToken = await ServerSyncService.getServerToken();
+
     final webdavConfigured = webdavConfig.isValid;
     final localFolderConfigured = localFolderConfig.folderPath.trim().isNotEmpty;
     final httpPullConfigured = httpPullPrefs.baseUrl.trim().isNotEmpty &&
         httpPullPrefs.baseUrl.trim() != 'http://';
+    final serverSyncConfigured = serverSyncUrl.isNotEmpty;
 
     LanHttpSyncConfig? lanHttpSyncConfig;
     LanHttpSyncServerStatus lanHttpSyncStatus = const LanHttpSyncStopped();
@@ -278,6 +294,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _autoLocalFolderEnabled = autoSources[SyncSourceType.localFolder] ?? false;
       _autoLanReceiveEnabled = autoSources[SyncSourceType.lanReceive] ?? false;
       _autoHttpPullEnabled = autoSources[SyncSourceType.httpPull] ?? false;
+      _autoServerSyncEnabled = autoSources[SyncSourceType.serverSync] ?? false;
       _webdavUrlController.text = webdavConfig.url;
       _webdavUsernameController.text = webdavConfig.username;
       _webdavPasswordController.text = webdavConfig.password;
@@ -286,6 +303,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _localFolderAutoLoad = localFolderAutoLoad;
       _httpPullBaseUrlController.text = httpPullPrefs.baseUrl;
       _httpPullTokenController.text = httpPullPrefs.token;
+      _serverSyncUrlController.text = serverSyncUrl;
+      _serverSyncTokenController.text = serverSyncToken;
       _lanHttpSyncConfig = lanHttpSyncConfig;
       _lanHttpSyncStatus = lanHttpSyncStatus;
       _lanHttpSyncPortController.text =
@@ -299,6 +318,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           (autoSources[SyncSourceType.httpPull] ?? false) && !httpPullConfigured;
       _syncSourceExpanded[SyncSourceType.lanReceive] =
           (autoSources[SyncSourceType.lanReceive] ?? false) == true;
+      _syncSourceExpanded[SyncSourceType.serverSync] =
+          (autoSources[SyncSourceType.serverSync] ?? false) && !serverSyncConfigured;
       _syncToolExpanded['httpServer'] = (lanHttpSyncStatus is LanHttpSyncRunning);
       
       // Load Azure Keys
@@ -741,7 +762,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return v.isNotEmpty && v != 'http://';
   }
 
+  bool get _serverSyncConfigValid => _serverSyncUrlController.text.trim().isNotEmpty;
+
   Future<void> _setAutoSource(SyncSourceType type, bool enabled) async {
+    // 互斥逻辑：serverSync 与其他同步源互斥
+    final isServerSync = type == SyncSourceType.serverSync;
+    final otherFileBasedSources = [
+      SyncSourceType.webdav,
+      SyncSourceType.localFolder,
+      SyncSourceType.lanReceive,
+      SyncSourceType.httpPull,
+    ];
+
     setState(() {
       switch (type) {
         case SyncSourceType.webdav:
@@ -756,11 +788,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
         case SyncSourceType.httpPull:
           _autoHttpPullEnabled = enabled;
           break;
+        case SyncSourceType.serverSync:
+          _autoServerSyncEnabled = enabled;
+          break;
         case SyncSourceType.manualImport:
           break;
       }
+
+      // 启用 serverSync 时禁用其他源
+      if (enabled && isServerSync) {
+        _autoWebDavEnabled = false;
+        _autoLocalFolderEnabled = false;
+        _autoLanReceiveEnabled = false;
+        _autoHttpPullEnabled = false;
+      }
+      // 启用其他源时禁用 serverSync
+      if (enabled && !isServerSync && type != SyncSourceType.manualImport) {
+        _autoServerSyncEnabled = false;
+      }
     });
+
     await SyncPreferences.setAutoSourceEnabled(type, enabled);
+
+    // 持久化互斥状态
+    if (enabled && isServerSync) {
+      for (final other in otherFileBasedSources) {
+        await SyncPreferences.setAutoSourceEnabled(other, false);
+      }
+    }
+    if (enabled && !isServerSync && type != SyncSourceType.manualImport) {
+      await SyncPreferences.setAutoSourceEnabled(SyncSourceType.serverSync, false);
+    }
 
     if (!mounted) return;
     if (!enabled) return;
@@ -768,6 +826,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       SyncSourceType.webdav => !_webdavConfigValid,
       SyncSourceType.localFolder => !_localFolderConfigValid,
       SyncSourceType.httpPull => !_httpPullConfigValid,
+      SyncSourceType.serverSync => !_serverSyncConfigValid,
       SyncSourceType.lanReceive => true,
       SyncSourceType.manualImport => false,
     };
@@ -818,6 +877,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildAutoSyncCard() {
     final selected = <String>[];
+    if (_autoServerSyncEnabled) selected.add('同步服务器');
     if (_autoLocalFolderEnabled) selected.add('本地文件夹');
     if (_autoWebDavEnabled) selected.add('WebDAV');
     if (_autoHttpPullEnabled) selected.add('HTTP 拉取');
@@ -854,6 +914,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildSyncSourcesCard() {
     final items = <Widget>[
+      _buildSyncSourceItem(
+        type: SyncSourceType.serverSync,
+        icon: Icons.sync_outlined,
+        description: '从自建同步服务器增量拉取（与其他来源互斥）',
+        enabled: _autoServerSyncEnabled,
+        configured: _serverSyncConfigValid,
+        body: _buildServerSyncConfigCard(),
+      ),
       _buildSyncSourceItem(
         type: SyncSourceType.webdav,
         icon: Icons.cloud_sync_outlined,
@@ -1014,6 +1082,173 @@ class _SettingsScreenState extends State<SettingsScreen> {
           crossFadeState: expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
           duration: const Duration(milliseconds: 200),
         ),
+      ],
+    );
+  }
+
+  Future<void> _saveServerSyncConfig() async {
+    await ServerSyncService.saveConfig(
+      serverUrl: _serverSyncUrlController.text.trim(),
+      token: _serverSyncTokenController.text.trim(),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('同步服务器配置已保存'), duration: Duration(seconds: 1)),
+    );
+  }
+
+  Future<void> _testServerSync() async {
+    if (_isTestingServerSync) return;
+    setState(() {
+      _isTestingServerSync = true;
+      _serverSyncTestMessage = '测试中...';
+    });
+    await _saveServerSyncConfig();
+
+    try {
+      final url = _serverSyncUrlController.text.trim().replaceAll(RegExp(r'/+$'), '');
+      final resp = await http.get(Uri.parse('$url/health')).timeout(
+        const Duration(seconds: 5),
+      );
+      if (!mounted) return;
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body);
+        setState(() {
+          _isTestingServerSync = false;
+          _serverSyncTestMessage = '连接成功 · ${data['topics'] ?? 0} 个话题';
+        });
+      } else {
+        setState(() {
+          _isTestingServerSync = false;
+          _serverSyncTestMessage = '连接失败：HTTP ${resp.statusCode}';
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isTestingServerSync = false;
+        _serverSyncTestMessage = '连接失败：${e.toString().split('\n').first}';
+      });
+    }
+  }
+
+  Future<void> _syncNow() async {
+    if (_isSyncingNow) return;
+    setState(() {
+      _isSyncingNow = true;
+      _serverSyncTestMessage = '正在同步...';
+    });
+    await _saveServerSyncConfig();
+
+    try {
+      final service = ServerSyncService(AppDb());
+      final result = await service.incrementalSync(
+        onStatus: (msg) {
+          if (!mounted) return;
+          setState(() => _serverSyncTestMessage = msg);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _isSyncingNow = false;
+        _serverSyncTestMessage = '同步完成：+${result.upserted} -${result.deleted}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSyncingNow = false;
+        _serverSyncTestMessage = '同步失败：${e.toString().split('\n').first}';
+      });
+    }
+  }
+
+  Widget _buildServerSyncConfigCard() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.orange[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.orange[100]!),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.orange[700], size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '增量同步模式：仅同步新增/更新/删除的话题，无需下载完整备份。启用后其他同步来源将自动关闭。',
+                  style: TextStyle(color: Colors.orange[800], fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _serverSyncUrlController,
+          decoration: _panelInputDecoration(
+            labelText: '服务器地址',
+            hintText: 'http://192.168.1.10:3456',
+            prefixIcon: Icons.dns_outlined,
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _serverSyncTokenController,
+          obscureText: true,
+          decoration: _panelInputDecoration(
+            labelText: '认证 Token',
+            hintText: '同步服务器的 SYNC_TOKEN',
+            prefixIcon: Icons.key_outlined,
+          ),
+        ),
+        if (_serverSyncTestMessage != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _serverSyncTestMessage!,
+            style: TextStyle(
+              fontSize: 12,
+              color: _serverSyncTestMessage!.contains('成功') || _serverSyncTestMessage!.contains('完成')
+                  ? Colors.green[700]
+                  : _serverSyncTestMessage!.contains('失败')
+                      ? Colors.red[700]
+                      : Colors.grey[600],
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        _buildPanelActionRow([
+          OutlinedButton.icon(
+            onPressed: _isTestingServerSync ? null : _testServerSync,
+            icon: _isTestingServerSync
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.wifi_find),
+            label: Text(_isTestingServerSync ? '测试中...' : '测试连接'),
+          ),
+          ElevatedButton.icon(
+            onPressed: _saveServerSyncConfig,
+            icon: const Icon(Icons.save),
+            label: const Text('保存配置'),
+          ),
+          OutlinedButton.icon(
+            onPressed: _isSyncingNow ? null : _syncNow,
+            icon: _isSyncingNow
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.sync),
+            label: Text(_isSyncingNow ? '同步中...' : '立即同步'),
+          ),
+        ]),
       ],
     );
   }
@@ -1836,13 +2071,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 获取数据统计
   Future<Map<String, int>> _getDataStatistics() async {
     try {
-      final db = IsarDatabase();
-      final isar = await db.instance;
+      final db = AppDb();
+      await db.init();
+      final sql = db.importDb;
 
-      final assistantsCount = await isar.assistantEntitys.count();
-      final topicsCount = await isar.topicEntitys.count();
-      final messagesCount = await isar.messageEntitys.count();
-      final blocksCount = await isar.messageBlockEntitys.count();
+      final assistantsCount = (await sql
+              .customSelect('SELECT COUNT(*) AS c FROM assistants')
+              .getSingle())
+          .read<int>('c');
+      final topicsCount =
+          (await sql.customSelect('SELECT COUNT(*) AS c FROM topics').getSingle())
+              .read<int>('c');
+      final messagesCount = (await sql
+              .customSelect('SELECT COUNT(*) AS c FROM messages')
+              .getSingle())
+          .read<int>('c');
+      final blocksCount = (await sql
+              .customSelect('SELECT COUNT(*) AS c FROM message_blocks')
+              .getSingle())
+          .read<int>('c');
 
       return {
         'assistants': assistantsCount,
@@ -1952,7 +2199,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
 
-      final db = IsarDatabase();
+      final db = AppDb();
+      await db.init();
       final exportService = CherryExportService(db);
 
       // 让用户选择保存位置
@@ -2023,7 +2271,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
 
-      final db = IsarDatabase();
+      final db = AppDb();
+      await db.init();
       final exportService = CherryExportService(db);
 
       // 让用户选择保存位置

@@ -1,7 +1,3 @@
-import 'package:isar_community/isar.dart';
-
-part 'prompt_template_entity.g.dart';
-
 /// 模板适用类型
 ///
 /// 区分模板是用于多模型对比还是单回复分析
@@ -20,12 +16,8 @@ enum TemplateTargetType {
 ///
 /// 存储用户的全局偏好设置，作为所有对话的 System Prompt
 /// 例如：语言偏好、思考方式、回复风格等
-@collection
 class UserPreferenceEntity {
-  Id id = Isar.autoIncrement;
-
   /// 偏好唯一 ID（UUID）
-  @Index(unique: true)
   late String preferenceId;
 
   /// 偏好名称（如"默认偏好"、"简洁模式"等）
@@ -35,7 +27,6 @@ class UserPreferenceEntity {
   late String systemPrompt;
 
   /// 是否为当前激活的偏好
-  @Index()
   late bool isActive;
 
   /// 默认模板 ID（用于新对话自动选择模板）
@@ -81,12 +72,8 @@ class UserPreferenceEntity {
 ///
 /// 存储可复用的任务模版（本质上是预设的用户问题模式）
 /// 例如：元分析模版、翻译模版、总结模版等
-@collection
 class TaskTemplateEntity {
-  Id id = Isar.autoIncrement;
-
   /// 模版唯一 ID（UUID）
-  @Index(unique: true)
   late String templateId;
 
   /// 模版名称
@@ -105,14 +92,12 @@ class TaskTemplateEntity {
   late int usageCount;
 
   /// 模板适用类型（多模型对比/单回复/通用）
-  @Enumerated(EnumType.ordinal)
   late TemplateTargetType targetType;
 
   /// 创建时间戳（毫秒）
   late int createdAt;
 
   /// 更新时间戳（毫秒）
-  @Index()
   late int updatedAt;
 
   /// 创建实体

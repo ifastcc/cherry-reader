@@ -5,22 +5,19 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:webdav_client/webdav_client.dart' as wd;
 import 'dart:io';
 import 'dart:async'; // For Timer
-import '../services/cherry_extractor.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/repository_provider.dart';
 import '../services/webdav_service.dart';
 import '../services/local_folder_sync_service.dart';
 import '../services/ai_provider_service.dart';
-import '../services/version_service.dart';
-import '../services/background_import_service.dart';
 import '../services/sync_status_notifier.dart';
 import '../services/sync/sync_coordinator.dart';
 import '../services/sync/sync_candidate.dart';
 import '../services/sync/sync_preferences.dart';
 import '../services/sync/sync_source_type.dart';
-import '../services/timeline_compute_service.dart';
 import '../services/import/source_adapter.dart';
-import '../models/domain/data_version.dart';
+import '../services/data_import/drift_data_import_service_impl.dart';
+import '../services/unified_import_manager.dart';
 import '../models/domain/status_bar_state.dart';
 import '../models/computed_timeline.dart';
 import 'conversation_screen.dart';
@@ -46,18 +43,21 @@ enum HomeViewMode {
   timeline,  // 时间线（按更新时间倒序）
 }
 
-/// 时间分组枚举
-enum TimeGroup { today, yesterday, thisWeek, earlier }
-
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final bool embedMode;
+  final void Function(String topicId, String topicName)? onSelectTopic;
+
+  const HomeScreen({
+    super.key,
+    this.embedMode = false,
+    this.onSelectTopic,
+  });
 
   @override
   State<HomeScreen> createState() => HomeScreenState();
 }
 
 class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  CherryExtractor? _extractor;
   bool _isLoading = false;  // 仅用于首次加载无缓存时
   bool _autoWebDavEnabled = false;
   bool _autoLocalFolderEnabled = false;
@@ -97,11 +97,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _hasValidLocalFolderConfig = false;
   LocalBackupInfo? _pendingLocalBackup;
 
-  // 版本管理
-  StreamSubscription<ImportStatus>? _importStatusSubscription;
-  DataVersion? _activeVersion;
-  String? _currentVersionDisplay;
-  bool _hasNewVersion = false;
   bool _hasUpdate = false;
 
   @override
@@ -110,7 +105,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _syncNotifier = SyncStatusNotifier();
     _loadViewMode();
-    _initVersionListener();
     _initSyncCoordinator();
     _initAndLoad();
   }
@@ -133,77 +127,150 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// 初始化版本管理监听
-  void _initVersionListener() {
-    _loadActiveVersion();
-
-    // 监听后台导入状态
-    _importStatusSubscription = BackgroundImportService.instance.statusStream.listen((status) async {
-      if (status.isCompleted && status.versionId != null) {
-        // 自动激活新版本（无感更新的核心）
-        final success = await VersionService.instance.activateVersion(
-          status.versionId!,
-          force: false, // 尊重版本锁定设置
-        );
-
-        if (success && mounted) {
-          // 静默刷新数据（不显示加载动画）
-          await _silentRefreshData();
-          setState(() {
-            _hasNewVersion = true; // 显示蓝点提示用户数据已更新
-          });
-        }
-
-        await _loadActiveVersion();
-      }
-    });
-  }
-
-  /// 静默刷新数据（无加载动画）
-  Future<void> _silentRefreshData() async {
-    try {
-      final (topicIndex, _) = await DataPersistenceManager.smartLoad();
-
-      if (topicIndex != null && topicIndex.isNotEmpty && mounted) {
-        final lastFile = await DataPersistenceManager.getLastFilePath();
-        if (lastFile != null) {
-          final extractor = _createLightweightExtractor(lastFile);
-          await extractor.load();
-
-          final assistants = extractor.getAssistants();
-          final assistantMap = <String, Map<String, dynamic>>{};
-          for (final a in assistants) {
-            if (a is Map<String, dynamic>) {
-              final id = a['id'] as String?;
-              if (id != null) {
-                assistantMap[id] = a;
-              }
-            }
-          }
-
-          // 平滑替换数据（不设置 _isLoading）
-          setState(() {
-            _extractor = extractor;
-            _topicIndex = topicIndex;
-            _assistantMap = assistantMap;
-          });
-
-          debugPrint('✅ 静默刷新数据完成');
-        }
-      }
-    } catch (e) {
-      debugPrint('⚠️ 静默刷新失败: $e');
-    }
-  }
-
-  /// 加载当前活跃版本
-  Future<void> _loadActiveVersion() async {
-    final version = await VersionService.instance.getActiveVersion();
-    if (mounted) {
+  Future<void> _refreshFromDatabase({bool showLoading = false}) async {
+    if (showLoading && mounted) {
       setState(() {
-        _activeVersion = version;
+        _isLoading = true;
+        _statusError = null;
       });
     }
+
+    try {
+      final provider = RepositoryProvider.instance;
+      final assistants = await provider.assistantRepository.getAllAssistants();
+      final topics = await provider.topicRepository.getAllTopics();
+      await provider.database.init();
+      final previews = await provider.database
+          .getTopicCardPreviews(topics.map((t) => t.topicId).toList());
+
+      final assistantMap = <String, Map<String, dynamic>>{};
+      for (final a in assistants) {
+        assistantMap[a.assistantId] = {
+          'id': a.assistantId,
+          'name': a.name,
+          'description': a.description,
+          'avatar': a.avatar,
+          'prompt': a.prompt,
+        };
+      }
+
+      final topicIndex = <String, List<Map<String, dynamic>>>{};
+      for (final t in topics) {
+        final ids = t.assistantIds.isNotEmpty ? t.assistantIds : const [''];
+        for (final assistantId in ids) {
+          topicIndex.putIfAbsent(assistantId, () => []).add({
+            'id': t.topicId,
+            'name': t.name,
+            'assistantId': assistantId,
+            'messageCount': t.messageCount,
+            'roundCount': t.roundCount,
+            'createdAt': DateTime.fromMillisecondsSinceEpoch(t.createdAt).toIso8601String(),
+            'updatedAt': DateTime.fromMillisecondsSinceEpoch(t.updatedAt).toIso8601String(),
+          });
+        }
+      }
+
+      for (final list in topicIndex.values) {
+        list.sort((a, b) {
+          final aTime = DateTime.tryParse(a['updatedAt']?.toString() ?? '') ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          final bTime = DateTime.tryParse(b['updatedAt']?.toString() ?? '') ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          return bTime.compareTo(aTime);
+        });
+      }
+
+      final timeline = _buildTimelineFromIndex(
+        topicIndex,
+        assistantMap,
+        previews.userPreviews,
+        previews.aiPreviews,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _topicIndex = topicIndex.isEmpty ? null : topicIndex;
+        _assistantMap = assistantMap.isEmpty ? null : assistantMap;
+        _computedTimeline = timeline;
+        _isComputingTimeline = false;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _statusError = '加载数据库失败\n\n$e';
+        _isLoading = false;
+        _isComputingTimeline = false;
+      });
+    }
+  }
+
+  ComputedTimeline _buildTimelineFromIndex(
+    Map<String, List<Map<String, dynamic>>> topicIndex,
+    Map<String, Map<String, dynamic>> assistantMap,
+    Map<String, String> userPreviews,
+    Map<String, String> aiPreviews,
+  ) {
+    _timelineVersion++;
+    final now = DateTime.now();
+
+    final topicsMap = <String, TopicItem>{};
+    for (final topics in topicIndex.values) {
+      for (final topic in topics) {
+        final topicId = topic['id']?.toString() ?? '';
+        if (topicId.isEmpty) continue;
+
+        final updatedAt = _parseUpdatedAt(topic['updatedAt']) ?? now;
+        final group = _getTimeGroup(updatedAt);
+        final assistantId = topic['assistantId']?.toString() ?? '';
+        final assistantName = assistantMap[assistantId]?['name']?.toString() ?? '未命名助手';
+
+        final item = TopicItem(
+          topicId: topicId,
+          name: topic['name']?.toString() ?? '未命名话题',
+          assistantId: assistantId,
+          assistantName: assistantName,
+          roundCount: (topic['roundCount'] as num?)?.toInt() ?? 0,
+          messageCount: (topic['messageCount'] as num?)?.toInt() ?? 0,
+          updatedAt: updatedAt,
+          timeDisplay: _formatTimeForGroup(updatedAt, group),
+          userPreview: userPreviews[topicId],
+          aiPreview: aiPreviews[topicId],
+        );
+
+        final existing = topicsMap[topicId];
+        if (existing == null || item.updatedAt.isAfter(existing.updatedAt)) {
+          topicsMap[topicId] = item;
+        }
+      }
+    }
+
+    final allTopics = topicsMap.values.toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+    final grouped = <TimeGroup, List<TopicItem>>{
+      TimeGroup.today: [],
+      TimeGroup.yesterday: [],
+      TimeGroup.thisWeek: [],
+      TimeGroup.earlier: [],
+    };
+    for (final topic in allTopics) {
+      grouped[_getTimeGroup(topic.updatedAt)]!.add(topic);
+    }
+
+    final groups = <TimelineGroup>[
+      TimelineGroup(type: TimeGroup.today, topics: grouped[TimeGroup.today]!),
+      TimelineGroup(type: TimeGroup.yesterday, topics: grouped[TimeGroup.yesterday]!),
+      TimelineGroup(type: TimeGroup.thisWeek, topics: grouped[TimeGroup.thisWeek]!),
+      TimelineGroup(type: TimeGroup.earlier, topics: grouped[TimeGroup.earlier]!),
+    ].where((g) => g.topics.isNotEmpty).toList();
+
+    return ComputedTimeline(
+      version: _timelineVersion,
+      groups: groups,
+      topicsMap: topicsMap,
+      computedAt: now,
+    );
   }
 
   @override
@@ -211,7 +278,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _syncCandidateSubscription?.cancel();
     unawaited(SyncCoordinator.instance.stopWatchingLocalFolder());
-    _importStatusSubscription?.cancel();
     _skeletonTimer?.cancel();
     _syncNotifier.dispose();
     super.dispose();
@@ -269,13 +335,12 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted) setState(() {});
 
     if (forceReload || settingsChanged || _topicIndex == null) {
-      await _autoLoadDataFile();
+      await _autoLoadData();
     }
   }
 
-  /// 自动加载数据文件
-  Future<void> _autoLoadDataFile() async {
-    await _loadFromLocal(showLoadingIfEmpty: true);
+  Future<void> _autoLoadData() async {
+    await _refreshFromDatabase(showLoading: !widget.embedMode);
     if (_hasAnySyncSourceSelected) {
       _syncFromEnabledSources();
     }
@@ -487,11 +552,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (localPath == null) throw Exception('获取失败');
 
     _syncNotifier.startParsing();
-
-    await DataPersistenceManager.clearCache();
     final loadSuccess = await _loadFile(
       localPath,
-      saveCache: true,
       silent: _topicIndex != null,
     );
 
@@ -587,22 +649,13 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
       _syncNotifier.startParsing();
-
-      // 2. 【后台】在 Isolate 中解压和解析 JSON（不阻塞 UI）
-      final extractor = await CherryExtractor.loadInBackground(
-        zipPath: localPath.endsWith('.zip') ? localPath : null,
-        dataJsonPath: localPath.endsWith('.zip') ? null : localPath,
+      final success = await _loadFile(
+        localPath,
+        silent: _topicIndex != null,
       );
-
-      if (!mounted) return;
-      _syncNotifier.updateImportProgress('处理数据...');
-
-      // 3. 处理数据（主线程，但相对较快）
-      await _processLoadedExtractor(extractor, backup.displayName);
-
-      // 4. 保存缓存
-      await DataPersistenceManager.clearCache();
-      await _saveToCache(extractor, localPath);
+      if (!success) {
+        throw Exception('导入失败');
+      }
 
       await SyncPreferences.setLastImported(
         fingerprint: SyncCandidate(
@@ -636,173 +689,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// 处理已加载的 extractor（从后台加载结果更新 UI）
-  Future<void> _processLoadedExtractor(CherryExtractor extractor, String versionDisplay) async {
-    // 提取 Assistant 信息（轻量操作，保留在主线程）
-    final assistants = extractor.getAssistants();
-    final assistantMap = <String, Map<String, dynamic>>{};
-    for (final a in assistants) {
-      if (a is Map<String, dynamic>) {
-        final id = a['id'] as String?;
-        if (id != null) {
-          assistantMap[id] = a;
-        }
-      }
-    }
-
-    // 为树形视图保留 topicIndex（兼容）
-    final grouped = extractor.getTopicsByAssistant();
-    final topicIndex = <String, List<Map<String, dynamic>>>{};
-    for (final entry in grouped.entries) {
-      final assistantId = entry.key;
-      final assistantData = entry.value;
-      final topics = assistantData['topics'] as List<dynamic>;
-      topicIndex[assistantId] = topics.map((t) {
-        final topic = t as Map<String, dynamic>;
-        final messages = topic['messages'] as List? ?? [];
-        int roundCount = 0;
-        for (final msg in messages) {
-          if (msg is Map<String, dynamic> && msg['role'] == 'user') {
-            roundCount++;
-          }
-        }
-        return {
-          'id': topic['id'],
-          'name': topic['name'],
-          'assistantId': assistantId,
-          'messageCount': messages.length,
-          'roundCount': roundCount,
-          'createdAt': topic['createdAt'],
-          'updatedAt': topic['updatedAt'],
-        };
-      }).toList();
-    }
-
-    // 【被动导入】自动从加载的数据中导入 AI Providers
-    try {
-      if (extractor.rawData != null) {
-        final count = await AIProviderService.instance
-            .importFromParsedData(extractor.rawData!);
-        if (count > 0) {
-          debugPrint('✅ 自动导入了 $count 个 AI Provider');
-        }
-      }
-    } catch (e) {
-      debugPrint('⚠️ AI Provider 自动导入失败: $e');
-    }
-
-    // 更新基础 UI 状态
-    if (mounted) {
-      setState(() {
-        _extractor = extractor;
-        _topicIndex = topicIndex;
-        _assistantMap = assistantMap;
-        _currentVersionDisplay = versionDisplay;
-        _isLoading = false;
-      });
-    }
-
-    // 【性能优化】触发 Isolate 计算时间线
-    if (extractor.rawData != null) {
-      _computeTimelineAsync(extractor.rawData!, assistantMap);
-    }
-  }
-
-  /// 【性能优化】在 Isolate 中计算时间线
-  Future<void> _computeTimelineAsync(
-    Map<String, dynamic> rawData,
-    Map<String, Map<String, dynamic>> assistantMap,
-  ) async {
-    _timelineVersion++;
-    final currentVersion = _timelineVersion;
-    _isComputingTimeline = true;
-
-    // 延迟显示骨架屏，避免闪烁
-    _skeletonTimer?.cancel();
-    _skeletonTimer = Timer(_skeletonDelay, () {
-      if (_isComputingTimeline && mounted) {
-        _skeletonShownAt = DateTime.now();
-        setState(() {}); // 触发显示骨架屏
-      }
-    });
-
-    try {
-      final result = await TimelineComputeService.computeTimeline(
-        TimelineComputeParams(
-          version: currentVersion,
-          rawData: rawData,
-          assistantMap: assistantMap,
-          now: DateTime.now(),
-        ),
-      );
-
-      // 版本检查，防止过期结果覆盖新数据
-      if (result.version != _timelineVersion) {
-        debugPrint('⚠️ 时间线计算结果已过期，丢弃');
-        return;
-      }
-
-      _skeletonTimer?.cancel();
-
-      // 如果骨架屏已显示，确保最少显示一段时间
-      if (_skeletonShownAt != null) {
-        final elapsed = DateTime.now().difference(_skeletonShownAt!);
-        if (elapsed < _skeletonMinDuration) {
-          await Future.delayed(_skeletonMinDuration - elapsed);
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _computedTimeline = result;
-          _isComputingTimeline = false;
-          _skeletonShownAt = null;
-        });
-      }
-
-      debugPrint('✅ 时间线计算完成: ${result.totalCount} 个话题');
-    } catch (e) {
-      debugPrint('❌ 时间线计算失败: $e');
-      _skeletonTimer?.cancel();
-      if (mounted) {
-        setState(() {
-          _isComputingTimeline = false;
-          _skeletonShownAt = null;
-        });
-      }
-    }
-  }
-
-  /// 保存到缓存 (创建新版本)
-  Future<void> _saveToCache(CherryExtractor extractor, String filePath) async {
-    try {
-      final type = await FileSystemEntity.type(filePath, followLinks: false);
-      DateTime modifiedAt;
-      String filename;
-
-      if (type == FileSystemEntityType.directory) {
-        final dir = Directory(filePath);
-        modifiedAt = (await dir.stat()).modified;
-        filename = filePath.split(Platform.pathSeparator).last;
-      } else {
-        final file = File(filePath);
-        modifiedAt = await file.lastModified();
-        filename = filePath.split(Platform.pathSeparator).last;
-      }
-
-      debugPrint('📦 启动后台导入以创建版本: $filename');
-      // 不等待其完成，让它在后台运行，UI 通过 Stream 更新状态
-      BackgroundImportService.instance.importInBackground(
-        extractor: extractor,
-        sourceFileName: filename,
-        sourceModifiedAt: modifiedAt,
-      ).ignore();
-      
-    } catch (e) {
-      debugPrint('⚠️ 保存缓存请求失败: $e');
-    }
-  }
-
   // ============ 【增量更新】时间线缓存增量操作 ============
 
   /// 【增量更新】重新分组（当时间跨越边界时调用，如跨越午夜）
@@ -832,98 +718,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 从本地加载数据
   Future<bool> _loadFromLocal({bool showLoadingIfEmpty = false}) async {
-    if (showLoadingIfEmpty) {
-      setState(() {
-        _isLoading = true;
-        _statusError = null;
-      });
-    }
-
-    try {
-      final startTime = DateTime.now();
-
-      // 尝试恢复版本显示（从上次同步时间）
-      if (_autoLocalFolderEnabled && _currentVersionDisplay == null) {
-        final lastSyncTime = await LocalFolderSyncService.getLastSyncTime();
-        if (lastSyncTime != null) {
-          // 格式化为：2025-12-17 14:30:25
-          final year = lastSyncTime.year.toString();
-          final month = lastSyncTime.month.toString().padLeft(2, '0');
-          final day = lastSyncTime.day.toString().padLeft(2, '0');
-          final hour = lastSyncTime.hour.toString().padLeft(2, '0');
-          final minute = lastSyncTime.minute.toString().padLeft(2, '0');
-          final second = lastSyncTime.second.toString().padLeft(2, '0');
-          _currentVersionDisplay = '$year-$month-$day $hour:$minute:$second';
-        }
-      }
-
-      // 智能加载: 优先使用轻量级索引
-      final (topicIndex, _) = await DataPersistenceManager.smartLoad();
-
-      if (topicIndex != null && topicIndex.isNotEmpty) {
-        debugPrint('✅ 从缓存加载话题索引');
-
-        final lastFile = await DataPersistenceManager.getLastFilePath();
-        if (lastFile != null) {
-          final extractor = _createLightweightExtractor(lastFile);
-          await extractor.load();
-
-          final assistants = extractor.getAssistants();
-          final assistantMap = <String, Map<String, dynamic>>{};
-          for (final a in assistants) {
-            if (a is Map<String, dynamic>) {
-              final id = a['id'] as String?;
-              if (id != null) {
-                assistantMap[id] = a;
-              }
-            }
-          }
-
-          setState(() {
-            _extractor = extractor;
-            _topicIndex = topicIndex;
-            _assistantMap = assistantMap;
-            _isLoading = false;
-          });
-
-          final elapsed = DateTime.now().difference(startTime).inMilliseconds;
-          debugPrint('💡 从缓存加载完成，耗时 ${elapsed}ms');
-          return true;
-        }
-      }
-
-      // 没有缓存,尝试重新解析文件
-      final lastFile = await DataPersistenceManager.getLastFilePath();
-      if (lastFile != null) {
-        final file = File(lastFile);
-        if (await file.exists()) {
-          debugPrint('📂 重新解析文件: $lastFile');
-          final success = await _loadFile(lastFile, saveCache: true);
-          if (success) {
-            return true;
-          }
-          // 加载失败，检查是否是文件损坏
-          if (_statusError != null &&
-              (_statusError!.contains('ZIP') || _statusError!.contains('FormatException'))) {
-            debugPrint('❌ 检测到文件损坏: $_statusError');
-            await _handleCorruptedFile(lastFile);
-          }
-        } else {
-          debugPrint('⚠️ 上次打开的文件不存在: $lastFile');
-        }
-      }
-
-      setState(() {
-        _isLoading = false;
-      });
-      return false;
-    } catch (e) {
-      debugPrint('⚠️ 自动加载失败: $e');
-      setState(() {
-        _isLoading = false;
-      });
-      return false;
-    }
+    await _refreshFromDatabase(showLoading: showLoadingIfEmpty);
+    return _topicIndex != null && _topicIndex!.isNotEmpty;
   }
 
   /// 【新增】处理损坏的文件
@@ -943,25 +739,12 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         debugPrint('✅ 已删除损坏的ZIP文件');
       }
 
-      // 2. 清除所有缓存
-      await DataPersistenceManager.clearCache();
-      debugPrint('✅ 已清除所有缓存');
-
-      // 3. 清除Isar数据库中的导入数据
+      // 2. 清除Isar数据库中的导入数据
       await RepositoryProvider.instance.database.clearImportedData();
       debugPrint('✅ 已清除Isar缓存');
     } catch (e) {
       debugPrint('❌ 清理失败: $e');
     }
-  }
-
-  /// 创建轻量级 Extractor（只用于加载 Assistant 信息）
-  CherryExtractor _createLightweightExtractor(String filePath) {
-    final isZip = filePath.endsWith('.zip');
-    return CherryExtractor(
-      zipPath: isZip ? filePath : null,
-      dataJsonPath: isZip ? null : filePath,
-    );
   }
 
   /// 选择并加载文件
@@ -1105,7 +888,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _isLoading = true;
         _statusError = null;
-        _extractor = null;
         _topicIndex = null;
         _assistantMap = null;
       });
@@ -1131,69 +913,33 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         debugPrint('⚠️ AI Provider 自动导入失败: $e');
       }
 
-      // 【优化】提取话题索引（轻量级）
-      final grouped = extractor.getTopicsByAssistant();
-      final topicIndex = <String, List<Map<String, dynamic>>>{};
-
-      for (final entry in grouped.entries) {
-        final assistantId = entry.key;
-        final assistantData = entry.value;
-        final topics = assistantData['topics'] as List<dynamic>;
-
-        topicIndex[assistantId] = topics.map((t) {
-          final topic = t as Map<String, dynamic>;
-          final messages = topic['messages'] as List? ?? [];
-          // 计算轮数：统计用户消息数量
-          int roundCount = 0;
-          for (final msg in messages) {
-            if (msg is Map<String, dynamic> && msg['role'] == 'user') {
-              roundCount++;
-            }
-          }
-          return {
-            'id': topic['id'],
-            'name': topic['name'],
-            'assistantId': assistantId,
-            'messageCount': messages.length,
-            'roundCount': roundCount,
-            'createdAt': topic['createdAt'],
-            'updatedAt': topic['updatedAt'],  // 直接使用 topic 的 updatedAt
-          };
-        }).toList();
-      }
-
-      // 提取 Assistant 信息
-      final assistants = extractor.getAssistants();
-      final assistantMap = <String, Map<String, dynamic>>{};
-      for (final a in assistants) {
-        if (a is Map<String, dynamic>) {
-          final id = a['id'] as String?;
-          if (id != null) {
-            assistantMap[id] = a;
-          }
-        }
-      }
-
-      setState(() {
-        _extractor = extractor;
-        _topicIndex = topicIndex;
-        _assistantMap = assistantMap;
-        _isLoading = false;
-      });
-
       final elapsed = DateTime.now().difference(startTime).inMilliseconds;
       debugPrint('💡 文件加载完成，耗时 ${elapsed}ms');
 
-      // 保存数据到 Isar 数据库
-      if (saveCache) {
-        await _saveToCache(extractor, filePath);
-        // 保存时间戳
-        try {
-          if (await FileSystemEntity.isFile(filePath)) {
-            await DataPersistenceManager.saveFileTimestamp(filePath);
-          }
-        } catch (_) {}
+      _syncNotifier.updateImportProgress('清理旧数据...');
+      final db = RepositoryProvider.instance.database;
+      await db.init();
+      final importDbBytesBefore = await db.getImportDbSizeBytes();
+      await db.clearImportedData();
+      if (importDbBytesBefore > 100 * 1024 * 1024) {
+        _syncNotifier.updateImportProgress('释放数据库空间...');
+        await db.reclaimImportDbSpace();
       }
+
+      _syncNotifier.updateImportProgress('导入中...');
+      final manager =
+          DataImportManager(DriftDataImportServiceImpl(RepositoryProvider.instance.database));
+      final importResult = await manager.importData(
+        extractor,
+        onProgress: (progress, message) {
+          _syncNotifier.updateImportProgress(message, progress: progress);
+        },
+      );
+      if (!importResult.success) {
+        throw Exception(importResult.error ?? '导入失败');
+      }
+
+      await _refreshFromDatabase(showLoading: false);
       return true; // 加载成功
     } catch (e, stackTrace) {
       debugPrint('❌ 文件加载失败: $e');
@@ -1295,9 +1041,14 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: _buildBody(),
-    );
+    final body = _buildBody();
+    if (widget.embedMode) {
+      return Material(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        child: SafeArea(child: body),
+      );
+    }
+    return Scaffold(body: body);
   }
 
   Widget _buildBody() {
@@ -1370,11 +1121,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // 搜索按钮
         IconButton(
           icon: const Icon(Icons.search),
-          onPressed: (_isLoading || _extractor == null) ? null : () {
+          onPressed: _isLoading ? null : () {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => SearchScreen(extractor: _extractor!),
+                builder: (context) => const SearchScreen(),
               ),
             );
           },
@@ -1436,7 +1187,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 计算当前状态栏状态
   StatusBarState _computeStatusBarState() {
     final topicCount = _topicIndex?.values.fold<int>(0, (sum, list) => sum + list.length);
-    final versionDisplay = _activeVersion?.displayName ?? _currentVersionDisplay;
 
     // 计算今日话题数
     int todayTopicCount = 0;
@@ -1461,7 +1211,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return StatusBarState.error(
         modeLabel: _syncModeLabel,
         errorDetail: _statusError!,
-        versionDisplay: versionDisplay,
         topicCount: topicCount,
       );
     }
@@ -1472,7 +1221,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         modeLabel: _syncModeLabel,
         progress: _syncProgress,
         message: _syncMessage,
-        versionDisplay: versionDisplay,
         topicCount: topicCount,
       );
     }
@@ -1481,7 +1229,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_hasUpdate || _pendingLocalBackup != null) {
       return StatusBarState.hasUpdate(
         modeLabel: _syncModeLabel,
-        versionDisplay: versionDisplay,
         topicCount: topicCount,
       );
     }
@@ -1489,20 +1236,13 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // 4. 空闲状态
     return StatusBarState.idle(
       modeLabel: _syncModeLabel,
-      versionDisplay: versionDisplay,
       topicCount: topicCount,
       todayTopicCount: todayTopicCount,
-      hasNewVersion: _hasNewVersion,
     );
   }
 
   /// 状态栏点击处理
   void _onStatusBarTap(StatusBarState state) {
-    // 清除蓝点（用户已看到更新提示）
-    if (_hasNewVersion) {
-      setState(() => _hasNewVersion = false);
-    }
-
     if (state.isError) {
       _showErrorDialog(state.errorDetail ?? '未知错误');
       return;
@@ -1915,52 +1655,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // 获取预览：最后一个用户问题 + 第一个 AI 回答
     String? userPreview;
     String? aiPreview;
-    if (_extractor != null) {
-      try {
-        final conversation = _extractor!.extractTopicConversation(topicId);
-        if (conversation != null) {
-          final messages = conversation['messages'] as List? ?? [];
-
-          // 提取 main_text 内容的辅助函数
-          String? extractMainText(Map<String, dynamic> msg) {
-            final blocks = msg['blocks'] as List? ?? [];
-            for (final block in blocks) {
-              if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-                final content = block['content'] as String? ?? '';
-                if (content.isNotEmpty) {
-                  return content.replaceAll(RegExp(r'\s+'), ' ').trim();
-                }
-              }
-            }
-            return null;
-          }
-
-          // 从前往后找第一个 AI 回答
-          for (int i = 0; i < messages.length; i++) {
-            final msg = messages[i] as Map<String, dynamic>;
-            if (msg['role'] == 'assistant') {
-              final text = extractMainText(msg);
-              if (text != null && text.isNotEmpty) {
-                aiPreview = text.length > 80 ? '${text.substring(0, 80)}...' : text;
-                break;
-              }
-            }
-          }
-
-          // 从后往前找最后一个用户问题
-          for (int i = messages.length - 1; i >= 0; i--) {
-            final msg = messages[i] as Map<String, dynamic>;
-            if (msg['role'] == 'user') {
-              final text = extractMainText(msg);
-              if (text != null && text.isNotEmpty) {
-                userPreview = text.length > 60 ? '${text.substring(0, 60)}...' : text;
-                break;
-              }
-            }
-          }
-        }
-      } catch (_) {}
-    }
 
     return TopicCard(
       title: topicName,
@@ -1974,22 +1668,20 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
   
   Future<void> _openTopic(String topicId, String topicName) async {
-      if (_extractor == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('数据加载器未就绪')),
-        );
-        return;
-      }
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ConversationScreen(
-            extractor: _extractor!,
-            topicId: topicId,
-            topicName: topicName,
-          ),
+    final onSelectTopic = widget.onSelectTopic;
+    if (onSelectTopic != null) {
+      onSelectTopic(topicId, topicName);
+      return;
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ConversationScreen(
+          topicId: topicId,
+          topicName: topicName,
         ),
-      );
+      ),
+    );
   }
 
   /// 【优化】美观的空状态页面

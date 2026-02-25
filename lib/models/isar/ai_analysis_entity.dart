@@ -1,17 +1,8 @@
-import 'package:isar_community/isar.dart';
-
-part 'ai_analysis_entity.g.dart';
-
 /// AI 分析缓存实体
 ///
 /// 存储 AI 对话分析结果，替代原来的 AnalysisCacheManager
-@collection
 class AIAnalysisEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 话题 ID
-  @Index()
   late String topicId;
 
   /// 分组索引（对话分组的序号）

@@ -51,6 +51,7 @@ class ConversationScreen extends StatefulWidget {
   final CherryExtractor? extractor;
   final String topicId;
   final String topicName;
+  final VoidCallback? onOpenDrawer;
 
   /// 【搜索定位】初始滚动到的轮次索引（从 0 开始）
   final int? scrollToRoundIndex;
@@ -77,6 +78,7 @@ class ConversationScreen extends StatefulWidget {
     this.extractor,
     required this.topicId,
     required this.topicName,
+    this.onOpenDrawer,
     this.scrollToRoundIndex,
     this.scrollToMessageId,
     this.scrollToHighlightId,
@@ -252,23 +254,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
   Future<void> _checkWebViewSwitch() async {
     final prefs = await SharedPreferences.getInstance();
     final useWebView = prefs.getBool('use_webview_conversation') ?? false;
+    final isEmbedded = widget.onOpenDrawer != null;
     
     if (useWebView && mounted) {
+      String? conversationDataJson;
+      try {
+        final conv = await _topicService.getTopicFullData(widget.topicId);
+        conversationDataJson = jsonEncode(conv);
+      } catch (_) {}
+
       // 延迟一帧后显示 WebView，避免在 initState 中直接操作
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          String? conversationDataJson;
-          if (widget.extractor != null) {
-            try {
-              final conv = widget.extractor!.extractTopicConversation(
-                widget.topicId,
-              );
-              if (conv != null) {
-                conversationDataJson = jsonEncode(conv);
-              }
-            } catch (_) {}
-          }
-
           // 【Stack 架构】使用 Controller 显示 WebView
           final controller = Provider.of<WebViewNavigationController>(
             context, 
@@ -287,8 +284,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
             scrollToQuotedTextOccurrence: widget.scrollToQuotedTextOccurrence,
           );
           
-          // 返回上一页（WebView 会覆盖在上面）
-          Navigator.of(context).pop();
+          // 仅在独立路由下返回上一页（WebView 会覆盖在上面）
+          if (!isEmbedded && Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
         }
       });
     }
@@ -1206,7 +1205,16 @@ $modelResponses''';
 
   /// 构建普通 AppBar
   AppBar _buildNormalAppBar() {
+    final hasDrawer = widget.onOpenDrawer != null;
     return AppBar(
+      automaticallyImplyLeading: !hasDrawer,
+      leading: hasDrawer
+          ? IconButton(
+              icon: const Icon(Icons.menu),
+              tooltip: '打开列表',
+              onPressed: widget.onOpenDrawer,
+            )
+          : null,
       title: GestureDetector(
         onTap: () {
           _scrollController.animateTo(

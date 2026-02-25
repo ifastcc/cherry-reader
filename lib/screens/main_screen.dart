@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
-import 'home_screen.dart';
+import 'conversation_hub_screen.dart';
 import 'knowledge/knowledge_hub_screen.dart';
 import '../widgets/layouts/layouts.dart';
 
 /// 主页面
 ///
 /// 包含两个一级页面：
-/// - 对话（HomeScreen）
+/// - 对话（ConversationHubScreen）
 /// - 知识库（KnowledgeHubScreen）
 /// 
 /// 使用手势导航布局（左右滑动切换页面）
@@ -21,7 +21,8 @@ class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   
   // Keys to access child states for the central button action
-  final GlobalKey<HomeScreenState> _homeKey = GlobalKey<HomeScreenState>();
+  final GlobalKey<ConversationHubScreenState> _homeKey =
+      GlobalKey<ConversationHubScreenState>();
   final GlobalKey<KnowledgeHubScreenState> _knowledgeKey = GlobalKey<KnowledgeHubScreenState>();
 
   // 缓存子页面实例，避免每次 build 都创建新对象
@@ -32,7 +33,7 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     // 在 initState 中创建子页面实例，确保整个生命周期只创建一次
-    _homeScreen = HomeScreen(key: _homeKey);
+    _homeScreen = ConversationHubScreen(key: _homeKey);
     _knowledgeScreen = KnowledgeHubScreen(key: _knowledgeKey);
   }
 

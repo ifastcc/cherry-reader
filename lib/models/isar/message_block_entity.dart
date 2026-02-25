@@ -1,26 +1,15 @@
-import 'package:isar_community/isar.dart';
-
-part 'message_block_entity.g.dart';
-
 /// 消息块 Isar 实体
 ///
 /// 存储消息的实际内容，包括文本、思考过程、图片等
 /// 支持的类型：main_text, thinking, image, file, tool, citation, error, translation, code, video
-@collection
 class MessageBlockEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 消息块 ID（唯一索引）
-  @Index(unique: true)
   late String blockId;
 
   /// 所属话题 ID（用于快速批量查询）
-  @Index()
   late String topicId;
 
   /// 所属消息 ID（复合索引：messageId + orderIndex）
-  @Index(composite: [CompositeIndex('orderIndex')])
   late String messageId;
 
   /// 在消息中的顺序

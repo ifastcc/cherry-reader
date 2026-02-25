@@ -1,7 +1,6 @@
-import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
 import '../models/isar/prompt_template_entity.dart';
-import 'isar_database.dart';
+import 'app_db.dart';
 
 /// 模版管理服务
 ///
@@ -16,7 +15,7 @@ class PromptTemplateService {
   PromptTemplateService._();
 
   final _uuid = const Uuid();
-  final _db = IsarDatabase();
+  final _db = AppDb();
 
   // 缓存
   UserPreferenceEntity? _activePreference;
@@ -27,12 +26,7 @@ class PromptTemplateService {
   /// 获取当前激活的偏好
   Future<UserPreferenceEntity?> getActivePreference() async {
     if (_activePreference != null) return _activePreference;
-
-    final isar = await _db.instance;
-    _activePreference = await isar.userPreferenceEntitys
-        .filter()
-        .isActiveEqualTo(true)
-        .findFirst();
+    _activePreference = await _db.getActivePreference();
 
     // 如果没有偏好，创建默认偏好
     if (_activePreference == null) {
@@ -44,8 +38,7 @@ class PromptTemplateService {
 
   /// 获取所有偏好
   Future<List<UserPreferenceEntity>> getAllPreferences() async {
-    final isar = await _db.instance;
-    return isar.userPreferenceEntitys.where().sortByUpdatedAtDesc().findAll();
+    return _db.getAllPreferences();
   }
 
   /// 创建偏好
@@ -54,8 +47,6 @@ class PromptTemplateService {
     required String systemPrompt,
     bool setActive = false,
   }) async {
-    final isar = await _db.instance;
-
     // 如果设为激活，先取消其他偏好的激活状态
     if (setActive) {
       await _deactivateAllPreferences();
@@ -68,9 +59,7 @@ class PromptTemplateService {
       isActive: setActive,
     );
 
-    await isar.writeTxn(() async {
-      await isar.userPreferenceEntitys.put(entity);
-    });
+    await _db.upsertPreference(entity);
 
     if (setActive) {
       _activePreference = entity;
@@ -81,12 +70,8 @@ class PromptTemplateService {
 
   /// 更新偏好
   Future<void> updatePreference(UserPreferenceEntity entity) async {
-    final isar = await _db.instance;
     entity.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    await isar.writeTxn(() async {
-      await isar.userPreferenceEntitys.put(entity);
-    });
+    await _db.upsertPreference(entity);
 
     if (entity.isActive) {
       _activePreference = entity;
@@ -95,22 +80,17 @@ class PromptTemplateService {
 
   /// 设置激活偏好
   Future<void> setActivePreference(String preferenceId) async {
-    final isar = await _db.instance;
-
     await _deactivateAllPreferences();
-
-    final entity = await isar.userPreferenceEntitys
-        .filter()
-        .preferenceIdEqualTo(preferenceId)
-        .findFirst();
+    final all = await _db.getAllPreferences();
+    final entity = all.cast<UserPreferenceEntity?>().firstWhere(
+          (e) => e?.preferenceId == preferenceId,
+          orElse: () => null,
+        );
 
     if (entity != null) {
       entity.isActive = true;
       entity.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-      await isar.writeTxn(() async {
-        await isar.userPreferenceEntitys.put(entity);
-      });
+      await _db.upsertPreference(entity);
 
       _activePreference = entity;
     }
@@ -130,43 +110,33 @@ class PromptTemplateService {
   Future<void> setDefaultTemplate(String? templateId) async {
     final preference = await getActivePreference();
     if (preference == null) return;
-
-    final isar = await _db.instance;
     preference.defaultTemplateId = templateId;
     preference.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    await isar.writeTxn(() async {
-      await isar.userPreferenceEntitys.put(preference);
-    });
+    await _db.upsertPreference(preference);
 
     _activePreference = preference;
   }
 
   /// 删除偏好（不能删除唯一的偏好）
   Future<bool> deletePreference(String preferenceId) async {
-    final isar = await _db.instance;
-
-    final count = await isar.userPreferenceEntitys.count();
+    final count = await _db.getPreferenceCount();
     if (count <= 1) {
       return false; // 至少保留一个偏好
     }
-
-    final entity = await isar.userPreferenceEntitys
-        .filter()
-        .preferenceIdEqualTo(preferenceId)
-        .findFirst();
+    final all = await _db.getAllPreferences();
+    final entity = all.cast<UserPreferenceEntity?>().firstWhere(
+          (e) => e?.preferenceId == preferenceId,
+          orElse: () => null,
+        );
 
     if (entity != null) {
       final wasActive = entity.isActive;
-
-      await isar.writeTxn(() async {
-        await isar.userPreferenceEntitys.delete(entity.id);
-      });
+      await _db.deletePreference(preferenceId);
 
       // 如果删除的是激活的偏好，激活第一个
       if (wasActive) {
-        final first =
-            await isar.userPreferenceEntitys.where().findFirst();
+        final prefs = await _db.getAllPreferences();
+        final first = prefs.isNotEmpty ? prefs.first : null;
         if (first != null) {
           await setActivePreference(first.preferenceId);
         }
@@ -181,29 +151,14 @@ class PromptTemplateService {
   }
 
   Future<UserPreferenceEntity> _createDefaultPreference() async {
-    final isar = await _db.instance;
     final entity = UserPreferenceEntity.createDefault(_uuid.v4());
-
-    await isar.writeTxn(() async {
-      await isar.userPreferenceEntitys.put(entity);
-    });
-
+    await _db.upsertPreference(entity);
     return entity;
   }
 
   Future<void> _deactivateAllPreferences() async {
-    final isar = await _db.instance;
-    final all = await isar.userPreferenceEntitys
-        .filter()
-        .isActiveEqualTo(true)
-        .findAll();
-
-    await isar.writeTxn(() async {
-      for (final entity in all) {
-        entity.isActive = false;
-        await isar.userPreferenceEntitys.put(entity);
-      }
-    });
+    await _db.deactivateAllPreferences();
+    _activePreference = null;
   }
 
   // ============ 任务模版管理 ============
@@ -212,26 +167,16 @@ class PromptTemplateService {
   Future<List<TaskTemplateEntity>> getAllTemplates() async {
     if (_templates != null) return _templates!;
 
-    final isar = await _db.instance;
-
     // 每次加载时检查并补充缺失的内置模板
     await _createBuiltInTemplates();
-
-    _templates = await isar.taskTemplateEntitys
-        .where()
-        .sortByUpdatedAtDesc()
-        .findAll();
+    _templates = await _db.getAllTemplates();
 
     return _templates!;
   }
 
   /// 根据 ID 获取模版
   Future<TaskTemplateEntity?> getTemplate(String templateId) async {
-    final isar = await _db.instance;
-    return isar.taskTemplateEntitys
-        .filter()
-        .templateIdEqualTo(templateId)
-        .findFirst();
+    return _db.getTemplate(templateId);
   }
 
   /// 创建模版
@@ -240,8 +185,6 @@ class PromptTemplateService {
     required String content,
     String? description,
   }) async {
-    final isar = await _db.instance;
-
     final entity = TaskTemplateEntity.create(
       templateId: _uuid.v4(),
       name: name,
@@ -249,10 +192,7 @@ class PromptTemplateService {
       description: description,
       isBuiltIn: false,
     );
-
-    await isar.writeTxn(() async {
-      await isar.taskTemplateEntitys.put(entity);
-    });
+    await _db.upsertTemplate(entity);
 
     _templates = null; // 清除缓存
 
@@ -261,32 +201,20 @@ class PromptTemplateService {
 
   /// 更新模版
   Future<void> updateTemplate(TaskTemplateEntity entity) async {
-    final isar = await _db.instance;
     entity.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    await isar.writeTxn(() async {
-      await isar.taskTemplateEntitys.put(entity);
-    });
+    await _db.upsertTemplate(entity);
 
     _templates = null; // 清除缓存
   }
 
   /// 删除模版（不能删除内置模版）
   Future<bool> deleteTemplate(String templateId) async {
-    final isar = await _db.instance;
-
-    final entity = await isar.taskTemplateEntitys
-        .filter()
-        .templateIdEqualTo(templateId)
-        .findFirst();
+    final entity = await _db.getTemplate(templateId);
 
     if (entity == null || entity.isBuiltIn) {
       return false;
     }
-
-    await isar.writeTxn(() async {
-      await isar.taskTemplateEntitys.delete(entity.id);
-    });
+    await _db.deleteTemplate(templateId);
 
     _templates = null; // 清除缓存
 
@@ -295,28 +223,11 @@ class PromptTemplateService {
 
   /// 增加模版使用次数
   Future<void> incrementUsage(String templateId) async {
-    final isar = await _db.instance;
-
-    final entity = await isar.taskTemplateEntitys
-        .filter()
-        .templateIdEqualTo(templateId)
-        .findFirst();
-
-    if (entity != null) {
-      entity.usageCount++;
-      entity.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-      await isar.writeTxn(() async {
-        await isar.taskTemplateEntitys.put(entity);
-      });
-
-      _templates = null; // 清除缓存
-    }
+    await _db.incrementTemplateUsage(templateId);
+    _templates = null;
   }
 
   Future<void> _createBuiltInTemplates() async {
-    final isar = await _db.instance;
-
     // 定义所有内置模板及其名称
     final builtInTemplates = {
       '视角': () => TaskTemplateEntity.createPerspective(_uuid.v4()),
@@ -325,7 +236,7 @@ class PromptTemplateService {
     };
 
     // 获取现有模板名称
-    final existing = await isar.taskTemplateEntitys.where().findAll();
+    final existing = await _db.getAllTemplates();
     final existingNames = existing.map((t) => t.name).toSet();
 
     // 找出缺失的内置模板
@@ -338,9 +249,9 @@ class PromptTemplateService {
 
     // 添加缺失的模板
     if (missingTemplates.isNotEmpty) {
-      await isar.writeTxn(() async {
-        await isar.taskTemplateEntitys.putAll(missingTemplates);
-      });
+      for (final t in missingTemplates) {
+        await _db.upsertTemplate(t);
+      }
     }
   }
 

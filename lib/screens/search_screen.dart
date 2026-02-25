@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import '../models/domain/search_result_model.dart';
 import '../services/search_service.dart';
-import '../services/cherry_extractor.dart';
 import '../widgets/search_result_card.dart';
 import 'conversation_screen.dart';
 
 /// 搜索页面
 class SearchScreen extends StatefulWidget {
-  final CherryExtractor extractor;
-
-  const SearchScreen({super.key, required this.extractor});
+  const SearchScreen({super.key});
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -117,7 +114,6 @@ class _SearchScreenState extends State<SearchScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => ConversationScreen(
-          extractor: widget.extractor,
           topicId: result.topicId,
           topicName: result.topicName,
           // 【搜索定位】传递轮次索引，自动滚动到对应位置

@@ -264,6 +264,10 @@ class SyncCoordinator {
           token: prefs.token,
           onProgress: onWebDavProgress,
         );
+      case SyncSourceType.serverSync:
+        // serverSync 走独立的增量同步流程（ServerSyncService.incrementalSync）
+        // 不需要下载 zip 文件
+        return null;
       case SyncSourceType.manualImport:
         return null;
     }

@@ -2,10 +2,10 @@ import 'dart:async';
 import '../repositories/i_assistant_repository.dart';
 import '../repositories/i_topic_repository.dart';
 import '../repositories/i_message_repository.dart';
-import '../repositories/isar/isar_assistant_repository.dart';
-import '../repositories/isar/isar_topic_repository.dart';
-import '../repositories/isar/isar_message_repository.dart';
-import 'isar_database.dart';
+import '../repositories/drift/drift_assistant_repository.dart';
+import '../repositories/drift/drift_topic_repository.dart';
+import '../repositories/drift/drift_message_repository.dart';
+import 'app_db.dart';
 
 /// Repository 提供者（依赖注入）
 ///
@@ -19,12 +19,12 @@ class RepositoryProvider {
   late final ITopicRepository topicRepository;
   late final IMessageRepository messageRepository;
 
-  final IsarDatabase _db;
+  final AppDb _db;
 
   RepositoryProvider._(this._db) {
-    assistantRepository = IsarAssistantRepository(_db);
-    topicRepository = IsarTopicRepository(_db);
-    messageRepository = IsarMessageRepository(_db);
+    assistantRepository = DriftAssistantRepository(_db.importDb);
+    topicRepository = DriftTopicRepository(_db.importDb);
+    messageRepository = DriftMessageRepository(_db.importDb);
   }
 
   /// 初始化 Repository 提供者
@@ -44,9 +44,8 @@ class RepositoryProvider {
     _initCompleter = Completer<RepositoryProvider>();
 
     try {
-      final db = IsarDatabase();
+      final db = AppDb();
       await db.init();
-
       _instance = RepositoryProvider._(db);
       _initCompleter!.complete(_instance!);
       print('✅ RepositoryProvider 初始化完成');
@@ -77,5 +76,5 @@ class RepositoryProvider {
   }
 
   /// 获取数据库实例（用于直接操作或迁移）
-  IsarDatabase get database => _db;
+  AppDb get database => _db;
 }

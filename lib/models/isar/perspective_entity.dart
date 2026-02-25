@@ -1,17 +1,8 @@
-import 'package:isar_community/isar.dart';
-
-part 'perspective_entity.g.dart';
-
 /// 视角实体
 ///
 /// 用于 AI 洞察功能的分析视角，支持内置和自定义视角
-@collection
 class PerspectiveEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 视角唯一标识
-  @Index(unique: true)
   late String perspectiveId;
 
   /// 视角名称

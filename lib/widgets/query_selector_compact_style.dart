@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/domain/insight_models.dart';
 import '../services/insight_service.dart';
 
 /// 精简版 Query 选择器

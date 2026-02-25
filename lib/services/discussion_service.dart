@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/isar/discussion_entity.dart';
 import '../models/isar/discussion_message_entity.dart';
-import 'isar_database.dart';
+import 'app_db.dart';
 
 /// 讨论管理服务
 ///
@@ -13,7 +13,7 @@ class DiscussionService {
   factory DiscussionService() => _instance;
   DiscussionService._internal();
 
-  final IsarDatabase _db = IsarDatabase();
+  final AppDb _db = AppDb();
   final _uuid = const Uuid();
 
   // ============ 讨论线程管理 ============

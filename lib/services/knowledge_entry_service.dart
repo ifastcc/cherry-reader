@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
-import 'package:isar_community/isar.dart';
 import '../models/isar/knowledge_entry.dart';
-import 'isar_database.dart';
+import 'app_db.dart';
 
 /// 统一知识条目服务
 ///
@@ -13,7 +12,7 @@ class KnowledgeEntryService {
   factory KnowledgeEntryService() => _instance;
   KnowledgeEntryService._internal();
 
-  final IsarDatabase _db = IsarDatabase();
+  final AppDb _db = AppDb();
 
   // ==================== 创建操作 ====================
 
@@ -63,11 +62,7 @@ class KnowledgeEntryService {
     if (selections != null && selections.isNotEmpty) {
       entry.selectionRanges = selections;
     }
-
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 创建高亮: ${entry.entryId} (包含 ${selections?.length ?? 0} 个选区)');
     return entry;
@@ -105,10 +100,7 @@ class KnowledgeEntryService {
       tags: tags,
     );
 
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 创建标注: ${entry.entryId}');
     return entry;
@@ -144,10 +136,7 @@ class KnowledgeEntryService {
       topicName: topicName,
     );
 
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 创建笔记: ${entry.entryId}');
     return entry;
@@ -160,13 +149,7 @@ class KnowledgeEntryService {
     KnowledgeEntryType? type,
     int limit = 0,
   }) async {
-    final isar = await _db.instance;
-
-    var entries = await isar.knowledgeEntrys
-        .filter()
-        .entryIdIsNotEmpty()
-        .sortByCreatedAtDesc()
-        .findAll();
+    var entries = await _db.getAllKnowledgeEntries();
 
     // 按类型筛选
     if (type != null) {
@@ -183,41 +166,22 @@ class KnowledgeEntryService {
 
   /// 获取单个条目
   Future<KnowledgeEntry?> getEntry(String entryId) async {
-    final isar = await _db.instance;
-    return isar.knowledgeEntrys
-        .filter()
-        .entryIdEqualTo(entryId)
-        .findFirst();
+    return _db.getKnowledgeEntry(entryId);
   }
 
   /// 按消息 ID 获取（用于显示对话中的高亮/标注）
   Future<List<KnowledgeEntry>> getByMessage(String messageId) async {
-    final isar = await _db.instance;
-    return isar.knowledgeEntrys
-        .filter()
-        .messageIdEqualTo(messageId)
-        .sortByCreatedAtDesc()
-        .findAll();
+    return _db.getKnowledgeEntriesByMessage(messageId);
   }
 
   /// 按话题 ID 获取
   Future<List<KnowledgeEntry>> getByTopic(String topicId) async {
-    final isar = await _db.instance;
-    return isar.knowledgeEntrys
-        .filter()
-        .topicIdEqualTo(topicId)
-        .sortByCreatedAtDesc()
-        .findAll();
+    return _db.getKnowledgeEntriesByTopic(topicId);
   }
 
   /// 按标签获取
   Future<List<KnowledgeEntry>> getByTag(String tag) async {
-    final isar = await _db.instance;
-    final entries = await isar.knowledgeEntrys
-        .filter()
-        .entryIdIsNotEmpty()
-        .sortByCreatedAtDesc()
-        .findAll();
+    final entries = await _db.getAllKnowledgeEntries();
 
     return entries.where((e) => e.tags.contains(tag)).toList();
   }
@@ -227,13 +191,7 @@ class KnowledgeEntryService {
     if (query.isEmpty) return [];
 
     final lowerQuery = query.toLowerCase();
-    final isar = await _db.instance;
-
-    final entries = await isar.knowledgeEntrys
-        .filter()
-        .entryIdIsNotEmpty()
-        .sortByCreatedAtDesc()
-        .findAll();
+    final entries = await _db.getAllKnowledgeEntries();
 
     return entries.where((e) {
       final content = e.displayContent.toLowerCase();
@@ -320,22 +278,15 @@ class KnowledgeEntryService {
     entry.reviewCount += 1;
     entry.lastReviewedAt = DateTime.now().millisecondsSinceEpoch;
     
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
     
     // debugPrint('[KnowledgeEntryService] 记录回顾: $entryId (第${entry.reviewCount}次)');
   }
 
   /// 获取置顶条目
   Future<List<KnowledgeEntry>> getPinnedEntries() async {
-    final isar = await _db.instance;
-    return isar.knowledgeEntrys
-        .filter()
-        .isPinnedEqualTo(true)
-        .sortByCreatedAtDesc()
-        .findAll();
+    final entries = await _db.getAllKnowledgeEntries();
+    return entries.where((e) => e.isPinned).toList();
   }
 
   /// 切换置顶状态
@@ -345,11 +296,7 @@ class KnowledgeEntryService {
     
     entry.isPinned = !entry.isPinned;
     entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
     
     // debugPrint('[KnowledgeEntryService] 切换置顶: $entryId -> ${entry.isPinned}');
   }
@@ -361,11 +308,7 @@ class KnowledgeEntryService {
     
     entry.importance = importance.clamp(0, 5);
     entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
     
     // debugPrint('[KnowledgeEntryService] 更新重要性: $entryId -> $importance');
   }
@@ -375,11 +318,7 @@ class KnowledgeEntryService {
   /// 更新条目
   Future<void> updateEntry(KnowledgeEntry entry) async {
     entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 更新条目: ${entry.entryId}');
   }
@@ -398,11 +337,7 @@ class KnowledgeEntryService {
     entry.plainText = plainText;
     entry.tags = tags ?? KnowledgeEntry.extractTags(plainText);
     entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 更新笔记: $entryId');
   }
@@ -420,11 +355,7 @@ class KnowledgeEntryService {
     entry.plainText = comment;
     entry.tags = tags ?? KnowledgeEntry.extractTags(comment);
     entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 更新评论: $entryId');
   }
@@ -441,11 +372,7 @@ class KnowledgeEntryService {
     entry.color = color;
     if (styleType != null) entry.styleType = styleType;
     entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 更新样式: $entryId');
   }
@@ -456,11 +383,7 @@ class KnowledgeEntryService {
     required int color,
     String? styleType,
   }) async {
-    final isar = await _db.instance;
-    final entries = await isar.knowledgeEntrys
-        .filter()
-        .groupIdEqualTo(groupId)
-        .findAll();
+    final entries = await _db.getKnowledgeEntriesByGroupId(groupId);
 
     if (entries.isEmpty) return;
 
@@ -470,9 +393,7 @@ class KnowledgeEntryService {
       entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
     }
 
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.putAll(entries);
-    });
+    await _db.upsertKnowledgeEntries(entries);
 
     // debugPrint('[KnowledgeEntryService] 更新 Group 样式: $groupId');
   }
@@ -488,10 +409,7 @@ class KnowledgeEntryService {
 
     entry.upgradeToAnnotation(comment, tags: tags);
 
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 高亮升级为标注: $entryId');
   }
@@ -512,11 +430,7 @@ class KnowledgeEntryService {
     entry.blockInternalStart = blockInternalStart;
     entry.blockInternalEnd = blockInternalEnd;
     entry.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.put(entry);
-    });
+    await _db.upsertKnowledgeEntry(entry);
 
     // debugPrint('[KnowledgeEntryService] 更新 Block 信息: $entryId');
   }
@@ -525,23 +439,17 @@ class KnowledgeEntryService {
 
   /// 删除条目
   Future<void> deleteEntry(String entryId) async {
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys.filter().entryIdEqualTo(entryId).deleteFirst();
-    });
+    await _db.deleteKnowledgeEntry(entryId);
 
     // debugPrint('[KnowledgeEntryService] 删除条目: $entryId');
   }
 
   Future<void> deleteByMessageAndQuotedText(String messageId, String quotedText) async {
     if (messageId.isEmpty || quotedText.isEmpty) return;
-    final isar = await _db.instance;
-
-    final entry = await isar.knowledgeEntrys
-        .filter()
-        .messageIdEqualTo(messageId)
-        .quotedTextEqualTo(quotedText)
-        .findFirst();
+    final entry = await _db.getKnowledgeEntryByMessageAndQuotedText(
+      messageId,
+      quotedText,
+    );
     if (entry == null) return;
 
     await deleteEntry(entry.entryId);
@@ -549,26 +457,14 @@ class KnowledgeEntryService {
 
   /// 删除指定 group 的所有条目
   Future<void> deleteByGroupId(String groupId) async {
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys
-          .filter()
-          .groupIdEqualTo(groupId)
-          .deleteAll();
-    });
+    await _db.deleteKnowledgeEntriesByGroupId(groupId);
 
     // debugPrint('[KnowledgeEntryService] 删除 Group 条目: $groupId');
   }
 
   /// 删除消息的所有条目
   Future<void> deleteByMessage(String messageId) async {
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.knowledgeEntrys
-          .filter()
-          .messageIdEqualTo(messageId)
-          .deleteAll();
-    });
+    await _db.deleteKnowledgeEntriesByMessage(messageId);
 
     // debugPrint('[KnowledgeEntryService] 删除消息条目: $messageId');
   }
@@ -577,8 +473,7 @@ class KnowledgeEntryService {
 
   /// 获取总数
   Future<int> getCount() async {
-    final isar = await _db.instance;
-    return isar.knowledgeEntrys.count();
+    return _db.getKnowledgeEntryCount();
   }
 
   /// 按类型统计
@@ -623,17 +518,11 @@ class KnowledgeEntryService {
 
   /// 监听消息的条目变化
   Stream<List<KnowledgeEntry>> watchByMessage(String messageId) {
-    return _db.instanceSync.knowledgeEntrys
-        .filter()
-        .messageIdEqualTo(messageId)
-        .watch(fireImmediately: true);
+    return _db.watchKnowledgeEntriesByMessage(messageId);
   }
 
   /// 监听所有条目变化
   Stream<List<KnowledgeEntry>> watchAll() {
-    return _db.instanceSync.knowledgeEntrys
-        .filter()
-        .entryIdIsNotEmpty()
-        .watch(fireImmediately: true);
+    return _db.watchAllKnowledgeEntries();
   }
 }

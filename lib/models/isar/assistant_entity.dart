@@ -1,17 +1,8 @@
-import 'package:isar_community/isar.dart';
-
-part 'assistant_entity.g.dart';
-
 /// 助手 Isar 实体
 ///
 /// 存储 Cherry Studio 导入的助手元数据
-@collection
 class AssistantEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 助手 ID（唯一索引）
-  @Index(unique: true)
   late String assistantId;
 
   /// 助手名称
@@ -30,7 +21,6 @@ class AssistantEntity {
   late int topicCount;
 
   /// 创建时间（毫秒时间戳）
-  @Index()
   late int createdAt;
 
   /// 更新时间

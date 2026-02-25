@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'no_scrollbar_behavior.dart';
-import 'screens/home_screen.dart';
+import 'screens/conversation_hub_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/analysis_cache_manager.dart';
 import 'services/repository_provider.dart';
 import 'services/ai_provider_service.dart';
-import 'services/version_service.dart';
 import 'services/mcp/mcp_server_service.dart';
 import 'services/tts_cache_migration.dart';
 import 'services/topic_index_service.dart';
@@ -29,13 +28,6 @@ void main() async {
   // 初始化 RepositoryProvider（会自动初始化 IsarDatabase）
   // 必须在其他依赖数据库的服务之前初始化
   await RepositoryProvider.init();
-
-  // 初始化版本服务（管理多版本数据库实例）
-  // 必须在 RepositoryProvider 之后初始化
-  await VersionService.instance.init();
-
-  // 崩溃恢复：清理未完成的导入版本
-  await VersionService.instance.recoverFromCrash();
 
   // 初始化话题索引服务（常驻内存，加速 Context 编辑器）
   // 必须在 RepositoryProvider 之后初始化
@@ -88,7 +80,7 @@ class CherryViewerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       // 路由配置
       routes: {
-        '/home': (context) => const HomeScreen(),
+        '/home': (context) => const ConversationHubScreen(),
         '/onboarding': (context) => const OnboardingScreen(),
         '/settings': (context) => const SettingsScreen(),
       },

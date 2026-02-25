@@ -1,25 +1,16 @@
-import 'package:isar_community/isar.dart';
 import '../domain/data_version.dart';
-
-part 'version_entity.g.dart';
 
 /// 版本持久化实体
 ///
 /// 存储在主数据库 (cherry_viewer.isar) 中，记录所有导入版本的元数据
-@collection
 class VersionEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 版本唯一标识，格式: "v-YYYYMMDD-HHMMSS"
-  @Index(unique: true)
   late String versionId;
 
   /// 来源文件名
   late String sourceFileName;
 
   /// 导入时间（毫秒时间戳）
-  @Index()
   late int importedAtMs;
 
   /// 源文件修改时间（毫秒时间戳）
@@ -41,7 +32,6 @@ class VersionEntity {
   late bool isLocked;
 
   /// 版本状态 (0=importing, 1=ready, 2=active, 3=failed)
-  @Index()
   late int statusIndex;
 
   /// 构造函数

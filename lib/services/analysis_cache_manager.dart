@@ -1,4 +1,4 @@
-import 'isar_database.dart';
+import 'app_db.dart';
 import '../models/isar/ai_analysis_entity.dart';
 
 /// AI 分析缓存管理器（使用 Isar 优化版）
@@ -12,7 +12,7 @@ import '../models/isar/ai_analysis_entity.dart';
 /// 对应 Python 的 AnalysisCacheManager 类
 /// 基于 Topic ID 的持久化存储，跨数据源共享
 class AnalysisCacheManager {
-  final IsarDatabase _db = IsarDatabase();
+  final AppDb _db = AppDb();
 
   AnalysisCacheManager._();
 
@@ -135,10 +135,8 @@ class AnalysisCacheManager {
   ///
   /// 【API 变更】不再返回 cacheData
   Future<void> clearAllCache() async {
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.aIAnalysisEntitys.clear();
-    });
+    final d = _db.userDb;
+    await d.delete(d.aiAnalyses).go();
     print('✅ 已清空所有 AI 分析缓存');
   }
 }

@@ -6,6 +6,7 @@ import 'package:path/path.dart' as path;
 
 class TtsCacheManager {
   static final TtsCacheManager _instance = TtsCacheManager._internal();
+  static const int defaultMaxSizeMB = 500;
 
   factory TtsCacheManager() {
     return _instance;
@@ -79,6 +80,9 @@ class TtsCacheManager {
     final file = File(path.join(dir, fileName));
     
     if (await file.exists()) {
+      try {
+        await file.setLastModified(DateTime.now());
+      } catch (_) {}
       return file;
     }
     return null;
@@ -103,7 +107,41 @@ class TtsCacheManager {
       messageId: messageId,
     );
     final file = File(path.join(dir, fileName));
-    return await file.writeAsBytes(data);
+    final saved = await file.writeAsBytes(data);
+    await cleanup(maxSizeMB: defaultMaxSizeMB);
+    return saved;
+  }
+
+  Future<void> cleanup({int maxSizeMB = defaultMaxSizeMB}) async {
+    final dir = await _cacheDir;
+    final directory = Directory(dir);
+    if (!await directory.exists()) return;
+
+    final entries = <({File file, int size, DateTime modified})>[];
+    int totalSize = 0;
+
+    await for (final entity in directory.list(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      try {
+        final stat = await entity.stat();
+        totalSize += stat.size;
+        entries.add((file: entity, size: stat.size, modified: stat.modified));
+      } catch (_) {}
+    }
+
+    final maxBytes = maxSizeMB * 1024 * 1024;
+    if (totalSize <= maxBytes) return;
+
+    entries.sort((a, b) => a.modified.compareTo(b.modified));
+    final targetBytes = (maxBytes * 0.8).toInt();
+
+    for (final entry in entries) {
+      if (totalSize <= targetBytes) break;
+      try {
+        await entry.file.delete();
+        totalSize -= entry.size;
+      } catch (_) {}
+    }
   }
 
   Future<void> clearCache() async {

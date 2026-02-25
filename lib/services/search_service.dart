@@ -1,12 +1,10 @@
 import 'package:flutter/foundation.dart';
-import 'package:isar_community/isar.dart';
+import '../models/domain/search_hits.dart';
 import '../models/domain/search_result_model.dart';
-import '../models/isar/topic_entity.dart';
-import '../models/isar/message_entity.dart';
-import '../models/isar/message_block_entity.dart';
-import '../models/isar/assistant_entity.dart';
 import '../utils/text_cleaner.dart';
-import 'repository_provider.dart';
+import 'app_db.dart';
+import 'search/drift_search_store.dart';
+import 'search/i_search_store.dart';
 
 /// 搜索服务
 ///
@@ -20,23 +18,13 @@ class SearchService {
   SearchService._();
 
   bool _initialized = false;
+  late final ISearchStore _store = DriftSearchStore(AppDb());
 
   /// 初始化（必须在 RepositoryProvider.init() 之后调用）
   void init() {
     if (_initialized) return;
     _initialized = true;
     debugPrint('✅ SearchService 初始化完成');
-  }
-
-  /// 获取 Isar 实例（导入数据库，存储 Cherry Studio 导入的数据）
-  Future<Isar> get _isar async {
-    if (!_initialized) {
-      throw StateError('SearchService not initialized. Call init() first.');
-    }
-    // 使用 importInstance 而不是 instance
-    // - instance: 主数据库（用户数据：标注、分析、讨论）
-    // - importInstance: 版本数据库（导入的 Cherry Studio 数据）
-    return RepositoryProvider.instance.database.importInstance;
   }
 
   /// 执行综合搜索
@@ -89,95 +77,30 @@ class SearchService {
     String keyword, {
     int limit = 50,
   }) async {
-    final isar = await _isar;
-
-    // 1. 搜索话题
-    final topics = await isar.topicEntitys
-        .filter()
-        .nameContains(keyword, caseSensitive: false)
-        .sortByCreatedAtDesc()
-        .limit(limit)
-        .findAll();
-
-    if (topics.isEmpty) return [];
-
-    // 2. 批量获取助手信息
-    final assistantIds = topics.expand((t) => t.assistantIds).toSet().toList();
-    final assistants = await isar.assistantEntitys
-        .filter()
-        .anyOf(assistantIds, (q, id) => q.assistantIdEqualTo(id))
-        .findAll();
-
-    final assistantMap = {for (final a in assistants) a.assistantId: a};
-
-    // 3. 批量获取每个话题的第一条消息内容作为预览
-    final topicIds = topics.map((t) => t.topicId).toList();
-    final contentPreviews = await _getTopicContentPreviews(isar, topicIds);
-
-    // 4. 构建结果
-    return topics.map((topic) {
-      final assistantNames = topic.assistantIds
-          .map((id) => assistantMap[id]?.name ?? '未知助手')
-          .toList();
-      final lowerName = topic.name.toLowerCase();
-      final lowerKeyword = keyword.toLowerCase();
-      final matchIndex = lowerName.indexOf(lowerKeyword);
-
-      return SearchResultModel(
-        id: 'topic_${topic.topicId}',
-        type: SearchResultType.topic,
-        matchSnippet: topic.name,
-        matchStart: matchIndex >= 0 ? matchIndex : 0,
-        matchEnd: matchIndex >= 0 ? matchIndex + keyword.length : 0,
-        topicId: topic.topicId,
-        topicName: topic.name,
-        contentPreview: contentPreviews[topic.topicId],
-        assistantIds: topic.assistantIds,
-        assistantNames: assistantNames,
-        createdAt: topic.createdAt,
-      );
-    }).toList();
-  }
-
-  /// 获取话题的内容预览（第一条用户消息或助手消息的内容）
-  Future<Map<String, String>> _getTopicContentPreviews(
-    Isar isar,
-    List<String> topicIds,
-  ) async {
-    if (topicIds.isEmpty) return {};
-
-    final previews = <String, String>{};
-
-    // 批量获取每个话题的第一条消息
-    for (final topicId in topicIds) {
-      // 获取该话题的第一条消息
-      final firstMessage = await isar.messageEntitys
-          .filter()
-          .topicIdEqualTo(topicId)
-          .sortByRoundIndex()
-          .findFirst();
-
-      if (firstMessage == null) continue;
-
-      // 获取该消息的 main_text 内容
-      final blocks = await isar.messageBlockEntitys
-          .filter()
-          .messageIdEqualTo(firstMessage.messageId)
-          .typeEqualTo('main_text')
-          .findAll();
-
-      if (blocks.isNotEmpty) {
-        // 合并所有 main_text 块的内容，截取前 100 字符作为预览
-        final content = blocks.map((b) => b.content ?? '').join().trim();
-        if (content.isNotEmpty) {
-          previews[topicId] = content.length > 100
-              ? '${content.substring(0, 100)}...'
-              : content;
-        }
-      }
+    if (!_initialized) {
+      throw StateError('SearchService not initialized. Call init() first.');
     }
 
-    return previews;
+    final hits = await _store.searchTopicNames(keyword, limit: limit);
+    final lowerKeyword = keyword.toLowerCase();
+
+    return hits.map((hit) {
+      final lowerName = hit.topicName.toLowerCase();
+      final matchIndex = lowerName.indexOf(lowerKeyword);
+      return SearchResultModel(
+        id: 'topic_${hit.topicId}',
+        type: SearchResultType.topic,
+        matchSnippet: hit.topicName,
+        matchStart: matchIndex >= 0 ? matchIndex : 0,
+        matchEnd: matchIndex >= 0 ? matchIndex + keyword.length : 0,
+        topicId: hit.topicId,
+        topicName: hit.topicName,
+        contentPreview: hit.contentPreview,
+        assistantIds: hit.assistantIds,
+        assistantNames: hit.assistantNames,
+        createdAt: hit.createdAt,
+      );
+    }).toList();
   }
 
   /// 搜索消息内容
@@ -186,77 +109,17 @@ class SearchService {
     int limit = 100,
     int snippetLength = 50,
   }) async {
-    final isar = await _isar;
+    if (!_initialized) {
+      throw StateError('SearchService not initialized. Call init() first.');
+    }
 
-    // 【调试】打印数据库信息
-    final hasVersion = RepositoryProvider.instance.database.hasVersionedImport;
-    debugPrint('🔍 [搜索调试] 使用版本数据库: $hasVersion');
-
-    // 1. 先检查 messageBlockEntitys 表中有多少数据
-    final totalBlocks = await isar.messageBlockEntitys.count();
-    final mainTextBlocks = await isar.messageBlockEntitys
-        .filter()
-        .typeEqualTo('main_text')
-        .count();
-    debugPrint('🔍 [搜索调试] 总消息块数: $totalBlocks, main_text 类型: $mainTextBlocks');
-
-    // 2. 搜索消息块内容（仅 main_text 类型）
-    final blocks = await isar.messageBlockEntitys
-        .filter()
-        .typeEqualTo('main_text')
-        .contentContains(keyword, caseSensitive: false)
-        .limit(limit)
-        .findAll();
-
-    debugPrint('🔍 [搜索调试] 关键词 "$keyword" 匹配到 ${blocks.length} 个消息块');
-
-    if (blocks.isEmpty) return [];
-
-    // 2. 批量获取消息元数据
-    final messageIds = blocks.map((b) => b.messageId).toSet().toList();
-    final messages = await isar.messageEntitys
-        .filter()
-        .anyOf(messageIds, (q, id) => q.messageIdEqualTo(id))
-        .findAll();
-
-    final messageMap = {for (final m in messages) m.messageId: m};
-
-    // 3. 批量获取话题信息
-    final topicIds = blocks.map((b) => b.topicId).toSet().toList();
-    final topics = await isar.topicEntitys
-        .filter()
-        .anyOf(topicIds, (q, id) => q.topicIdEqualTo(id))
-        .findAll();
-
-    final topicMap = {for (final t in topics) t.topicId: t};
-
-    // 4. 批量获取助手信息
-    final assistantIds = topics.expand((t) => t.assistantIds).toSet().toList();
-    final assistants = await isar.assistantEntitys
-        .filter()
-        .anyOf(assistantIds, (q, id) => q.assistantIdEqualTo(id))
-        .findAll();
-
-    final assistantMap = {for (final a in assistants) a.assistantId: a};
-
-    // 5. 构建结果（包含上下文片段）
+    final hits = await _store.searchMessageContent(keyword, limit: limit);
     final results = <SearchResultModel>[];
 
-    for (final block in blocks) {
-      final content = block.content ?? '';
-      if (content.isEmpty) continue;
-
-      final message = messageMap[block.messageId];
-      final topic = topicMap[block.topicId];
-      if (topic == null) continue;
-
-      final assistantNames = topic.assistantIds
-          .map((id) => assistantMap[id]?.name ?? '未知助手')
-          .toList();
-
+    for (final hit in hits) {
       // 使用 text_cleaner 生成干净的 snippet
       final snippetResult = generateSearchSnippet(
-        content: content,
+        content: hit.content,
         keyword: keyword,
         snippetLength: snippetLength,
       );
@@ -267,20 +130,20 @@ class SearchService {
       }
 
       results.add(SearchResultModel(
-        id: 'block_${block.blockId}',
+        id: 'block_${hit.blockId}',
         type: SearchResultType.message,
         matchSnippet: snippetResult.snippet,
         matchStart: snippetResult.matchStart,
         matchEnd: snippetResult.matchEnd,
-        topicId: block.topicId,
-        topicName: topic.name,
-        assistantIds: topic.assistantIds,
-        assistantNames: assistantNames,
-        messageId: block.messageId,
-        role: message?.role,
-        modelName: message?.modelName,
-        roundIndex: message?.roundIndex,
-        createdAt: block.createdAt,
+        topicId: hit.topicId,
+        topicName: hit.topicName,
+        assistantIds: hit.assistantIds,
+        assistantNames: hit.assistantNames,
+        messageId: hit.messageId,
+        role: hit.role,
+        modelName: hit.modelName,
+        roundIndex: hit.roundIndex,
+        createdAt: hit.createdAt,
       ));
     }
 

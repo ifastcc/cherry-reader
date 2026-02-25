@@ -7,6 +7,12 @@
 
 ---
 
+## 0. 相关文档（SQLite / Drift）
+
+如果你要把当前项目从 Isar 迁移到 SQLite（Drift），并且希望从“业务意图/第一性原理”出发做重构，而不是做语法替换，请看：
+
+- [DRIFT_REFACTOR_PLAN.md](./DRIFT_REFACTOR_PLAN.md)
+
 ## 一、背景与问题
 
 ### 1.1 当前架构概述

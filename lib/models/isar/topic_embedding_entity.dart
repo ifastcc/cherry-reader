@@ -1,17 +1,8 @@
-import 'package:isar_community/isar.dart';
-
-part 'topic_embedding_entity.g.dart';
-
 /// 话题 Embedding 实体
 ///
 /// 存储首轮用户问题的向量表示，用于语义搜索
-@collection
 class TopicEmbeddingEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 话题 ID（唯一索引）
-  @Index(unique: true)
   late String topicId;
 
   /// 首轮用户问题文本（方便调试和展示）

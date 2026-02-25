@@ -1,8 +1,5 @@
 import 'dart:convert';
-import 'package:isar_community/isar.dart';
 import 'package:uuid/uuid.dart';
-
-part 'knowledge_entry.g.dart';
 
 /// 选区范围数据类（v3.0）
 ///
@@ -55,12 +52,8 @@ class SelectionRange {
 /// - quotedText 非空 + content 为空 → 高亮
 /// - quotedText 非空 + content 非空 → 标注
 /// - quotedText 为空 + content 非空 → 笔记
-@collection
 class KnowledgeEntry {
-  Id id = Isar.autoIncrement;
-
   /// 条目唯一标识（UUID）
-  @Index(unique: true)
   late String entryId;
 
   // ==================== 核心内容 ====================
@@ -94,11 +87,9 @@ class KnowledgeEntry {
   // ==================== 来源关联 ====================
 
   /// 关联的消息 ID（高亮/标注来源）
-  @Index()
   String? messageId;
 
   /// 关联的话题 ID
-  @Index()
   String? topicId;
 
   /// 话题名称（冗余存储，避免查询）
@@ -122,7 +113,6 @@ class KnowledgeEntry {
   List<String> tags = [];
 
   /// 创建时间戳
-  @Index()
   late int createdAt;
 
   /// The sequence index of the block in the document (0-indexed).
@@ -142,7 +132,6 @@ class KnowledgeEntry {
   
   /// Group ID for linking multiple entries (e.g. cross-block selection)
   /// @deprecated 已废弃，使用 selections 替代
-  @Index()
   String? groupId;
   
   /// 【新架构】多选区信息 (JSON 字符串)
@@ -166,13 +155,11 @@ class KnowledgeEntry {
   int importance = 0;
 
   /// 是否置顶
-  @Index()
   bool isPinned = false;
 
   // ==================== 计算属性 ====================
 
   /// 推导类型
-  @ignore
   KnowledgeEntryType get type {
     final hasQuotedText = quotedText != null && quotedText!.isNotEmpty;
     final hasContent = (content != null && content!.isNotEmpty) ||
@@ -188,7 +175,6 @@ class KnowledgeEntry {
   }
 
   /// 显示内容（用于预览）
-  @ignore
   String get displayContent {
     if (plainText != null && plainText!.isNotEmpty) {
       return plainText!;
@@ -200,11 +186,9 @@ class KnowledgeEntry {
   }
 
   /// 是否有来源
-  @ignore
   bool get hasSource => messageId != null && messageId!.isNotEmpty;
 
   /// 是否有评论（标注）
-  @ignore
   bool get hasComment {
     return quotedText != null &&
         quotedText!.isNotEmpty &&
@@ -213,7 +197,6 @@ class KnowledgeEntry {
   }
   
   /// 【v3.0】解析 selections JSON
-  @ignore
   List<SelectionRange> get selectionRanges {
     if (selections == null || selections!.isEmpty) {
       // Fallback: 使用旧字段构建单个选区

@@ -19,6 +19,7 @@ class SyncPreferences {
     'localFolder': false,
     'lanReceive': false,
     'httpPull': false,
+    'serverSync': false,
     'manualImport': false,
   };
 

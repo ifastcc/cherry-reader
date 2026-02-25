@@ -52,9 +52,10 @@ dependencies:
   just_audio: ^0.9.40 # 音频播放
   crypto: ^3.0.3 # 加密（MD5等）
 
-  # 数据库 (使用 community 维护版本)
-  isar_community: ^3.3.0 # 高性能数据库 (community fork)
-  isar_community_flutter_libs: ^3.3.0 # Isar Flutter 平台库
+  # 数据库
+  drift: ^2.8.0
+  drift_flutter: ^0.2.8
+  sqlite3_flutter_libs: ^0.5.25
 
   # 环境变量
   flutter_dotenv: ^5.1.0 # .env 文件支持
@@ -73,7 +74,7 @@ dev_dependencies:
   flutter_lints: ^3.0.0
   build_runner: ^2.4.6 # 代码生成
   json_serializable: ^6.7.1 # JSON 序列化代码生成
-  isar_community_generator: ^3.3.0 # Isar 代码生成
+  drift_dev: ^2.8.0
   flutter_launcher_icons: ^0.14.4
 
 flutter:

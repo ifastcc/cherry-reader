@@ -1,18 +1,9 @@
-import 'package:isar_community/isar.dart';
-
-part 'file_entity.g.dart';
-
 /// 文件 Isar 实体
 ///
 /// 存储附件信息，用于去重和本地缓存管理
 /// 导入时将 files[] 复制到应用可访问目录并记录 hash
-@collection
 class FileEntity {
-  /// Isar 自动生成的 ID
-  Id id = Isar.autoIncrement;
-
   /// 文件 ID（对应 Cherry Studio 导出的文件 id，唯一索引）
-  @Index(unique: true)
   late String fileId;
 
   /// 文件名
@@ -25,7 +16,6 @@ class FileEntity {
   int? fileSize;
 
   /// SHA256 哈希值（用于去重）
-  @Index()
   String? sha256;
 
   /// 拷贝到应用沙箱后的本地路径
@@ -38,7 +28,6 @@ class FileEntity {
   late int referenceCount;
 
   /// 创建时间（毫秒时间戳）
-  @Index()
   late int createdAt;
 
   /// 构造函数

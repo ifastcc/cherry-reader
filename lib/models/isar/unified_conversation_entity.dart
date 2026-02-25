@@ -1,7 +1,3 @@
-import 'package:isar_community/isar.dart';
-
-part 'unified_conversation_entity.g.dart';
-
 /// 对话上下文类型
 ///
 /// 用于区分不同场景的对话：
@@ -18,26 +14,20 @@ enum ConversationContextType {
 ///
 /// 将原有的 DiscussionEntity 和 AIAnalysisEntity 统一为一种数据结构
 /// 通过 contextType 和 contextId 区分不同场景
-@collection
 class UnifiedConversationEntity {
-  Id id = Isar.autoIncrement;
-
   /// 对话唯一 ID（UUID）
-  @Index(unique: true)
   late String conversationId;
 
   /// 对话标题
   late String title;
 
   /// 上下文类型
-  @Enumerated(EnumType.name)
   late ConversationContextType contextType;
 
   /// 上下文 ID
   /// - topic: 为空或自定义标识
   /// - messageGroup: topicId:groupIndex 格式
   /// - singleMessage: messageId
-  @Index()
   late String contextId;
 
   /// 上下文快照（可选）
@@ -57,7 +47,6 @@ class UnifiedConversationEntity {
   late int roundCount;
 
   /// 创建时间戳（毫秒）
-  @Index()
   late int createdAt;
 
   /// 更新时间戳（毫秒）
@@ -98,16 +87,11 @@ class UnifiedConversationEntity {
 }
 
 /// 统一对话消息实体
-@collection
 class UnifiedMessageEntity {
-  Id id = Isar.autoIncrement;
-
   /// 消息唯一 ID（UUID）
-  @Index(unique: true)
   late String messageId;
 
   /// 所属对话 ID
-  @Index()
   late String conversationId;
 
   /// 角色：user / assistant / system
@@ -126,7 +110,6 @@ class UnifiedMessageEntity {
   /// 关联的用户问题 ID（assistant 消息专用）
   /// 指向触发这个回复的用户消息的 messageId
   /// 同一用户问题的多个回复共享相同的 askId
-  @Index()
   String? askId;
 
   /// 是否为主线回复（assistant 消息专用）
@@ -138,7 +121,6 @@ class UnifiedMessageEntity {
   String? usageJson;
 
   /// 创建时间戳（毫秒）
-  @Index()
   late int createdAt;
 
   /// 消息状态：pending / streaming / completed / error
@@ -305,8 +287,6 @@ class UnifiedMessageEntity {
     }
 
     return UnifiedMessageEntity()
-      // 🔧 保留 Isar 主键 id，确保 put() 会更新而不是插入（避免唯一索引冲突）
-      ..id = original.id
       // 保持身份标识不变
       ..messageId = original.messageId
       ..conversationId = original.conversationId

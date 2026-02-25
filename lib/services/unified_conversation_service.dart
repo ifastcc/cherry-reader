@@ -4,7 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../models/isar/unified_conversation_entity.dart';
 import '../models/isar/prompt_template_entity.dart';
 import '../utils/api_host_utils.dart';
-import 'isar_database.dart';
+import 'app_db.dart';
 import 'ai_provider_service.dart';
 import 'openai_service.dart';
 import 'prompt_template_service.dart';
@@ -316,7 +316,7 @@ class UnifiedConversationService {
   UnifiedConversationService._();
 
   final _uuid = const Uuid();
-  final _db = IsarDatabase();
+  final _db = AppDb();
 
   // ============ 对话管理 ============
 

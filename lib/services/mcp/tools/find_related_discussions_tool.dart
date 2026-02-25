@@ -1,7 +1,6 @@
-import 'package:isar_community/isar.dart';
 import '../../repository_provider.dart';
 import '../../embedding_service.dart';
-import '../../isar_database.dart';
+import '../../app_db.dart';
 import '../../../models/domain/block_model.dart';
 import '../../../models/isar/topic_embedding_entity.dart';
 import 'mcp_tool_base.dart';
@@ -133,8 +132,7 @@ class FindRelatedDiscussionsTool extends MCPTool {
     }
 
     // 获取所有话题的 embedding
-    final isar = await IsarDatabase().importInstance;
-    var embeddings = await isar.topicEmbeddingEntitys.where().findAll();
+    var embeddings = await AppDb().getAllTopicEmbeddings();
 
     if (embeddings.isEmpty) {
       return null; // 没有 embedding 数据，降级到关键词搜索

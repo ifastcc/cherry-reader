@@ -1,85 +1,14 @@
 import 'package:flutter/foundation.dart';
-import 'package:isar_community/isar.dart';
-import 'isar_database.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'app_db.dart';
 import 'ai_provider_service.dart';
 import 'openai_service.dart';
 import 'perspective_storage.dart';
+import 'insight/drift_insight_store.dart';
+import 'insight/i_insight_store.dart';
+import '../models/domain/insight_models.dart';
 import '../models/isar/perspective_entity.dart';
 import '../models/isar/insight_entity.dart';
-import '../models/isar/topic_entity.dart';
-import '../models/isar/assistant_entity.dart';
-import '../models/isar/message_entity.dart';
-import '../models/isar/message_block_entity.dart';
-
-/// 提问项（选中的单个提问）
-class QueryItem {
-  final String topicId;
-  final String topicName;
-  final String messageId;
-  final String preview;
-  final int charCount;
-  final DateTime timestamp;
-
-  QueryItem({
-    required this.topicId,
-    required this.topicName,
-    required this.messageId,
-    required this.preview,
-    required this.charCount,
-    required this.timestamp,
-  });
-}
-
-/// 话题分组
-class TopicGroup {
-  final String topicId;
-  final String topicName;
-  final List<String> assistantIds;
-  final List<String> assistantNames;
-  final List<QueryItem> queries;
-  final int totalCharCount;
-  final int roundCount;
-  final DateTime latestTime;
-
-  TopicGroup({
-    required this.topicId,
-    required this.topicName,
-    required this.assistantIds,
-    required this.assistantNames,
-    required this.queries,
-    required this.totalCharCount,
-    required this.roundCount,
-    required this.latestTime,
-  });
-}
-
-/// 月份分组
-class MonthGroup {
-  final String label;
-  final List<TopicGroup> topicGroups;
-
-  MonthGroup({
-    required this.label,
-    required this.topicGroups,
-  });
-}
-
-/// 助手统计信息
-class AssistantStats {
-  final String id;
-  final String name;
-  final int topicCount;      // 话题数
-  final int messageCount;    // 消息数
-  final DateTime? latestTime; // 最后更新时间
-
-  AssistantStats({
-    required this.id,
-    required this.name,
-    required this.topicCount,
-    required this.messageCount,
-    this.latestTime,
-  });
-}
 
 /// AI 洞察服务
 ///
@@ -89,7 +18,8 @@ class InsightService {
   InsightService._();
   static final InsightService instance = InsightService._();
 
-  final _db = IsarDatabase();
+  final AppDb _db = AppDb();
+  late final IInsightStore _store = DriftInsightStore(_db);
   bool _initialized = false;
 
   // 缓存
@@ -101,9 +31,7 @@ class InsightService {
   /// 初始化服务
   Future<void> init() async {
     if (_initialized) return;
-
-    // 确保内置视角存在
-    await _db.initBuiltinPerspectives();
+    await _db.init();
     _initialized = true;
   }
 
@@ -111,106 +39,46 @@ class InsightService {
 
   /// 获取所有视角
   Future<List<PerspectiveEntity>> getAllPerspectives() async {
-    final isar = await _db.instance;
-    return isar.perspectiveEntitys.where().sortBySortOrder().findAll();
+    return _store.getAllPerspectives();
   }
 
   /// 获取启用的视角
   Future<List<PerspectiveEntity>> getEnabledPerspectives() async {
-    final isar = await _db.instance;
-    return isar.perspectiveEntitys
-        .filter()
-        .isEnabledEqualTo(true)
-        .sortBySortOrder()
-        .findAll();
+    return _store.getEnabledPerspectives();
   }
 
   /// 切换视角启用状态
   Future<void> togglePerspectiveEnabled(String perspectiveId, bool isEnabled) async {
-    final isar = await _db.instance;
-    final perspective = await isar.perspectiveEntitys
-        .filter()
-        .perspectiveIdEqualTo(perspectiveId)
-        .findFirst();
-
-    if (perspective == null) return;
-
-    perspective.isEnabled = isEnabled;
-    perspective.updatedAt = DateTime.now().millisecondsSinceEpoch;
-
-    await isar.writeTxn(() async {
-      await isar.perspectiveEntitys.put(perspective);
-    });
+    await _store.togglePerspectiveEnabled(perspectiveId, isEnabled);
   }
 
   /// 添加自定义视角
   Future<void> addCustomPerspective(PerspectiveEntity perspective) async {
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.perspectiveEntitys.put(perspective);
-    });
+    await _store.upsertPerspective(perspective);
   }
 
   /// 更新自定义视角
   Future<void> updateCustomPerspective(PerspectiveEntity perspective) async {
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.perspectiveEntitys.put(perspective);
-    });
+    await _store.upsertPerspective(perspective);
   }
 
   /// 删除自定义视角（不允许删除内置视角）
   Future<bool> deleteCustomPerspective(String perspectiveId) async {
-    final isar = await _db.instance;
-    final perspective = await isar.perspectiveEntitys
-        .filter()
-        .perspectiveIdEqualTo(perspectiveId)
-        .findFirst();
-
-    if (perspective == null || perspective.isBuiltin) {
-      return false;
-    }
-
-    await isar.writeTxn(() async {
-      await isar.perspectiveEntitys
-          .filter()
-          .perspectiveIdEqualTo(perspectiveId)
-          .deleteFirst();
-    });
-
-    return true;
+    return _store.deleteCustomPerspective(perspectiveId);
   }
 
   /// 强制重置内置视角
   Future<void> forceResetBuiltinPerspectives() async {
-    final isar = await _db.instance;
-
-    // 删除所有内置视角
-    await isar.writeTxn(() async {
-      await isar.perspectiveEntitys
-          .filter()
-          .isBuiltinEqualTo(true)
-          .deleteAll();
-    });
-
-    // 重新插入
-    final builtins = BuiltinPerspectives.getAll();
-    await isar.writeTxn(() async {
-      await isar.perspectiveEntitys.putAll(builtins);
-    });
-
-    debugPrint('✅ 已强制重置 ${builtins.length} 个内置视角');
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('builtin_perspectives_version', 0);
+    await _db.initBuiltinPerspectives();
   }
 
   // ============ 自定义分组管理 ============
 
   /// 获取所有自定义分组名称（非内置分组）
   Future<List<String>> getCustomCategories() async {
-    final isar = await _db.instance;
-    final customPerspectives = await isar.perspectiveEntitys
-        .filter()
-        .isBuiltinEqualTo(false)
-        .findAll();
+    final customPerspectives = await _store.getCustomPerspectives();
 
     final categories = customPerspectives
         .map((p) => p.category)
@@ -226,11 +94,7 @@ class InsightService {
   /// 
   /// 返回：内置视角全部显示 + 启用的自定义视角
   Future<Map<String, List<PerspectiveEntity>>> getEnabledPerspectivesGrouped() async {
-    final isar = await _db.instance;
-    final allPerspectives = await isar.perspectiveEntitys
-        .where()
-        .sortBySortOrder()
-        .findAll();
+    final allPerspectives = await getAllPerspectives();
 
     final grouped = <String, List<PerspectiveEntity>>{};
 
@@ -263,17 +127,11 @@ class InsightService {
     if (_assistantListCache != null) {
       return _assistantListCache!;
     }
-
-    final isar = await _db.importInstance;
-    final assistants = await isar.assistantEntitys
-        .where()
-        .sortByName()
-        .findAll();
-
-    _assistantListCache = assistants.map((a) => {
-      'id': a.assistantId,
-      'name': a.name,
-    }).toList();
+    final list = await _store.getAssistantList();
+    _assistantListCache = list;
+    _assistantIdToNameCache = {
+      for (final a in list) (a['id'] ?? ''): (a['name'] ?? ''),
+    }..removeWhere((k, v) => k.isEmpty || v.isEmpty);
 
     return _assistantListCache!;
   }
@@ -339,108 +197,11 @@ class InsightService {
     debugPrint('⏳ 开始预加载话题数据...');
 
     try {
-      final isar = await _db.importInstance;
-
-
-      // 1. 加载助手列表并建立 ID->Name 映射
-      // 2. 加载全部话题
-      // 3. 批量加载全部用户消息
-      // 4. 批量加载全部 main_text 消息块
-      
-      late List<AssistantEntity> assistants;
-      late List<TopicEntity> topics;
-      late List<MessageEntity> messages;
-      late List<MessageBlockEntity> blocks;
-
-      // 使用显式事务一次性读取，避免多次隐式事务导致的 MDBX 崩溃风险 (txn_ro_end)
-      await isar.txn(() async {
-        assistants = await isar.assistantEntitys.where().findAll();
-        
-        topics = await isar.topicEntitys
-            .where()
-            .sortByUpdatedAtDesc()
-            .findAll();
-            
-        messages = await isar.messageEntitys
-            .filter()
-            .roleEqualTo('user')
-            .sortByCreatedAt()
-            .findAll();
-            
-        blocks = await isar.messageBlockEntitys
-            .filter()
-            .typeEqualTo('main_text')
-            .findAll();
-      });
-
-      _assistantIdToNameCache = {
-        for (final a in assistants) a.assistantId: a.name,
-      };
-      _assistantListCache = assistants.map((a) => {
-        'id': a.assistantId,
-        'name': a.name,
-      }).toList();
-
-      // 5. 构建消息块索引 messageId -> content
-      final blockContentMap = <String, String>{};
-      for (final block in blocks) {
-        // 只保留第一个 main_text 块的内容
-        blockContentMap.putIfAbsent(block.messageId, () => block.content ?? '');
-      }
-
-      // 6. 按话题分组消息
-      final messagesByTopic = <String, List<MessageEntity>>{};
-      for (final msg in messages) {
-        messagesByTopic.putIfAbsent(msg.topicId, () => []).add(msg);
-      }
-
-      // 7. 构建 TopicGroup 列表
-      final topicGroups = <TopicGroup>[];
-      for (final topic in topics) {
-        final topicMessages = messagesByTopic[topic.topicId] ?? [];
-        if (topicMessages.isEmpty) continue;
-
-        final queries = <QueryItem>[];
-        int totalChars = 0;
-
-        for (final msg in topicMessages) {
-          final content = blockContentMap[msg.messageId] ?? '';
-          final preview = content.length > 100
-              ? '${content.substring(0, 100)}...'
-              : content;
-
-          totalChars += content.length;
-
-          queries.add(QueryItem(
-            topicId: topic.topicId,
-            topicName: topic.name,
-            messageId: msg.messageId,
-            preview: preview,
-            charCount: content.length,
-            timestamp: DateTime.fromMillisecondsSinceEpoch(msg.createdAt),
-          ));
-        }
-
-        if (queries.isNotEmpty) {
-          final assistantNames = topic.assistantIds
-              .map((id) => _assistantIdToNameCache?[id] ?? '未知助手')
-              .toList();
-          
-          topicGroups.add(TopicGroup(
-            topicId: topic.topicId,
-            topicName: topic.name,
-            assistantIds: topic.assistantIds,
-            assistantNames: assistantNames,
-            queries: queries,
-            totalCharCount: totalChars,
-            roundCount: queries.length,
-            latestTime: queries.last.timestamp,
-          ));
-        }
-      }
-
-      _allTopicGroupsCache = topicGroups;
-      debugPrint('✅ 预加载完成: ${topicGroups.length} 个话题, ${sw.elapsedMilliseconds}ms');
+      final result = await _store.preloadTopicGroups();
+      _assistantListCache = result.assistantList;
+      _assistantIdToNameCache = result.assistantIdToName;
+      _allTopicGroupsCache = result.topicGroups;
+      debugPrint('✅ 预加载完成: ${result.topicGroups.length} 个话题, ${sw.elapsedMilliseconds}ms');
     } catch (e) {
       debugPrint('❌ 预加载失败: $e');
     } finally {
@@ -520,12 +281,7 @@ class InsightService {
     required String timeRangeLabel,
   }) async* {
     // 1. 获取视角
-    final isar = await _db.instance;
-    final perspective = await isar.perspectiveEntitys
-        .filter()
-        .perspectiveIdEqualTo(perspectiveId)
-        .findFirst();
-
+    final perspective = await _store.getPerspective(perspectiveId);
     if (perspective == null) {
       yield '❌ 未找到视角';
       return;
@@ -584,10 +340,7 @@ class InsightService {
       assistantFilter: assistantFilter,
       timeRangeLabel: timeRangeLabel,
     );
-
-    await isar.writeTxn(() async {
-      await isar.insightEntitys.put(insight);
-    });
+    await _store.saveInsight(insight);
   }
 
   String _formatDate(DateTime date) {
@@ -598,27 +351,17 @@ class InsightService {
 
   /// 获取所有洞察
   Future<List<InsightEntity>> getAllInsights() async {
-    final isar = await _db.instance;
-    return isar.insightEntitys.where().sortByCreatedAtDesc().findAll();
+    return _store.getAllInsights();
   }
 
   /// 删除洞察
   Future<void> deleteInsight(String insightId) async {
-    final isar = await _db.instance;
-    await isar.writeTxn(() async {
-      await isar.insightEntitys
-          .filter()
-          .insightIdEqualTo(insightId)
-          .deleteFirst();
-    });
+    await _store.deleteInsight(insightId);
   }
 
   /// 监听洞察变化
   Stream<List<InsightEntity>> watchInsights() {
-    return _db.instanceSync.insightEntitys
-        .where()
-        .sortByCreatedAtDesc()
-        .watch(fireImmediately: true);
+    return _store.watchInsights();
   }
 
   // ============ 缓存管理 ============
