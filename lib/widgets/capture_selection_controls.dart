@@ -7,8 +7,8 @@ class CaptureSelectionControls extends MaterialTextSelectionControls {
   Offset? endHandlePosition;
 
   @override
-  Widget buildHandle(BuildContext context, TextSelectionHandleType type, double textLineHeight, [VoidCallback? onTap, double? startGlyphHeight, double? endGlyphHeight]) {
-    final handle = super.buildHandle(context, type, textLineHeight, onTap, startGlyphHeight, endGlyphHeight);
+  Widget buildHandle(BuildContext context, TextSelectionHandleType type, double textLineHeight, [VoidCallback? onTap]) {
+    final handle = super.buildHandle(context, type, textLineHeight, onTap);
     
     // Wrap in a layout builder or something to get position? 
     // Actually, buildHandle is called at the handle location in the overlay.

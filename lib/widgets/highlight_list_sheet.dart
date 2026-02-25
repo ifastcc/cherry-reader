@@ -110,7 +110,7 @@ class HighlightListSheet extends StatelessWidget {
           width: 12,
           height: 12,
           decoration: BoxDecoration(
-            color: Color(highlight.color),
+            color: Color(HighlightData.hexColorToInt(highlight.color)),
             shape: BoxShape.circle,
           ),
         ),

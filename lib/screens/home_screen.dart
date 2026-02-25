@@ -15,6 +15,7 @@ import '../services/sync/sync_coordinator.dart';
 import '../services/sync/sync_preferences.dart';
 import '../services/sync/sync_source_type.dart';
 import '../services/sync/server_sync_service.dart';
+import '../services/sync/sync_candidate.dart';
 import '../services/import/source_adapter.dart';
 import '../services/data_import/drift_data_import_service_impl.dart';
 import '../services/unified_import_manager.dart';
@@ -437,7 +438,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _syncNotifier.startChecking();
 
     // 劫持 ServerSync 的独立同步流
-    if (enabledTypes.contains(SyncSourceType.serverSync) || _autoServerSyncEnabled) {
+    if (_autoServerSyncEnabled) {
       try {
         final service = ServerSyncService(RepositoryProvider.instance.database);
         final result = await service.incrementalSync(
