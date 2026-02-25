@@ -12,9 +12,9 @@ import '../services/local_folder_sync_service.dart';
 import '../services/ai_provider_service.dart';
 import '../services/sync_status_notifier.dart';
 import '../services/sync/sync_coordinator.dart';
-import '../services/sync/sync_candidate.dart';
 import '../services/sync/sync_preferences.dart';
 import '../services/sync/sync_source_type.dart';
+import '../services/sync/server_sync_service.dart';
 import '../services/import/source_adapter.dart';
 import '../services/data_import/drift_data_import_service_impl.dart';
 import '../services/unified_import_manager.dart';
@@ -63,6 +63,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _autoLocalFolderEnabled = false;
   bool _autoHttpPullEnabled = false;
   bool _autoLanReceiveEnabled = false;
+  bool _autoServerSyncEnabled = false;
   StreamSubscription<SyncCandidate>? _syncCandidateSubscription;
 
   // 视图模式（默认为时间线）
@@ -304,6 +305,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final prevAutoLocalFolderEnabled = _autoLocalFolderEnabled;
     final prevAutoHttpPullEnabled = _autoHttpPullEnabled;
     final prevAutoLanReceiveEnabled = _autoLanReceiveEnabled;
+    final prevAutoServerSyncEnabled = _autoServerSyncEnabled;
 
     await SyncPreferences.migrateFromLegacyIfNeeded();
     final sources = await SyncPreferences.getAutoSources();
@@ -312,6 +314,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _autoLocalFolderEnabled = sources[SyncSourceType.localFolder] ?? false;
     _autoHttpPullEnabled = sources[SyncSourceType.httpPull] ?? false;
     _autoLanReceiveEnabled = sources[SyncSourceType.lanReceive] ?? false;
+    _autoServerSyncEnabled = sources[SyncSourceType.serverSync] ?? false;
 
     final webdavConfig = await WebDavService.loadConfig();
     _hasValidWebDavConfig = webdavConfig.isValid;
@@ -323,6 +326,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final settingsChanged = prevAutoWebDavEnabled != _autoWebDavEnabled ||
         prevAutoLocalFolderEnabled != _autoLocalFolderEnabled ||
         prevAutoHttpPullEnabled != _autoHttpPullEnabled ||
+        prevAutoServerSyncEnabled != _autoServerSyncEnabled ||
         prevAutoLanReceiveEnabled != _autoLanReceiveEnabled;
 
     // 如果正在同步，只更新配置状态
@@ -352,6 +356,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_autoWebDavEnabled) enabled.add('WebDAV');
     if (_autoHttpPullEnabled) enabled.add('HTTP');
     if (_autoLanReceiveEnabled) enabled.add('局域网接收');
+    if (_autoServerSyncEnabled) enabled.add('Cherry Sync');
     return enabled;
   }
 
@@ -430,6 +435,34 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _syncProgress = null;
     _syncMessage = null;
     _syncNotifier.startChecking();
+
+    // 劫持 ServerSync 的独立同步流
+    if (enabledTypes.contains(SyncSourceType.serverSync) || _autoServerSyncEnabled) {
+      try {
+        final service = ServerSyncService(RepositoryProvider.instance.database);
+        final result = await service.incrementalSync(
+          onStatus: (msg) {
+            if (mounted) _syncNotifier.updateDownloadProgress(0, msg);
+          }
+        );
+        if (mounted) {
+           _syncNotifier.complete();
+           _statusError = null;
+        }
+        await _refreshFromDatabase();
+      } catch (e) {
+        if (mounted) {
+          _syncNotifier.setError('Cherry Sync 失败\\n\\n$e');
+          setState(() {
+            _statusError = 'Cherry Sync 失败\\n\\n$e';
+          });
+        }
+      } finally {
+        _isSyncing = false;
+        if (mounted) setState(() {});
+      }
+      return;
+    }
 
     try {
       final discovery = await SyncCoordinator.instance.discoverLatestCandidates();
