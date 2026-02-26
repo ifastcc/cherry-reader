@@ -244,7 +244,7 @@ class LanHttpSyncPullPrefs {
       var received = 0;
       final sink = tmpFile.openWrite(mode: FileMode.writeOnlyAppend);
       try {
-        await for (final chunk in resp) {
+        await for (final chunk in resp.timeout(timeout)) {
           received += chunk.length;
           sink.add(chunk);
           onProgress?.call(received, total);
@@ -260,6 +260,7 @@ class LanHttpSyncPullPrefs {
       }
       await tmpFile.rename(targetPath);
 
+      await DataPersistenceManager.pruneBackupArtifacts();
       await DataPersistenceManager.clearCache();
       return targetPath;
     } catch (_) {

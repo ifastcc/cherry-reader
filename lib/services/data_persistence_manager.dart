@@ -82,6 +82,7 @@ class DataPersistenceManager {
 
     final fileSize = await appFile.length();
     print('✅ 文件拷贝完成 (${fileSize ~/ 1024 / 1024} MB)');
+    await pruneBackupArtifacts();
 
     return appFilePath;
   }
@@ -231,6 +232,37 @@ class DataPersistenceManager {
       await markCacheAsValid();
     } catch (e) {
       print('❌ 保存文件时间戳失败: $e');
+    }
+  }
+
+  /// 清理应用目录中的历史/临时备份，默认仅保留当前主备份文件。
+  static Future<void> pruneBackupArtifacts({bool keepPrimary = true}) async {
+    try {
+      final dir = await getAppDocumentsDirectory();
+      final entries = await dir.list().toList();
+      final keepNames = <String>{if (keepPrimary) _appDataFileName};
+
+      for (final entry in entries) {
+        if (entry is! File) continue;
+
+        final fileName = p.basename(entry.path);
+        if (keepNames.contains(fileName)) continue;
+        final lower = fileName.toLowerCase();
+
+        final isLegacyPrimaryCopy =
+            lower.startsWith('cherry_studio_data') && lower.endsWith('.zip');
+        final isPrimaryTemp =
+            lower.startsWith('cherry_studio_data') && lower.endsWith('.zip.tmp');
+        final isSnapshotLike =
+            lower.startsWith('cherry-studio.') && lower.endsWith('.zip');
+
+        if (isLegacyPrimaryCopy || isPrimaryTemp || isSnapshotLike) {
+          await entry.delete();
+        }
+      }
+    } catch (e) {
+      // 清理属于维护动作，不阻断业务流程
+      print('⚠️ 清理历史备份失败: $e');
     }
   }
 }

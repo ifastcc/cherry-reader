@@ -69,7 +69,15 @@ class SyncStatus {
 /// 独立于 HomeScreen 的状态管理，
 /// 使用 ValueNotifier 实现精确的局部更新。
 class SyncStatusNotifier extends ValueNotifier<SyncStatus> {
+  bool _isDisposed = false;
+
   SyncStatusNotifier() : super(SyncStatus.idle());
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    super.dispose();
+  }
 
   /// 节流控制
   DateTime _lastUpdate = DateTime.now();
@@ -77,11 +85,13 @@ class SyncStatusNotifier extends ValueNotifier<SyncStatus> {
 
   /// 开始检查
   void startChecking() {
+    if (_isDisposed) return;
     value = SyncStatus.checking();
   }
 
   /// 更新下载进度（带节流）
   void updateDownloadProgress(double progress, String message) {
+    if (_isDisposed) return;
     final now = DateTime.now();
     if (now.difference(_lastUpdate).inMilliseconds >= _throttleMs) {
       _lastUpdate = now;
@@ -91,11 +101,13 @@ class SyncStatusNotifier extends ValueNotifier<SyncStatus> {
 
   /// 开始解析
   void startParsing() {
+    if (_isDisposed) return;
     value = SyncStatus.parsing();
   }
 
   /// 更新导入进度
   void updateImportProgress(String message, {double? progress}) {
+    if (_isDisposed) return;
     final now = DateTime.now();
     if (now.difference(_lastUpdate).inMilliseconds >= _throttleMs) {
       _lastUpdate = now;
@@ -105,16 +117,19 @@ class SyncStatusNotifier extends ValueNotifier<SyncStatus> {
 
   /// 完成
   void complete() {
+    if (_isDisposed) return;
     value = SyncStatus.idle();
   }
 
   /// 错误
   void setError(String error) {
+    if (_isDisposed) return;
     value = SyncStatus.error(error);
   }
 
   /// 清除错误
   void clearError() {
+    if (_isDisposed) return;
     if (value.isError) {
       value = SyncStatus.idle();
     }

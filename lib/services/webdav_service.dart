@@ -396,6 +396,8 @@ class WebDavService {
         );
       }
 
+      await DataPersistenceManager.pruneBackupArtifacts();
+
       return targetPath;
     } catch (e) {
       debugPrint('❌ 下载失败: $e');

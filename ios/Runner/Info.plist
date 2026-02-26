@@ -28,6 +28,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_cherrystudio._tcp</string>
+		<string>_dartobservatory._tcp</string>
 	</array>
 	<key>UIFileSharingEnabled</key>
 	<true/>

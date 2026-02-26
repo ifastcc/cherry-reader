@@ -5,15 +5,17 @@ import 'package:drift/drift.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/domain/import_result.dart';
 import '../models/isar/ai_analysis_entity.dart';
 import '../models/isar/discussion_entity.dart';
 import '../models/isar/discussion_message_entity.dart';
 import '../models/isar/knowledge_entry.dart';
-import '../models/isar/perspective_entity.dart';
 import '../models/isar/prompt_template_entity.dart';
 import '../models/isar/topic_embedding_entity.dart';
 import '../models/isar/unified_conversation_entity.dart';
+import 'cherry_extractor.dart';
 import 'drift/app_database.dart';
+import 'drift/drift_data_import_service.dart';
 import 'perspective_storage.dart';
 
 class AppDb {
@@ -86,6 +88,114 @@ class AppDb {
     });
   }
 
+  /// 双库原子导入：
+  /// 1) 先将数据导入临时 staging 库
+  /// 2) 导入成功后，在主库内一次事务替换业务表数据
+  Future<ImportResult> importFromExtractorAtomically(
+    CherryExtractor extractor, {
+    void Function(double progress, String message)? onProgress,
+  }) async {
+    await init();
+    final stagingPath = await _stagingImportDbPath();
+    final stagedDb = ImportDatabase.atPath(stagingPath);
+    var stagedDbClosed = false;
+
+    try {
+      await _deleteFileWithSidecars(stagingPath);
+      onProgress?.call(0.02, '创建临时导入库...');
+      await _clearImportDataInDatabase(stagedDb);
+
+      final importService = DriftDataImportService(stagedDb, extractor);
+      final result = await importService.importFromExtractor(
+        onProgress: (progress, message) {
+          // 0.02 - 0.90: staging 导入阶段
+          onProgress?.call(0.02 + progress * 0.88, message);
+        },
+      );
+
+      if (!result.success) return result;
+
+      // 先关闭 staging 连接，确保 WAL 数据全部落盘后再进行切换。
+      await stagedDb.close();
+      stagedDbClosed = true;
+
+      onProgress?.call(0.92, '切换到新数据...');
+      await _replaceImportDataFromStaging(stagingPath);
+      onProgress?.call(1.0, '导入完成');
+      return result;
+    } catch (e) {
+      return ImportResult()
+        ..success = false
+        ..error = e.toString();
+    } finally {
+      try {
+        if (!stagedDbClosed) {
+          await stagedDb.close();
+        }
+      } catch (_) {}
+      try {
+        await _deleteFileWithSidecars(stagingPath);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _replaceImportDataFromStaging(String stagingPath) async {
+    final d = importDb;
+    final attachedAlias = 'staging_import';
+    final quotedPath = _quoteSqlString(stagingPath);
+
+    await d.customStatement('ATTACH DATABASE $quotedPath AS $attachedAlias');
+    try {
+      await d.transaction(() async {
+        for (final table in _importDeleteOrder(d)) {
+          await d.customStatement('DELETE FROM ${_quoteIdentifier(table)}');
+        }
+        for (final table in _importInsertOrder(d)) {
+          await d.customStatement(
+            'INSERT INTO ${_quoteIdentifier(table)} '
+            'SELECT * FROM $attachedAlias.${_quoteIdentifier(table)}',
+          );
+        }
+      });
+    } finally {
+      await d.customStatement('DETACH DATABASE $attachedAlias');
+    }
+  }
+
+  Future<void> _clearImportDataInDatabase(ImportDatabase database) async {
+    await database.transaction(() async {
+      await database.delete(database.provenanceRecords).go();
+      await database.delete(database.importJobs).go();
+      await database.delete(database.importArtifacts).go();
+      await database.delete(database.topicEmbeddings).go();
+      await database.delete(database.messageBlocks).go();
+      await database.delete(database.messages).go();
+      await database.delete(database.topicAssistants).go();
+      await database.delete(database.topics).go();
+      await database.delete(database.files).go();
+      await database.delete(database.assistants).go();
+    });
+  }
+
+  Future<String> _stagingImportDbPath() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return '${dir.path}/cherry_import_staging.sqlite';
+  }
+
+  Future<void> _deleteFileWithSidecars(String dbPath) async {
+    final targets = <String>[dbPath, '$dbPath-wal', '$dbPath-shm'];
+    for (final path in targets) {
+      final file = io.File(path);
+      try {
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {
+        // 尽力清理，不阻断主流程
+      }
+    }
+  }
+
   Future<int> getImportDbSizeBytes() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = io.File('${dir.path}/cherry_import.sqlite');
@@ -127,28 +237,34 @@ class AppDb {
     final import = importDb;
     final user = userDb;
 
-    final topicCount = (await import
-            .customSelect('SELECT COUNT(*) AS c FROM topics')
-            .getSingle())
-        .read<int>('c');
-    final messageCount = (await import
-            .customSelect('SELECT COUNT(*) AS c FROM messages')
-            .getSingle())
-        .read<int>('c');
+    final topicCount =
+        (await import
+                .customSelect('SELECT COUNT(*) AS c FROM topics')
+                .getSingle())
+            .read<int>('c');
+    final messageCount =
+        (await import
+                .customSelect('SELECT COUNT(*) AS c FROM messages')
+                .getSingle())
+            .read<int>('c');
 
-    final knowledgeCount = (await user
-            .customSelect('SELECT COUNT(*) AS c FROM knowledge_entries')
-            .getSingle())
-        .read<int>('c');
-    final analysisCount = (await user
-            .customSelect('SELECT COUNT(*) AS c FROM ai_analyses')
-            .getSingle())
-        .read<int>('c');
+    final knowledgeCount =
+        (await user
+                .customSelect('SELECT COUNT(*) AS c FROM knowledge_entries')
+                .getSingle())
+            .read<int>('c');
+    final analysisCount =
+        (await user
+                .customSelect('SELECT COUNT(*) AS c FROM ai_analyses')
+                .getSingle())
+            .read<int>('c');
 
     final docDir = await getApplicationDocumentsDirectory();
     final importFile = io.File('${docDir.path}/cherry_import.sqlite');
     final userFile = io.File('${docDir.path}/cherry_user.sqlite');
-    final importBytes = await importFile.exists() ? await importFile.length() : 0;
+    final importBytes = await importFile.exists()
+        ? await importFile.length()
+        : 0;
     final userBytes = await userFile.exists() ? await userFile.length() : 0;
 
     return {
@@ -158,12 +274,13 @@ class AppDb {
       'analyses': analysisCount,
       'import_db_size_mb': (importBytes / 1024 / 1024).toStringAsFixed(2),
       'user_db_size_mb': (userBytes / 1024 / 1024).toStringAsFixed(2),
-      'database_size_mb': ((importBytes + userBytes) / 1024 / 1024).toStringAsFixed(2),
+      'database_size_mb': ((importBytes + userBytes) / 1024 / 1024)
+          .toStringAsFixed(2),
     };
   }
 
   Future<({Map<String, String> userPreviews, Map<String, String> aiPreviews})>
-      getTopicCardPreviews(List<String> topicIds) async {
+  getTopicCardPreviews(List<String> topicIds) async {
     final import = importDb;
     if (topicIds.isEmpty) {
       return (userPreviews: <String, String>{}, aiPreviews: <String, String>{});
@@ -172,8 +289,7 @@ class AppDb {
     final placeholders = List.filled(topicIds.length, '?').join(', ');
     final vars = topicIds.map((id) => Variable<String>(id)).toList();
 
-    final lastUserRows = await import.customSelect(
-      '''
+    final lastUserRows = await import.customSelect('''
 SELECT m.topic_id AS topicId, m.message_id AS messageId
 FROM messages m
 WHERE m.role = 'user'
@@ -183,12 +299,9 @@ WHERE m.role = 'user'
     FROM messages m2
     WHERE m2.topic_id = m.topic_id AND m2.role = 'user'
   )
-''',
-      variables: vars,
-    ).get();
+''', variables: vars).get();
 
-    final firstAiRows = await import.customSelect(
-      '''
+    final firstAiRows = await import.customSelect('''
 SELECT m.topic_id AS topicId, m.message_id AS messageId
 FROM messages m
 WHERE m.role = 'assistant'
@@ -198,9 +311,7 @@ WHERE m.role = 'assistant'
     FROM messages m2
     WHERE m2.topic_id = m.topic_id AND m2.role = 'assistant'
   )
-''',
-      variables: vars,
-    ).get();
+''', variables: vars).get();
 
     final lastUserMessageIdByTopic = <String, String>{};
     for (final row in lastUserRows) {
@@ -228,17 +339,14 @@ WHERE m.role = 'assistant'
     final msgPlaceholders = List.filled(allMessageIds.length, '?').join(', ');
     final msgVars = allMessageIds.map((id) => Variable<String>(id)).toList();
 
-    final blockRows = await import.customSelect(
-      '''
+    final blockRows = await import.customSelect('''
 SELECT mb.message_id AS messageId, mb.content AS content, mb.order_index AS orderIndex
 FROM message_blocks mb
 WHERE mb.type = 'main_text'
   AND mb.content IS NOT NULL
   AND mb.message_id IN ($msgPlaceholders)
 ORDER BY mb.message_id ASC, mb.order_index ASC
-''',
-      variables: msgVars,
-    ).get();
+''', variables: msgVars).get();
 
     final firstMainTextByMessageId = <String, String>{};
     for (final row in blockRows) {
@@ -279,9 +387,47 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     return '${cleaned.substring(0, maxLength)}...';
   }
 
+  List<String> _importDeleteOrder(ImportDatabase d) => [
+    d.provenanceRecords.actualTableName,
+    d.importJobs.actualTableName,
+    d.importArtifacts.actualTableName,
+    d.topicEmbeddings.actualTableName,
+    d.messageBlocks.actualTableName,
+    d.messages.actualTableName,
+    d.topicAssistants.actualTableName,
+    d.topics.actualTableName,
+    d.files.actualTableName,
+    d.assistants.actualTableName,
+  ];
+
+  List<String> _importInsertOrder(ImportDatabase d) => [
+    d.assistants.actualTableName,
+    d.files.actualTableName,
+    d.topics.actualTableName,
+    d.topicAssistants.actualTableName,
+    d.messages.actualTableName,
+    d.messageBlocks.actualTableName,
+    d.topicEmbeddings.actualTableName,
+    d.importArtifacts.actualTableName,
+    d.importJobs.actualTableName,
+    d.provenanceRecords.actualTableName,
+  ];
+
+  String _quoteIdentifier(String identifier) {
+    final escaped = identifier.replaceAll('"', '""');
+    return '"$escaped"';
+  }
+
+  String _quoteSqlString(String value) {
+    final escaped = value.replaceAll("'", "''");
+    return "'$escaped'";
+  }
+
   Future<void> saveAnalysis(AIAnalysisEntity analysis) async {
     final d = userDb;
-    await d.into(d.aiAnalyses).insert(
+    await d
+        .into(d.aiAnalyses)
+        .insert(
           AiAnalysesCompanion(
             topicId: Value(analysis.topicId),
             groupIndex: Value(analysis.groupIndex),
@@ -294,13 +440,14 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<List<AIAnalysisEntity>> getAnalyses(String topicId) async {
     final d = userDb;
-    final rows = await (d.select(d.aiAnalyses)
-          ..where((t) => t.topicId.equals(topicId))
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.groupIndex),
-            (t) => OrderingTerm.asc(t.createdAt),
-          ]))
-        .get();
+    final rows =
+        await (d.select(d.aiAnalyses)
+              ..where((t) => t.topicId.equals(topicId))
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.groupIndex),
+                (t) => OrderingTerm.asc(t.createdAt),
+              ]))
+            .get();
     return rows
         .map(
           (r) => AIAnalysisEntity()
@@ -314,13 +461,13 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<List<AIAnalysisEntity>> getAllAnalyses() async {
     final d = userDb;
-    final rows = await (d.select(d.aiAnalyses)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.topicId),
-            (t) => OrderingTerm.asc(t.groupIndex),
-            (t) => OrderingTerm.asc(t.createdAt),
-          ]))
-        .get();
+    final rows =
+        await (d.select(d.aiAnalyses)..orderBy([
+              (t) => OrderingTerm.asc(t.topicId),
+              (t) => OrderingTerm.asc(t.groupIndex),
+              (t) => OrderingTerm.asc(t.createdAt),
+            ]))
+            .get();
     return rows
         .map(
           (r) => AIAnalysisEntity()
@@ -337,11 +484,14 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     int groupIndex,
   ) async {
     final d = userDb;
-    final rows = await (d.select(d.aiAnalyses)
-          ..where((t) =>
-              t.topicId.equals(topicId) & t.groupIndex.equals(groupIndex))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-        .get();
+    final rows =
+        await (d.select(d.aiAnalyses)
+              ..where(
+                (t) =>
+                    t.topicId.equals(topicId) & t.groupIndex.equals(groupIndex),
+              )
+              ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+            .get();
     return rows
         .map(
           (r) => AIAnalysisEntity()
@@ -362,22 +512,27 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     if (analysisIndex < 0 || analysisIndex >= analyses.length) return;
     final target = analyses[analysisIndex];
     final d = userDb;
-    await (d.delete(d.aiAnalyses)
-          ..where((t) =>
+    await (d.delete(d.aiAnalyses)..where(
+          (t) =>
               t.topicId.equals(topicId) &
               t.groupIndex.equals(groupIndex) &
-              t.createdAt.equals(target.createdAt)))
+              t.createdAt.equals(target.createdAt),
+        ))
         .go();
   }
 
   Future<void> clearAnalyses(String topicId) async {
     final d = userDb;
-    await (d.delete(d.aiAnalyses)..where((t) => t.topicId.equals(topicId))).go();
+    await (d.delete(
+      d.aiAnalyses,
+    )..where((t) => t.topicId.equals(topicId))).go();
   }
 
   Future<void> saveDiscussion(DiscussionEntity discussion) async {
     final d = userDb;
-    await d.into(d.discussions).insertOnConflictUpdate(
+    await d
+        .into(d.discussions)
+        .insertOnConflictUpdate(
           DiscussionsCompanion(
             discussionId: Value(discussion.discussionId),
             messageId: Value(discussion.messageId),
@@ -391,10 +546,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<List<DiscussionEntity>> getDiscussions(String messageId) async {
     final d = userDb;
-    final rows = await (d.select(d.discussions)
-          ..where((t) => t.messageId.equals(messageId))
-          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
-        .get();
+    final rows =
+        await (d.select(d.discussions)
+              ..where((t) => t.messageId.equals(messageId))
+              ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+            .get();
     return rows
         .map(
           (r) => DiscussionEntity()
@@ -410,10 +566,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<DiscussionEntity?> getDiscussion(String discussionId) async {
     final d = userDb;
-    final row = await (d.select(d.discussions)
-          ..where((t) => t.discussionId.equals(discussionId))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (d.select(d.discussions)
+              ..where((t) => t.discussionId.equals(discussionId))
+              ..limit(1))
+            .getSingleOrNull();
     if (row == null) return null;
     return DiscussionEntity()
       ..discussionId = row.discussionId
@@ -426,9 +583,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> updateDiscussion(String discussionId, int messageCount) async {
     final d = userDb;
-    await (d.update(d.discussions)
-          ..where((t) => t.discussionId.equals(discussionId)))
-        .write(
+    await (d.update(
+      d.discussions,
+    )..where((t) => t.discussionId.equals(discussionId))).write(
       DiscussionsCompanion(
         messageCount: Value(messageCount),
         updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
@@ -438,14 +595,16 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> deleteDiscussion(String discussionId) async {
     final d = userDb;
-    await (d.delete(d.discussions)
-          ..where((t) => t.discussionId.equals(discussionId)))
-        .go();
+    await (d.delete(
+      d.discussions,
+    )..where((t) => t.discussionId.equals(discussionId))).go();
   }
 
   Future<void> saveDiscussionMessage(DiscussionMessageEntity message) async {
     final d = userDb;
-    await d.into(d.discussionMessages).insertOnConflictUpdate(
+    await d
+        .into(d.discussionMessages)
+        .insertOnConflictUpdate(
           DiscussionMessagesCompanion(
             messageId: Value(message.messageId),
             discussionId: Value(message.discussionId),
@@ -460,10 +619,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     String discussionId,
   ) async {
     final d = userDb;
-    final rows = await (d.select(d.discussionMessages)
-          ..where((t) => t.discussionId.equals(discussionId))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-        .get();
+    final rows =
+        await (d.select(d.discussionMessages)
+              ..where((t) => t.discussionId.equals(discussionId))
+              ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+            .get();
     return rows
         .map(
           (r) => DiscussionMessageEntity()
@@ -502,8 +662,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     return UnifiedConversationEntity()
       ..conversationId = r.conversationId
       ..title = r.title
-      ..contextType = ConversationContextType.values
-          .firstWhere((e) => e.name == r.contextType)
+      ..contextType = ConversationContextType.values.firstWhere(
+        (e) => e.name == r.contextType,
+      )
       ..contextId = r.contextId
       ..contextSnapshot = r.contextSnapshot
       ..providerId = r.providerId
@@ -541,7 +702,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> saveUnifiedConversation(UnifiedConversationEntity conv) async {
     final d = userDb;
-    await d.into(d.unifiedConversations).insertOnConflictUpdate(
+    await d
+        .into(d.unifiedConversations)
+        .insertOnConflictUpdate(
           UnifiedConversationsCompanion(
             conversationId: Value(conv.conversationId),
             title: Value(conv.title),
@@ -581,10 +744,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     String contextId,
   ) async {
     final d = userDb;
-    final rows = await (d.select(d.unifiedConversations)
-          ..where((t) => t.contextId.equals(contextId))
-          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
-        .get();
+    final rows =
+        await (d.select(d.unifiedConversations)
+              ..where((t) => t.contextId.equals(contextId))
+              ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+            .get();
     return rows.map(_toUnifiedConversation).toList();
   }
 
@@ -593,9 +757,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
   ) async {
     if (contextIds.isEmpty) return [];
     final d = userDb;
-    final rows = await (d.select(d.unifiedConversations)
-          ..where((t) => t.contextId.isIn(contextIds)))
-        .get();
+    final rows = await (d.select(
+      d.unifiedConversations,
+    )..where((t) => t.contextId.isIn(contextIds))).get();
     return rows.map(_toUnifiedConversation).toList();
   }
 
@@ -603,10 +767,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     String topicId,
   ) async {
     final d = userDb;
-    final rows = await (d.select(d.unifiedConversations)
-          ..where((t) => t.contextId.like('$topicId:%'))
-          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
-        .get();
+    final rows =
+        await (d.select(d.unifiedConversations)
+              ..where((t) => t.contextId.like('$topicId:%'))
+              ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+            .get();
     return rows.map(_toUnifiedConversation).toList();
   }
 
@@ -614,23 +779,26 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     String conversationId,
   ) async {
     final d = userDb;
-    final row = await (d.select(d.unifiedConversations)
-          ..where((t) => t.conversationId.equals(conversationId))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (d.select(d.unifiedConversations)
+              ..where((t) => t.conversationId.equals(conversationId))
+              ..limit(1))
+            .getSingleOrNull();
     return row == null ? null : _toUnifiedConversation(row);
   }
 
   Future<void> deleteUnifiedConversation(String conversationId) async {
     final d = userDb;
-    await (d.delete(d.unifiedConversations)
-          ..where((t) => t.conversationId.equals(conversationId)))
-        .go();
+    await (d.delete(
+      d.unifiedConversations,
+    )..where((t) => t.conversationId.equals(conversationId))).go();
   }
 
   Future<void> saveUnifiedMessage(UnifiedMessageEntity message) async {
     final d = userDb;
-    await d.into(d.unifiedMessages).insertOnConflictUpdate(
+    await d
+        .into(d.unifiedMessages)
+        .insertOnConflictUpdate(
           UnifiedMessagesCompanion(
             messageId: Value(message.messageId),
             conversationId: Value(message.conversationId),
@@ -657,18 +825,19 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<UnifiedMessageEntity?> getUnifiedMessage(String messageId) async {
     final d = userDb;
-    final row = await (d.select(d.unifiedMessages)
-          ..where((t) => t.messageId.equals(messageId))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (d.select(d.unifiedMessages)
+              ..where((t) => t.messageId.equals(messageId))
+              ..limit(1))
+            .getSingleOrNull();
     return row == null ? null : _toUnifiedMessage(row);
   }
 
   Future<bool> deleteUnifiedMessage(String messageId) async {
     final d = userDb;
-    final deleted = await (d.delete(d.unifiedMessages)
-          ..where((t) => t.messageId.equals(messageId)))
-        .go();
+    final deleted = await (d.delete(
+      d.unifiedMessages,
+    )..where((t) => t.messageId.equals(messageId))).go();
     return deleted > 0;
   }
 
@@ -676,10 +845,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     String conversationId,
   ) async {
     final d = userDb;
-    final rows = await (d.select(d.unifiedMessages)
-          ..where((t) => t.conversationId.equals(conversationId))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-        .get();
+    final rows =
+        await (d.select(d.unifiedMessages)
+              ..where((t) => t.conversationId.equals(conversationId))
+              ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+            .get();
     return rows.map(_toUnifiedMessage).toList();
   }
 
@@ -696,17 +866,18 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> initBuiltinPerspectives() async {
     final d = userDb;
-    final existingBuiltins = await (d.select(d.perspectives)
-          ..where((t) => t.isBuiltin.equals(true)))
-        .get();
+    final existingBuiltins = await (d.select(
+      d.perspectives,
+    )..where((t) => t.isBuiltin.equals(true))).get();
 
     final prefs = await SharedPreferences.getInstance();
     final storedVersion = prefs.getInt('builtin_perspectives_version') ?? 0;
     final currentVersion = BuiltinPerspectives.version;
 
     if (existingBuiltins.isEmpty || storedVersion < currentVersion) {
-      await (d.delete(d.perspectives)..where((t) => t.isBuiltin.equals(true)))
-          .go();
+      await (d.delete(
+        d.perspectives,
+      )..where((t) => t.isBuiltin.equals(true))).go();
 
       final builtins = BuiltinPerspectives.getAll();
       await d.batch((b) {
@@ -739,7 +910,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> saveTopicEmbedding(TopicEmbeddingEntity entity) async {
     final d = importDb;
-    await d.into(d.topicEmbeddings).insertOnConflictUpdate(
+    await d
+        .into(d.topicEmbeddings)
+        .insertOnConflictUpdate(
           TopicEmbeddingsCompanion(
             topicId: Value(entity.topicId),
             firstQueryText: Value(entity.firstQueryText),
@@ -767,7 +940,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> upsertKnowledgeEntry(KnowledgeEntry entry) async {
     final d = userDb;
-    await d.into(d.knowledgeEntries).insertOnConflictUpdate(
+    await d
+        .into(d.knowledgeEntries)
+        .insertOnConflictUpdate(
           KnowledgeEntriesCompanion(
             entryId: Value(entry.entryId),
             content: Value(entry.content),
@@ -864,12 +1039,15 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
         .map((rows) => rows.map(_toKnowledgeEntry).toList());
   }
 
-  Future<List<KnowledgeEntry>> getKnowledgeEntriesByGroupId(String groupId) async {
+  Future<List<KnowledgeEntry>> getKnowledgeEntriesByGroupId(
+    String groupId,
+  ) async {
     final d = userDb;
-    final rows = await (d.select(d.knowledgeEntries)
-          ..where((t) => t.groupId.equals(groupId))
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
-        .get();
+    final rows =
+        await (d.select(d.knowledgeEntries)
+              ..where((t) => t.groupId.equals(groupId))
+              ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+            .get();
     return rows.map(_toKnowledgeEntry).toList();
   }
 
@@ -878,11 +1056,15 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     String quotedText,
   ) async {
     final d = userDb;
-    final row = await (d.select(d.knowledgeEntries)
-          ..where((t) =>
-              t.messageId.equals(messageId) & t.quotedText.equals(quotedText))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (d.select(d.knowledgeEntries)
+              ..where(
+                (t) =>
+                    t.messageId.equals(messageId) &
+                    t.quotedText.equals(quotedText),
+              )
+              ..limit(1))
+            .getSingleOrNull();
     return row == null ? null : _toKnowledgeEntry(row);
   }
 
@@ -932,10 +1114,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<KnowledgeEntry?> getKnowledgeEntry(String entryId) async {
     final d = userDb;
-    final row = await (d.select(d.knowledgeEntries)
-          ..where((t) => t.entryId.equals(entryId))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (d.select(d.knowledgeEntries)
+              ..where((t) => t.entryId.equals(entryId))
+              ..limit(1))
+            .getSingleOrNull();
     if (row == null) return null;
     return _toKnowledgeEntry(row);
   }
@@ -944,10 +1127,11 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     String messageId,
   ) async {
     final d = userDb;
-    final rows = await (d.select(d.knowledgeEntries)
-          ..where((t) => t.messageId.equals(messageId))
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
-        .get();
+    final rows =
+        await (d.select(d.knowledgeEntries)
+              ..where((t) => t.messageId.equals(messageId))
+              ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+            .get();
     return rows.map(_toKnowledgeEntry).toList();
   }
 
@@ -964,60 +1148,68 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<List<KnowledgeEntry>> getAllKnowledgeEntries() async {
     final d = userDb;
-    final rows = await (d.select(d.knowledgeEntries)
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
-        .get();
+    final rows = await (d.select(
+      d.knowledgeEntries,
+    )..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).get();
     return rows.map(_toKnowledgeEntry).toList();
   }
 
-  Future<List<KnowledgeEntry>> getKnowledgeEntriesByTopic(String topicId) async {
+  Future<List<KnowledgeEntry>> getKnowledgeEntriesByTopic(
+    String topicId,
+  ) async {
     final d = userDb;
-    final rows = await (d.select(d.knowledgeEntries)
-          ..where((t) => t.topicId.equals(topicId))
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
-        .get();
+    final rows =
+        await (d.select(d.knowledgeEntries)
+              ..where((t) => t.topicId.equals(topicId))
+              ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+            .get();
     return rows.map(_toKnowledgeEntry).toList();
   }
 
   Future<void> deleteKnowledgeEntry(String entryId) async {
     final d = userDb;
-    await (d.delete(d.knowledgeEntries)..where((t) => t.entryId.equals(entryId)))
-        .go();
+    await (d.delete(
+      d.knowledgeEntries,
+    )..where((t) => t.entryId.equals(entryId))).go();
   }
 
   Future<void> deleteKnowledgeEntriesByMessage(String messageId) async {
     final d = userDb;
-    await (d.delete(d.knowledgeEntries)
-          ..where((t) => t.messageId.equals(messageId)))
-        .go();
+    await (d.delete(
+      d.knowledgeEntries,
+    )..where((t) => t.messageId.equals(messageId))).go();
   }
 
   Future<void> deleteKnowledgeEntriesByTopic(String topicId) async {
     final d = userDb;
-    await (d.delete(d.knowledgeEntries)..where((t) => t.topicId.equals(topicId)))
-        .go();
+    await (d.delete(
+      d.knowledgeEntries,
+    )..where((t) => t.topicId.equals(topicId))).go();
   }
 
   Future<void> deleteKnowledgeEntriesByGroupId(String groupId) async {
     final d = userDb;
-    await (d.delete(d.knowledgeEntries)..where((t) => t.groupId.equals(groupId)))
-        .go();
+    await (d.delete(
+      d.knowledgeEntries,
+    )..where((t) => t.groupId.equals(groupId))).go();
   }
 
   Future<int> getKnowledgeEntryCount() async {
     final d = userDb;
     final countExp = d.knowledgeEntries.entryId.count();
-    final row = await (d.selectOnly(d.knowledgeEntries)..addColumns([countExp]))
-        .getSingle();
+    final row = await (d.selectOnly(
+      d.knowledgeEntries,
+    )..addColumns([countExp])).getSingle();
     return row.read(countExp) ?? 0;
   }
 
   Future<UserPreferenceEntity?> getActivePreference() async {
     final d = userDb;
-    final row = await (d.select(d.userPreferences)
-          ..where((t) => t.isActive.equals(true))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (d.select(d.userPreferences)
+              ..where((t) => t.isActive.equals(true))
+              ..limit(1))
+            .getSingleOrNull();
     if (row == null) return null;
     return UserPreferenceEntity()
       ..preferenceId = row.preferenceId
@@ -1031,9 +1223,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<List<UserPreferenceEntity>> getAllPreferences() async {
     final d = userDb;
-    final rows = await (d.select(d.userPreferences)
-          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
-        .get();
+    final rows = await (d.select(
+      d.userPreferences,
+    )..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
     return rows
         .map(
           (row) => UserPreferenceEntity()
@@ -1050,7 +1242,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> upsertPreference(UserPreferenceEntity entity) async {
     final d = userDb;
-    await d.into(d.userPreferences).insertOnConflictUpdate(
+    await d
+        .into(d.userPreferences)
+        .insertOnConflictUpdate(
           UserPreferencesCompanion(
             preferenceId: Value(entity.preferenceId),
             name: Value(entity.name),
@@ -1072,24 +1266,26 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
   Future<int> getPreferenceCount() async {
     final d = userDb;
     final countExp = d.userPreferences.preferenceId.count();
-    final row = await (d.selectOnly(d.userPreferences)..addColumns([countExp]))
-        .getSingle();
+    final row = await (d.selectOnly(
+      d.userPreferences,
+    )..addColumns([countExp])).getSingle();
     return row.read(countExp) ?? 0;
   }
 
   Future<void> deletePreference(String preferenceId) async {
     final d = userDb;
-    await (d.delete(d.userPreferences)
-          ..where((t) => t.preferenceId.equals(preferenceId)))
-        .go();
+    await (d.delete(
+      d.userPreferences,
+    )..where((t) => t.preferenceId.equals(preferenceId))).go();
   }
 
   Future<TaskTemplateEntity?> getTemplate(String templateId) async {
     final d = userDb;
-    final row = await (d.select(d.taskTemplates)
-          ..where((t) => t.templateId.equals(templateId))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (d.select(d.taskTemplates)
+              ..where((t) => t.templateId.equals(templateId))
+              ..limit(1))
+            .getSingleOrNull();
     if (row == null) return null;
     return TaskTemplateEntity()
       ..templateId = row.templateId
@@ -1098,16 +1294,18 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
       ..content = row.content
       ..isBuiltIn = row.isBuiltIn
       ..usageCount = row.usageCount
-      ..targetType = TemplateTargetType.values.firstWhere((e) => e.name == row.targetType)
+      ..targetType = TemplateTargetType.values.firstWhere(
+        (e) => e.name == row.targetType,
+      )
       ..createdAt = row.createdAt
       ..updatedAt = row.updatedAt;
   }
 
   Future<List<TaskTemplateEntity>> getAllTemplates() async {
     final d = userDb;
-    final rows = await (d.select(d.taskTemplates)
-          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
-        .get();
+    final rows = await (d.select(
+      d.taskTemplates,
+    )..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).get();
     return rows
         .map(
           (row) => TaskTemplateEntity()
@@ -1117,8 +1315,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
             ..content = row.content
             ..isBuiltIn = row.isBuiltIn
             ..usageCount = row.usageCount
-            ..targetType = TemplateTargetType.values
-                .firstWhere((e) => e.name == row.targetType)
+            ..targetType = TemplateTargetType.values.firstWhere(
+              (e) => e.name == row.targetType,
+            )
             ..createdAt = row.createdAt
             ..updatedAt = row.updatedAt,
         )
@@ -1127,7 +1326,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> upsertTemplate(TaskTemplateEntity entity) async {
     final d = userDb;
-    await d.into(d.taskTemplates).insertOnConflictUpdate(
+    await d
+        .into(d.taskTemplates)
+        .insertOnConflictUpdate(
           TaskTemplatesCompanion(
             templateId: Value(entity.templateId),
             name: Value(entity.name),
@@ -1144,9 +1345,9 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
 
   Future<void> deleteTemplate(String templateId) async {
     final d = userDb;
-    await (d.delete(d.taskTemplates)
-          ..where((t) => t.templateId.equals(templateId)))
-        .go();
+    await (d.delete(
+      d.taskTemplates,
+    )..where((t) => t.templateId.equals(templateId))).go();
   }
 
   Future<void> incrementTemplateUsage(String templateId) async {

@@ -23,11 +23,12 @@ class SyncCandidate {
 
   String get fingerprint {
     final payload = [
+      sourceType.id,
       name,
+      remoteId,
       size.toString(),
       modifiedAt.toUtc().millisecondsSinceEpoch.toString(),
     ].join('|');
     return sha1.convert(utf8.encode(payload)).toString();
   }
 }
-

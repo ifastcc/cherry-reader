@@ -121,7 +121,8 @@ class ImportArtifacts extends Table {
 
 class ImportJobs extends Table {
   TextColumn get jobId => text()();
-  TextColumn get artifactId => text().references(ImportArtifacts, #artifactId)();
+  TextColumn get artifactId =>
+      text().references(ImportArtifacts, #artifactId)();
   TextColumn get sourceType => text()();
   TextColumn get status => text()();
   IntColumn get startedAt => integer()();
@@ -195,8 +196,11 @@ class Discussions extends Table {
 
 class DiscussionMessages extends Table {
   TextColumn get messageId => text()();
-  TextColumn get discussionId =>
-      text().references(Discussions, #discussionId, onDelete: KeyAction.cascade)();
+  TextColumn get discussionId => text().references(
+    Discussions,
+    #discussionId,
+    onDelete: KeyAction.cascade,
+  )();
   TextColumn get role => text()();
   TextColumn get content => text()();
   IntColumn get createdAt => integer()();
@@ -226,8 +230,11 @@ class UnifiedConversations extends Table {
 
 class UnifiedMessages extends Table {
   TextColumn get messageId => text()();
-  TextColumn get conversationId => text()
-      .references(UnifiedConversations, #conversationId, onDelete: KeyAction.cascade)();
+  TextColumn get conversationId => text().references(
+    UnifiedConversations,
+    #conversationId,
+    onDelete: KeyAction.cascade,
+  )();
   TextColumn get role => text()();
   TextColumn get content => text()();
   TextColumn get modelId => text().nullable()();
@@ -338,6 +345,8 @@ class TopicEmbeddings extends Table {
 )
 class ImportDatabase extends _$ImportDatabase {
   ImportDatabase() : super(_openImportConnection());
+  ImportDatabase.atPath(String dbPath)
+    : super(_openImportConnectionWithPath(dbPath));
 
   @override
   int get schemaVersion => 1;
@@ -368,13 +377,21 @@ QueryExecutor _openImportConnection() {
   return LazyDatabase(() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = io.File('${dir.path}/cherry_import.sqlite');
-    return driftDatabase(
-      name: file.path,
-      native: const DriftNativeOptions(
-        shareAcrossIsolates: true,
-      ),
-    );
+    return _driftConnectionForPath(file.path);
   });
+}
+
+QueryExecutor _openImportConnectionWithPath(String dbPath) {
+  return LazyDatabase(() async {
+    return _driftConnectionForPath(dbPath);
+  });
+}
+
+QueryExecutor _driftConnectionForPath(String dbPath) {
+  return driftDatabase(
+    name: dbPath,
+    native: const DriftNativeOptions(shareAcrossIsolates: true),
+  );
 }
 
 QueryExecutor _openUserConnection() {
@@ -383,9 +400,7 @@ QueryExecutor _openUserConnection() {
     final file = io.File('${dir.path}/cherry_user.sqlite');
     return driftDatabase(
       name: file.path,
-      native: const DriftNativeOptions(
-        shareAcrossIsolates: true,
-      ),
+      native: const DriftNativeOptions(shareAcrossIsolates: true),
     );
   });
 }

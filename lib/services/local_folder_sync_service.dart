@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:watcher/watcher.dart';
@@ -238,6 +237,7 @@ class LocalFolderSyncService {
 
       // 复制新文件
       await sourceFile.copy(appPath);
+      await DataPersistenceManager.pruneBackupArtifacts();
 
       // 保存时间戳
       final prefs = await SharedPreferences.getInstance();
@@ -253,21 +253,43 @@ class LocalFolderSyncService {
 
   /// 验证 ZIP 文件完整性
   ///
-  /// 尝试读取 ZIP 文件的目录结构来验证文件是否完整
+  /// 使用 EOCD（End of Central Directory）签名进行轻量校验，
+  /// 避免大文件整包读入内存。
   static Future<bool> _validateZipFile(File file) async {
+    RandomAccessFile? raf;
     try {
-      final bytes = await file.readAsBytes();
-      if (bytes.isEmpty) return false;
+      final length = await file.length();
+      if (length < 22) return false; // EOCD 最小长度
 
-      // 尝试解码 ZIP（这会验证 End of Central Directory Record）
-      ZipDecoder().decodeBytes(bytes);
-      return true;
-    } on FormatException catch (e) {
-      debugPrint('⚠️ ZIP 验证失败: ${e.message}');
+      const eocdMinLength = 22;
+      const maxCommentLength = 0xFFFF;
+      const eocdSignatureLength = 4;
+      const tailWindow = eocdMinLength + maxCommentLength + eocdSignatureLength;
+      final readSize = length < tailWindow ? length : tailWindow;
+      final start = length - readSize;
+
+      raf = await file.open(mode: FileMode.read);
+      await raf.setPosition(start);
+      final tail = await raf.read(readSize);
+
+      for (var i = tail.length - eocdMinLength; i >= 0; i--) {
+        if (tail[i] == 0x50 &&
+            tail[i + 1] == 0x4B &&
+            tail[i + 2] == 0x05 &&
+            tail[i + 3] == 0x06) {
+          return true;
+        }
+      }
+
+      debugPrint('⚠️ ZIP 验证失败: 未找到 EOCD 签名');
       return false;
     } catch (e) {
       debugPrint('⚠️ ZIP 验证异常: $e');
       return false;
+    } finally {
+      try {
+        await raf?.close();
+      } catch (_) {}
     }
   }
 

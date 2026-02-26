@@ -103,7 +103,9 @@ class SyncCoordinator {
     bool enabled(SyncSourceType type) => enabledTypes.contains(type);
 
     if (enabled(SyncSourceType.lanReceive)) {
-      final inbox = await SyncPreferences.getInboxCandidate(SyncSourceType.lanReceive);
+      final inbox = await SyncPreferences.getInboxCandidate(
+        SyncSourceType.lanReceive,
+      );
       if (inbox != null && inbox.remoteId.isNotEmpty) {
         final f = File(inbox.remoteId);
         if (await f.exists()) {
@@ -154,7 +156,9 @@ class SyncCoordinator {
     }
 
     if (enabled(SyncSourceType.httpPull)) {
-      final inbox = await SyncPreferences.getInboxCandidate(SyncSourceType.httpPull);
+      final inbox = await SyncPreferences.getInboxCandidate(
+        SyncSourceType.httpPull,
+      );
       if (inbox != null && inbox.remoteId.isNotEmpty) {
         final f = File(inbox.remoteId);
         if (await f.exists()) {
@@ -187,32 +191,52 @@ class SyncCoordinator {
 
   SyncCandidate? chooseLatest(List<SyncCandidate> candidates) {
     if (candidates.isEmpty) return null;
-    final sorted = [...candidates]..sort((a, b) {
-      final cmp = b.modifiedAt.compareTo(a.modifiedAt);
-      if (cmp != 0) return cmp;
-      final sizeCmp = b.size.compareTo(a.size);
-      if (sizeCmp != 0) return sizeCmp;
-      final aLocal = File(a.remoteId).existsSync();
-      final bLocal = File(b.remoteId).existsSync();
-      if (aLocal == bLocal) return 0;
-      return bLocal ? 1 : -1;
-    });
+    final sorted = [...candidates]
+      ..sort((a, b) {
+        final cmp = b.modifiedAt.compareTo(a.modifiedAt);
+        if (cmp != 0) return cmp;
+        final sizeCmp = b.size.compareTo(a.size);
+        if (sizeCmp != 0) return sizeCmp;
+        final aLocal = File(a.remoteId).existsSync();
+        final bLocal = File(b.remoteId).existsSync();
+        if (aLocal == bLocal) return 0;
+        return bLocal ? 1 : -1;
+      });
     return sorted.first;
   }
 
   Future<SyncDecision> decideWhetherToSync(SyncCandidate candidate) async {
     final lastFingerprint = await SyncPreferences.getLastImportedFingerprint();
+    final lastSourceType = await SyncPreferences.getLastImportedSourceType();
+
+    // 来源切换时不能仅用时间戳判定“已是最新”，否则可能误跳过同步。
+    if (lastSourceType != null && lastSourceType != candidate.sourceType) {
+      return SyncDecision(
+        selected: candidate,
+        shouldSync: true,
+        reason: '同步来源已切换，执行更新',
+      );
+    }
+
     if (lastFingerprint == null) {
       return SyncDecision(selected: candidate, shouldSync: true);
     }
     if (lastFingerprint == candidate.fingerprint) {
-      return SyncDecision(selected: candidate, shouldSync: false, reason: '已是最新版本');
+      return SyncDecision(
+        selected: candidate,
+        shouldSync: false,
+        reason: '已是最新版本',
+      );
     }
     final lastModified = await SyncPreferences.getLastImportedModifiedAt();
     if (lastModified != null &&
         candidate.modifiedAt.toUtc().millisecondsSinceEpoch <=
             lastModified.toUtc().millisecondsSinceEpoch) {
-      return SyncDecision(selected: candidate, shouldSync: false, reason: '已是最新版本');
+      return SyncDecision(
+        selected: candidate,
+        shouldSync: false,
+        reason: '已是最新版本',
+      );
     }
     return SyncDecision(selected: candidate, shouldSync: true);
   }

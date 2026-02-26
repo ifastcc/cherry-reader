@@ -38,7 +38,6 @@ import 'lan_transfer_receive_screen.dart';
 import 'lan_transfer_send_screen.dart';
 import 'lan_http_sync_pull_screen.dart';
 import '../services/sync/server_sync_service.dart';
-import '../services/app_db.dart';
 
 // SharedPreferences 键名常量
 const String _keyApiUrl = 'openai_api_url';
@@ -71,7 +70,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // 本地文件夹配置
   late TextEditingController _localFolderPathController;
   bool _isValidatingFolder = false;
-  bool _localFolderAutoLoad = true;  // 自动加载新版本（默认开启）
+  bool _localFolderAutoLoad = true; // 自动加载新版本（默认开启）
 
   bool _autoWebDavEnabled = false;
   bool _autoLocalFolderEnabled = false;
@@ -103,12 +102,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // late TextEditingController _azureKeyController; // Deprecated: single key
   late TextEditingController _azureRegionController;
   final List<TextEditingController> _azureKeyControllers = []; // Multiple keys
-  
+
   TtsSettings _ttsSettings = TtsSettings();
   List<Map<String, String>> _availableVoices = [];
   bool _isLoadingVoices = false;
   // bool _obscureAzureKey = true; // Managed per key row now
-  
+
   // Voice Preview & Favorites
   bool _isPreviewingVoice = false;
   String? _previewingVoiceName;
@@ -196,7 +195,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ttsSettings.azureRegion = _azureRegionController.text.trim();
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+    await prefs.setString(
+      TtsSettings.prefKey,
+      jsonEncode(_ttsSettings.toJson()),
+    );
 
     // 通知 TtsProvider
     if (mounted) {
@@ -243,9 +245,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // 加载视图模式
     final viewMode = prefs.getString('home_view_mode') ?? 'timeline';
-    
+
     // 加载 WebView 话题详情页开关
-    final useWebViewConversation = prefs.getBool('use_webview_conversation') ?? false;
+    final useWebViewConversation =
+        prefs.getBool('use_webview_conversation') ?? false;
 
     await SyncPreferences.migrateFromLegacyIfNeeded();
     final autoSources = await SyncPreferences.getAutoSources();
@@ -263,8 +266,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final serverSyncToken = await ServerSyncService.getServerToken();
 
     final webdavConfigured = webdavConfig.isValid;
-    final localFolderConfigured = localFolderConfig.folderPath.trim().isNotEmpty;
-    final httpPullConfigured = httpPullPrefs.baseUrl.trim().isNotEmpty &&
+    final localFolderConfigured = localFolderConfig.folderPath
+        .trim()
+        .isNotEmpty;
+    final httpPullConfigured =
+        httpPullPrefs.baseUrl.trim().isNotEmpty &&
         httpPullPrefs.baseUrl.trim() != 'http://';
     final serverSyncConfigured = serverSyncUrl.isNotEmpty;
 
@@ -284,6 +290,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _ttsSettings = TtsSettings();
     }
 
+    if (!mounted) return;
     setState(() {
       _currentViewMode = viewMode;
       _useWebViewConversation = useWebViewConversation;
@@ -291,7 +298,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _apiKeyController.text = apiKey;
       _modelController.text = model;
       _autoWebDavEnabled = autoSources[SyncSourceType.webdav] ?? false;
-      _autoLocalFolderEnabled = autoSources[SyncSourceType.localFolder] ?? false;
+      _autoLocalFolderEnabled =
+          autoSources[SyncSourceType.localFolder] ?? false;
       _autoLanReceiveEnabled = autoSources[SyncSourceType.lanReceive] ?? false;
       _autoHttpPullEnabled = autoSources[SyncSourceType.httpPull] ?? false;
       _autoServerSyncEnabled = autoSources[SyncSourceType.serverSync] ?? false;
@@ -313,15 +321,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _syncSourceExpanded[SyncSourceType.webdav] =
           (autoSources[SyncSourceType.webdav] ?? false) && !webdavConfigured;
       _syncSourceExpanded[SyncSourceType.localFolder] =
-          (autoSources[SyncSourceType.localFolder] ?? false) && !localFolderConfigured;
+          (autoSources[SyncSourceType.localFolder] ?? false) &&
+          !localFolderConfigured;
       _syncSourceExpanded[SyncSourceType.httpPull] =
-          (autoSources[SyncSourceType.httpPull] ?? false) && !httpPullConfigured;
+          (autoSources[SyncSourceType.httpPull] ?? false) &&
+          !httpPullConfigured;
       _syncSourceExpanded[SyncSourceType.lanReceive] =
           (autoSources[SyncSourceType.lanReceive] ?? false) == true;
       _syncSourceExpanded[SyncSourceType.serverSync] =
-          (autoSources[SyncSourceType.serverSync] ?? false) && !serverSyncConfigured;
-      _syncToolExpanded['httpServer'] = (lanHttpSyncStatus is LanHttpSyncRunning);
-      
+          (autoSources[SyncSourceType.serverSync] ?? false) &&
+          !serverSyncConfigured;
+      _syncToolExpanded['httpServer'] =
+          (lanHttpSyncStatus is LanHttpSyncRunning);
+
       // Load Azure Keys
       _azureKeyControllers.clear();
       if (_ttsSettings.azureApiKeys.isNotEmpty) {
@@ -330,37 +342,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
       } else if (_ttsSettings.azureApiKey.isNotEmpty) {
         // Migration from single key
-        _azureKeyControllers.add(TextEditingController(text: _ttsSettings.azureApiKey));
+        _azureKeyControllers.add(
+          TextEditingController(text: _ttsSettings.azureApiKey),
+        );
         _ttsSettings.azureApiKeys = [_ttsSettings.azureApiKey];
         _ttsSettings.azureApiKey = ''; // Clear old single key
       } else {
         // Default empty slot
         _azureKeyControllers.add(TextEditingController());
       }
-      
+
       _azureRegionController.text = _ttsSettings.azureRegion;
       _isLoading = false;
     });
 
     if (PlatformUtils.isDesktop) {
       _lanHttpSyncStatusSubscription?.cancel();
-      _lanHttpSyncStatusSubscription =
-          LanHttpSyncServerService.instance.statusStream.listen((status) {
-        if (!mounted) return;
-        setState(() {
-          _lanHttpSyncStatus = status;
-        });
-      });
+      _lanHttpSyncStatusSubscription = LanHttpSyncServerService
+          .instance
+          .statusStream
+          .listen((status) {
+            if (!mounted) return;
+            setState(() {
+              _lanHttpSyncStatus = status;
+            });
+          });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('设置'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('设置'), centerTitle: true),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : Form(
@@ -370,7 +383,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: const EdgeInsets.all(16),
                 children: [
                   // ========== 界面设置 ==========
-                  _buildSectionHeader('界面设置', Icons.dashboard_customize_outlined),
+                  _buildSectionHeader(
+                    '界面设置',
+                    Icons.dashboard_customize_outlined,
+                  ),
                   _buildInterfaceSection(),
                   const SizedBox(height: 24),
 
@@ -410,7 +426,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _buildAboutSection(),
                   const SizedBox(height: 12),
                   _buildFeedbackSection(),
-                  
+
                   const SizedBox(height: 48),
                 ],
               ),
@@ -462,10 +478,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         children: [
                           Row(
                             children: [
-                              const Text('MCP Server', style: TextStyle(fontWeight: FontWeight.w500)),
+                              const Text(
+                                'MCP Server',
+                                style: TextStyle(fontWeight: FontWeight.w500),
+                              ),
                               const SizedBox(width: 8),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
                                   color: isRunning
                                       ? Colors.green.withValues(alpha: 26)
@@ -474,7 +496,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                                 child: Text(
                                   isRunning ? '运行中' : '已停止',
-                                  style: TextStyle(fontSize: 11, color: isRunning ? Colors.green[700] : Colors.grey[600]),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isRunning
+                                        ? Colors.green[700]
+                                        : Colors.grey[600],
+                                  ),
                                 ),
                               ),
                             ],
@@ -482,7 +509,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           const SizedBox(height: 4),
                           Text(
                             '允许 Claude Code、Cursor 等访问数据',
-                            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[500],
+                            ),
                           ),
                         ],
                       ),
@@ -513,7 +543,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: const Text('应用启动时自动开启'),
                   value: config.autoStart,
                   onChanged: (value) async {
-                    final newConfig = config.copyWith(autoStart: value, enabled: value);
+                    final newConfig = config.copyWith(
+                      autoStart: value,
+                      enabled: value,
+                    );
                     await MCPServerService.instance.updateConfig(newConfig);
                     setState(() {});
                   },
@@ -543,36 +576,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 8),
 
                     // 网络地址列表
-                    ...status.addresses.map((addr) => Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.link, size: 16),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: SelectableText(
-                                  'http://$addr:${status.port}/mcp',
-                                  style: const TextStyle(fontFamily: 'monospace'),
-                                ),
+                    ...status.addresses.map(
+                      (addr) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.link, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: SelectableText(
+                                'http://$addr:${status.port}/mcp',
+                                style: const TextStyle(fontFamily: 'monospace'),
                               ),
-                              IconButton(
-                                icon: const Icon(Icons.copy, size: 16),
-                                onPressed: () {
-                                  Clipboard.setData(ClipboardData(
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.copy, size: 16),
+                              onPressed: () {
+                                Clipboard.setData(
+                                  ClipboardData(
                                     text: 'http://$addr:${status.port}/mcp',
-                                  ));
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('地址已复制'),
-                                      duration: Duration(seconds: 1),
-                                    ),
-                                  );
-                                },
-                                tooltip: '复制地址',
-                              ),
-                            ],
-                          ),
-                        )),
+                                  ),
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('地址已复制'),
+                                    duration: Duration(seconds: 1),
+                                  ),
+                                );
+                              },
+                              tooltip: '复制地址',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
 
                     const SizedBox(height: 16),
 
@@ -644,9 +681,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     onPressed: () {
-                      Clipboard.setData(ClipboardData(
-                        text: MCPServerService.instance.generateConfig(selectedTool),
-                      ));
+                      Clipboard.setData(
+                        ClipboardData(
+                          text: MCPServerService.instance.generateConfig(
+                            selectedTool,
+                          ),
+                        ),
+                      );
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text('配置已复制到剪贴板'),
@@ -678,30 +719,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 12),
             SegmentedButton<String>(
               segments: const [
-                 ButtonSegment(
-                   value: 'timeline', 
-                   label: Text('时间线'), 
-                   icon: Icon(Icons.view_timeline_outlined)
-                 ),
-                 ButtonSegment(
-                   value: 'tree', 
-                   label: Text('话题分组'), 
-                   icon: Icon(Icons.account_tree_outlined)
-                 ),
+                ButtonSegment(
+                  value: 'timeline',
+                  label: Text('时间线'),
+                  icon: Icon(Icons.view_timeline_outlined),
+                ),
+                ButtonSegment(
+                  value: 'tree',
+                  label: Text('话题分组'),
+                  icon: Icon(Icons.account_tree_outlined),
+                ),
               ],
               selected: {_currentViewMode},
               onSelectionChanged: (Set<String> newSelection) async {
-                 final mode = newSelection.first;
-                 setState(() => _currentViewMode = mode);
-                 final prefs = await SharedPreferences.getInstance();
-                 await prefs.setString('home_view_mode', mode);
+                final mode = newSelection.first;
+                setState(() => _currentViewMode = mode);
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('home_view_mode', mode);
               },
             ),
             const Divider(height: 24),
             // WebView 话题详情页开关
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('使用 WebView 话题详情页', style: TextStyle(fontWeight: FontWeight.w500)),
+              title: const Text(
+                '使用 WebView 话题详情页',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
               subtitle: Text(
                 '实验性功能：更好的文本选择和高亮体验',
                 style: TextStyle(fontSize: 12, color: Colors.grey[500]),
@@ -730,16 +774,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 14),
             const Divider(height: 1),
             const SizedBox(height: 14),
-            const Text('同步来源（可多选）',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const Text(
+              '同步来源（可多选）',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 8),
             _buildSyncSourcesCard(),
             if (PlatformUtils.isDesktop) ...[
               const SizedBox(height: 14),
               const Divider(height: 1),
               const SizedBox(height: 14),
-              const Text('局域网工具',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              const Text(
+                '局域网工具',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 8),
               _buildSyncLanToolsCard(),
             ],
@@ -755,14 +803,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _webdavPasswordController.text.trim().isNotEmpty &&
       _webdavPathController.text.trim().isNotEmpty;
 
-  bool get _localFolderConfigValid => _localFolderPathController.text.trim().isNotEmpty;
+  bool get _localFolderConfigValid =>
+      _localFolderPathController.text.trim().isNotEmpty;
 
   bool get _httpPullConfigValid {
     final v = _httpPullBaseUrlController.text.trim();
     return v.isNotEmpty && v != 'http://';
   }
 
-  bool get _serverSyncConfigValid => _serverSyncUrlController.text.trim().isNotEmpty;
+  bool get _serverSyncConfigValid =>
+      _serverSyncUrlController.text.trim().isNotEmpty;
 
   Future<void> _setAutoSource(SyncSourceType type, bool enabled) async {
     // 互斥逻辑：serverSync 与其他同步源互斥
@@ -817,7 +867,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
     if (enabled && !isServerSync && type != SyncSourceType.manualImport) {
-      await SyncPreferences.setAutoSourceEnabled(SyncSourceType.serverSync, false);
+      await SyncPreferences.setAutoSourceEnabled(
+        SyncSourceType.serverSync,
+        false,
+      );
     }
 
     if (!mounted) return;
@@ -852,11 +905,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildPanelActionRow(List<Widget> actions) {
     if (actions.isEmpty) return const SizedBox.shrink();
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: actions,
-    );
+    return Wrap(spacing: 12, runSpacing: 12, children: actions);
   }
 
   InputDecoration _panelInputDecoration({
@@ -988,7 +1037,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         id: 'lanPush',
         icon: Icons.send_outlined,
         title: '局域网推送',
-        subtitle: PlatformUtils.isDesktop ? '桌面端推送 / HTTP 同步源' : '手机端接收 / HTTP 拉取',
+        subtitle: PlatformUtils.isDesktop
+            ? '桌面端推送 / HTTP 同步源'
+            : '手机端接收 / HTTP 拉取',
         body: _buildLanSyncSection(),
       ),
     ];
@@ -1011,12 +1062,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required Widget body,
   }) {
     final expanded = _syncSourceExpanded[type] ?? false;
-    final status = _buildSourceStatusText(enabled: enabled, configured: configured);
+    final status = _buildSourceStatusText(
+      enabled: enabled,
+      configured: configured,
+    );
 
     return Column(
       children: [
         ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 2,
+          ),
           leading: Checkbox(
             value: enabled,
             onChanged: (v) => _setAutoSource(type, v == true),
@@ -1025,12 +1082,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Icon(icon, size: 20, color: Colors.grey[700]),
               const SizedBox(width: 10),
-              Expanded(child: Text(type.label, style: const TextStyle(fontWeight: FontWeight.w600))),
+              Expanded(
+                child: Text(
+                  type.label,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
             ],
           ),
           subtitle: Text(
             '$status · $description',
-            style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.35),
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+              height: 1.35,
+            ),
           ),
           trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
           onTap: () {
@@ -1043,7 +1109,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: body,
           ),
-          crossFadeState: expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+          crossFadeState: expanded
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
           duration: const Duration(milliseconds: 200),
         ),
       ],
@@ -1061,12 +1129,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       children: [
         ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 2,
+          ),
           leading: Icon(icon, color: Colors.grey[700]),
-          title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+          title: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
           subtitle: Text(
             subtitle,
-            style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.35),
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+              height: 1.35,
+            ),
           ),
           trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
           onTap: () {
@@ -1079,7 +1157,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: body,
           ),
-          crossFadeState: expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+          crossFadeState: expanded
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
           duration: const Duration(milliseconds: 200),
         ),
       ],
@@ -1093,7 +1173,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('同步服务器配置已保存'), duration: Duration(seconds: 1)),
+      const SnackBar(
+        content: Text('同步服务器配置已保存'),
+        duration: Duration(seconds: 1),
+      ),
     );
   }
 
@@ -1106,10 +1189,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _saveServerSyncConfig();
 
     try {
-      final url = _serverSyncUrlController.text.trim().replaceAll(RegExp(r'/+$'), '');
-      final resp = await http.get(Uri.parse('$url/health')).timeout(
-        const Duration(seconds: 5),
+      final url = _serverSyncUrlController.text.trim().replaceAll(
+        RegExp(r'/+$'),
+        '',
       );
+      final resp = await http
+          .get(Uri.parse('$url/health'))
+          .timeout(const Duration(seconds: 5));
       if (!mounted) return;
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body);
@@ -1211,11 +1297,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _serverSyncTestMessage!,
             style: TextStyle(
               fontSize: 12,
-              color: _serverSyncTestMessage!.contains('成功') || _serverSyncTestMessage!.contains('完成')
+              color:
+                  _serverSyncTestMessage!.contains('成功') ||
+                      _serverSyncTestMessage!.contains('完成')
                   ? Colors.green[700]
                   : _serverSyncTestMessage!.contains('失败')
-                      ? Colors.red[700]
-                      : Colors.grey[600],
+                  ? Colors.red[700]
+                  : Colors.grey[600],
             ),
           ),
         ],
@@ -1286,7 +1374,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             labelText: '密码',
             prefixIcon: Icons.lock,
             suffixIcon: IconButton(
-              icon: Icon(_obscureWebdavPassword ? Icons.visibility_off : Icons.visibility),
+              icon: Icon(
+                _obscureWebdavPassword
+                    ? Icons.visibility_off
+                    : Icons.visibility,
+              ),
               onPressed: () {
                 setState(() {
                   _obscureWebdavPassword = !_obscureWebdavPassword;
@@ -1451,7 +1543,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (parsed == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('剪贴板内容不可识别：请复制桌面端“导入串/下载地址”'), duration: Duration(seconds: 2)),
+        const SnackBar(
+          content: Text('剪贴板内容不可识别：请复制桌面端“导入串/下载地址”'),
+          duration: Duration(seconds: 2),
+        ),
       );
       return;
     }
@@ -1518,7 +1613,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (!mounted) return;
               await Navigator.push<void>(
                 context,
-                MaterialPageRoute(builder: (_) => const LanHttpSyncPullScreen()),
+                MaterialPageRoute(
+                  builder: (_) => const LanHttpSyncPullScreen(),
+                ),
               );
             },
             icon: const Icon(Icons.download),
@@ -1550,7 +1647,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onPressed: () async {
               final received = await Navigator.push<bool>(
                 context,
-                MaterialPageRoute(builder: (_) => const LanTransferReceiveScreen()),
+                MaterialPageRoute(
+                  builder: (_) => const LanTransferReceiveScreen(),
+                ),
               );
               if (!mounted) return;
               if (received == true) {
@@ -1599,7 +1698,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final isRunning = status is LanHttpSyncRunning;
     final enabled = cfg?.enabled ?? false;
     final addresses = isRunning ? status.addresses : const <String>[];
-    final port = isRunning ? status.port : (cfg?.port ?? LanHttpSyncConfig.defaultPort);
+    final port = isRunning
+        ? status.port
+        : (cfg?.port ?? LanHttpSyncConfig.defaultPort);
     final token = cfg?.token ?? '';
     final preferredAddress = addresses.isEmpty
         ? null
@@ -1607,11 +1708,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             (e) => !(e.startsWith('127.') || e == 'localhost'),
             orElse: () => addresses.first,
           );
-    final preferredBaseUrl =
-        preferredAddress == null ? '' : 'http://$preferredAddress:$port';
+    final preferredBaseUrl = preferredAddress == null
+        ? ''
+        : 'http://$preferredAddress:$port';
     final importText = preferredBaseUrl.isEmpty
         ? ''
-        : LanHttpSyncPullPrefs.buildImportString(baseUrl: preferredBaseUrl, token: token);
+        : LanHttpSyncPullPrefs.buildImportString(
+            baseUrl: preferredBaseUrl,
+            token: token,
+          );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1622,10 +1727,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             !enabled
                 ? '已关闭'
                 : (status is LanHttpSyncRunning)
-                    ? '运行中：$port'
-                    : (status is LanHttpSyncError)
-                        ? '启动失败：${status.message}'
-                        : '启动中...',
+                ? '运行中：$port'
+                : (status is LanHttpSyncError)
+                ? '启动失败：${status.message}'
+                : '启动中...',
             style: TextStyle(fontSize: 12, color: Colors.grey[500]),
           ),
           value: enabled,
@@ -1660,8 +1765,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onPressed: () async {
                 final raw = _lanHttpSyncPortController.text.trim();
                 final nextPort = int.tryParse(raw);
-                if (nextPort == null || nextPort <= 0 || nextPort > 65535) return;
-                final current = _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
+                if (nextPort == null || nextPort <= 0 || nextPort > 65535)
+                  return;
+                final current =
+                    _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
                 final next = current.copyWith(port: nextPort);
                 setState(() => _lanHttpSyncConfig = next);
                 await _applyLanHttpSyncConfig(next);
@@ -1686,7 +1793,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await Clipboard.setData(ClipboardData(text: token));
                     if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制令牌'), duration: Duration(seconds: 2)),
+                      const SnackBar(
+                        content: Text('已复制令牌'),
+                        duration: Duration(seconds: 2),
+                      ),
                     );
                   },
             icon: const Icon(Icons.copy),
@@ -1694,8 +1804,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           TextButton.icon(
             onPressed: () async {
-              final current = _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
-              final next = current.copyWith(token: LanHttpSyncConfig.generateToken());
+              final current =
+                  _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
+              final next = current.copyWith(
+                token: LanHttpSyncConfig.generateToken(),
+              );
               setState(() => _lanHttpSyncConfig = next);
               await _applyLanHttpSyncConfig(next);
             },
@@ -1707,7 +1820,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(height: 24),
           Text(
             '当前 URL',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700]),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[700],
+            ),
           ),
           const SizedBox(height: 8),
           Row(
@@ -1722,10 +1839,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onPressed: preferredBaseUrl.isEmpty
                     ? null
                     : () async {
-                        await Clipboard.setData(ClipboardData(text: preferredBaseUrl));
+                        await Clipboard.setData(
+                          ClipboardData(text: preferredBaseUrl),
+                        );
                         if (!mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('已复制 URL'), duration: Duration(seconds: 2)),
+                          const SnackBar(
+                            content: Text('已复制 URL'),
+                            duration: Duration(seconds: 2),
+                          ),
                         );
                       },
                 icon: const Icon(Icons.copy),
@@ -1737,7 +1859,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 10),
             Text(
               '导入串（复制到手机端「HTTP 拉取」即可一键导入）',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700]),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
             ),
             const SizedBox(height: 8),
             Row(
@@ -1753,7 +1879,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await Clipboard.setData(ClipboardData(text: importText));
                     if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制导入串'), duration: Duration(seconds: 2)),
+                      const SnackBar(
+                        content: Text('已复制导入串'),
+                        duration: Duration(seconds: 2),
+                      ),
                     );
                   },
                   icon: const Icon(Icons.copy),
@@ -1765,7 +1894,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 10),
           Text(
             '下载地址',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[700]),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[700],
+            ),
           ),
           const SizedBox(height: 8),
           ...addresses.map((addr) {
@@ -1786,7 +1919,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       await Clipboard.setData(ClipboardData(text: withToken));
                       if (!mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('已复制下载地址'), duration: Duration(seconds: 2)),
+                        const SnackBar(
+                          content: Text('已复制下载地址'),
+                          duration: Duration(seconds: 2),
+                        ),
                       );
                     },
                     icon: const Icon(Icons.copy),
@@ -1825,7 +1961,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () async {
               final received = await Navigator.push<bool>(
                 context,
-                MaterialPageRoute(builder: (_) => const LanTransferReceiveScreen()),
+                MaterialPageRoute(
+                  builder: (_) => const LanTransferReceiveScreen(),
+                ),
               );
               if (!mounted) return;
               if (received == true) {
@@ -1859,7 +1997,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () async {
               await Navigator.push<void>(
                 context,
-                MaterialPageRoute(builder: (_) => const LanTransferSendScreen()),
+                MaterialPageRoute(
+                  builder: (_) => const LanTransferSendScreen(),
+                ),
               );
             },
           ),
@@ -1910,7 +2050,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() => _isValidatingFolder = true);
 
-    final (success, message) = await LocalFolderSyncService.validateFolder(path);
+    final (success, message) = await LocalFolderSyncService.validateFolder(
+      path,
+    );
 
     setState(() => _isValidatingFolder = false);
 
@@ -2000,7 +2142,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.upload_file, color: Colors.green),
             title: const Text('导出数据'),
-            subtitle: Text('导出为 Cherry Studio 兼容格式', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+            subtitle: Text(
+              '导出为 Cherry Studio 兼容格式',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
             trailing: const Icon(Icons.chevron_right, size: 18),
             onTap: _showExportDialog,
           ),
@@ -2009,7 +2154,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.delete_outline, color: Colors.orange),
             title: const Text('清除缓存'),
-            subtitle: Text('保留数据文件，仅清除解析缓存', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+            subtitle: Text(
+              '保留数据文件，仅清除解析缓存',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
             trailing: const Icon(Icons.chevron_right, size: 18),
             onTap: () async {
               final confirmed = await showDialog<bool>(
@@ -2024,7 +2172,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     ElevatedButton(
                       onPressed: () => Navigator.pop(context, true),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                      ),
                       child: const Text('清除'),
                     ),
                   ],
@@ -2035,7 +2185,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 await DataPersistenceManager.clearCache();
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('缓存已清除'), backgroundColor: Colors.green),
+                    const SnackBar(
+                      content: Text('缓存已清除'),
+                      backgroundColor: Colors.green,
+                    ),
                   );
                 }
               }
@@ -2075,21 +2228,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await db.init();
       final sql = db.importDb;
 
-      final assistantsCount = (await sql
-              .customSelect('SELECT COUNT(*) AS c FROM assistants')
-              .getSingle())
-          .read<int>('c');
-      final topicsCount =
-          (await sql.customSelect('SELECT COUNT(*) AS c FROM topics').getSingle())
+      final assistantsCount =
+          (await sql
+                  .customSelect('SELECT COUNT(*) AS c FROM assistants')
+                  .getSingle())
               .read<int>('c');
-      final messagesCount = (await sql
-              .customSelect('SELECT COUNT(*) AS c FROM messages')
-              .getSingle())
-          .read<int>('c');
-      final blocksCount = (await sql
-              .customSelect('SELECT COUNT(*) AS c FROM message_blocks')
-              .getSingle())
-          .read<int>('c');
+      final topicsCount =
+          (await sql
+                  .customSelect('SELECT COUNT(*) AS c FROM topics')
+                  .getSingle())
+              .read<int>('c');
+      final messagesCount =
+          (await sql
+                  .customSelect('SELECT COUNT(*) AS c FROM messages')
+                  .getSingle())
+              .read<int>('c');
+      final blocksCount =
+          (await sql
+                  .customSelect('SELECT COUNT(*) AS c FROM message_blocks')
+                  .getSingle())
+              .read<int>('c');
 
       return {
         'assistants': assistantsCount,
@@ -2133,12 +2291,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('📊 数据概览', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[700])),
+                  Text(
+                    '📊 数据概览',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[700],
+                    ),
+                  ),
                   const SizedBox(height: 8),
-                  Text('• ${stats['assistants']} 个助手', style: TextStyle(color: Colors.grey[600])),
-                  Text('• ${stats['topics']} 个话题', style: TextStyle(color: Colors.grey[600])),
-                  Text('• ${stats['messages']} 条消息', style: TextStyle(color: Colors.grey[600])),
-                  Text('• ${stats['blocks']} 个消息块', style: TextStyle(color: Colors.grey[600])),
+                  Text(
+                    '• ${stats['assistants']} 个助手',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                  Text(
+                    '• ${stats['topics']} 个话题',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                  Text(
+                    '• ${stats['messages']} 条消息',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                  Text(
+                    '• ${stats['blocks']} 个消息块',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
                 ],
               ),
             ),
@@ -2161,9 +2337,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
             icon: const Icon(Icons.code, size: 18),
             label: const Text('导出 JSON'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.grey[600],
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[600]),
           ),
           ElevatedButton.icon(
             onPressed: () {
@@ -2172,9 +2346,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
             icon: const Icon(Icons.folder_zip, size: 18),
             label: const Text('导出 ZIP'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
           ),
         ],
       ),
@@ -2204,7 +2376,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final exportService = CherryExportService(db);
 
       // 让用户选择保存位置
-      final fileName = 'cherry-studio-export-${DateTime.now().millisecondsSinceEpoch}.zip';
+      final fileName =
+          'cherry-studio-export-${DateTime.now().millisecondsSinceEpoch}.zip';
 
       String? outputPath;
 
@@ -2244,10 +2417,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ 导出失败: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('❌ 导出失败: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -2276,7 +2446,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final exportService = CherryExportService(db);
 
       // 让用户选择保存位置
-      final fileName = 'cherry-studio-export-${DateTime.now().millisecondsSinceEpoch}.json';
+      final fileName =
+          'cherry-studio-export-${DateTime.now().millisecondsSinceEpoch}.json';
 
       String? outputPath;
 
@@ -2315,10 +2486,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ 导出失败: $e'),
-            backgroundColor: Colors.red,
-          ),
+          SnackBar(content: Text('❌ 导出失败: $e'), backgroundColor: Colors.red),
         );
       }
     }
@@ -2355,10 +2523,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (confirmed != true || !mounted) return;
               await OnboardingScreen.resetOnboarding();
               if (!mounted) return;
-              Navigator.of(context).pushNamedAndRemoveUntil(
-                '/onboarding',
-                (route) => false,
-              );
+              Navigator.of(
+                context,
+              ).pushNamedAndRemoveUntil('/onboarding', (route) => false);
             },
           ),
           const Divider(height: 1),
@@ -2385,11 +2552,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.menu_book_rounded, size: 28, color: Colors.white),
+                  child: const Icon(
+                    Icons.menu_book_rounded,
+                    size: 28,
+                    color: Colors.white,
+                  ),
                 ),
-                children: const [
-                  Text('Cherry Studio 对话的阅读器与知识管理工具'),
-                ],
+                children: const [Text('Cherry Studio 对话的阅读器与知识管理工具')],
               );
             },
           ),
@@ -2404,7 +2573,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: ListTile(
         leading: const Icon(Icons.email_outlined),
         title: const Text('反馈建议'),
-        subtitle: Text('jimmyhe66@gmail.com', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+        subtitle: Text(
+          'jimmyhe66@gmail.com',
+          style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+        ),
         trailing: const Icon(Icons.chevron_right, size: 18),
         onTap: _sendFeedbackEmail,
       ),
@@ -2415,24 +2587,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final Uri emailLaunchUri = Uri(
       scheme: 'mailto',
       path: 'jimmyhe66@gmail.com',
-      queryParameters: {
-        'subject': 'Cherry Viewer 反馈与建议',
-      },
+      queryParameters: {'subject': 'Cherry Viewer 反馈与建议'},
     );
 
     try {
       if (!await launchUrl(emailLaunchUri)) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('无法打开邮件客户端')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('无法打开邮件客户端')));
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('无法打开邮件客户端: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('无法打开邮件客户端: $e')));
       }
     }
   }
@@ -2447,14 +2617,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             // Azure 配置链接
             InkWell(
-              onTap: () => launchUrl(Uri.parse('https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices')),
+              onTap: () => launchUrl(
+                Uri.parse(
+                  'https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices',
+                ),
+              ),
               child: Row(
                 children: [
                   Icon(Icons.link, size: 14, color: Colors.blue[300]),
                   const SizedBox(width: 4),
                   Text(
                     '获取 Azure Speech Key',
-                    style: TextStyle(color: Colors.blue[300], fontSize: 13, decoration: TextDecoration.underline),
+                    style: TextStyle(
+                      color: Colors.blue[300],
+                      fontSize: 13,
+                      decoration: TextDecoration.underline,
+                    ),
                   ),
                 ],
               ),
@@ -2476,13 +2654,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 16),
 
             // Azure Keys List
-            const Text('Azure Subscription Keys', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text(
+              'Azure Subscription Keys',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             ..._azureKeyControllers.asMap().entries.map((entry) {
               final index = entry.key;
               final controller = entry.value;
               final isCurrent = index == _ttsSettings.currentKeyIndex;
-              
+
               return Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
                 child: Row(
@@ -2492,11 +2673,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         controller: controller,
                         obscureText: true, // Always obscure for security
                         decoration: InputDecoration(
-                          labelText: 'Key ${index + 1}${isCurrent ? " (当前使用)" : ""}',
+                          labelText:
+                              'Key ${index + 1}${isCurrent ? " (当前使用)" : ""}',
                           hintText: 'Enter Key',
                           prefixIcon: Icon(
                             Icons.vpn_key,
-                            color: isCurrent ? Colors.green : null
+                            color: isCurrent ? Colors.green : null,
                           ),
                           border: const OutlineInputBorder(),
                         ),
@@ -2506,7 +2688,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(width: 8),
                     if (_azureKeyControllers.length > 1)
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, color: Colors.red),
+                        icon: const Icon(
+                          Icons.delete_outline,
+                          color: Colors.red,
+                        ),
                         onPressed: () => _removeApiKey(index),
                         tooltip: '删除 Key',
                       ),
@@ -2514,14 +2699,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               );
             }),
-            
+
             // Add Key Button
             OutlinedButton.icon(
               onPressed: _addApiKey,
               icon: const Icon(Icons.add),
               label: const Text('添加备用 Key'),
             ),
-            
+
             const SizedBox(height: 16),
 
             // 获取声音列表按钮
@@ -2540,7 +2725,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
 
-            if (_availableVoices.isNotEmpty || _ttsSettings.defaultVoiceName.isNotEmpty) ...[
+            if (_availableVoices.isNotEmpty ||
+                _ttsSettings.defaultVoiceName.isNotEmpty) ...[
               const SizedBox(height: 16),
               ListTile(
                 leading: const Icon(Icons.person_outline),
@@ -2548,18 +2734,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 subtitle: Text(
                   _ttsSettings.defaultVoiceName.isNotEmpty
                       ? (_availableVoices.isNotEmpty
-                          ? _availableVoices.firstWhere(
-                              (v) => v['shortName'] == _ttsSettings.defaultVoiceName,
-                              orElse: () => {
-                                'localName': _ttsSettings.defaultVoiceLocalName.isNotEmpty
-                                    ? _ttsSettings.defaultVoiceLocalName
-                                    : '未知语音 (${_ttsSettings.defaultVoiceName})',
-                                'shortName': ''
-                              },
-                            )['localName'] as String
-                          : (_ttsSettings.defaultVoiceLocalName.isNotEmpty
-                              ? _ttsSettings.defaultVoiceLocalName
-                              : _ttsSettings.defaultVoiceName))
+                            ? _availableVoices.firstWhere(
+                                    (v) =>
+                                        v['shortName'] ==
+                                        _ttsSettings.defaultVoiceName,
+                                    orElse: () => {
+                                      'localName':
+                                          _ttsSettings
+                                              .defaultVoiceLocalName
+                                              .isNotEmpty
+                                          ? _ttsSettings.defaultVoiceLocalName
+                                          : '未知语音 (${_ttsSettings.defaultVoiceName})',
+                                      'shortName': '',
+                                    },
+                                  )['localName']
+                                  as String
+                            : (_ttsSettings.defaultVoiceLocalName.isNotEmpty
+                                  ? _ttsSettings.defaultVoiceLocalName
+                                  : _ttsSettings.defaultVoiceName))
                       : '点击选择',
                   style: TextStyle(
                     color: _ttsSettings.defaultVoiceName.isNotEmpty
@@ -2616,10 +2808,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChangeEnd: (value) async {
                       // 保存设置
                       final prefs = await SharedPreferences.getInstance();
-                      await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+                      await prefs.setString(
+                        TtsSettings.prefKey,
+                        jsonEncode(_ttsSettings.toJson()),
+                      );
                       // 通知 TtsProvider
                       if (mounted) {
-                        final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
+                        final ttsProvider = Provider.of<TtsProvider>(
+                          context,
+                          listen: false,
+                        );
                         await ttsProvider.reloadSettings();
                       }
                     },
@@ -2707,7 +2905,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _formatCacheSize(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    if (bytes < 1024 * 1024 * 1024)
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
@@ -2736,9 +2935,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await cacheManager.clearCache();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('语音缓存已清除')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('语音缓存已清除')));
         setState(() {}); // 刷新缓存大小显示
       }
     }
@@ -2751,9 +2950,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .toList();
 
     if (keys.isEmpty || _azureRegionController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先输入 Region 和至少一个 Key')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先输入 Region 和至少一个 Key')));
       return;
     }
 
@@ -2767,8 +2966,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final voices = await service.getVoices();
 
       // Filter for Chinese voices primarily, or sort them
-      final chineseVoices = voices.where((v) => v['locale']?.startsWith('zh') ?? false).toList();
-      final otherVoices = voices.where((v) => !(v['locale']?.startsWith('zh') ?? false)).toList();
+      final chineseVoices = voices
+          .where((v) => v['locale']?.startsWith('zh') ?? false)
+          .toList();
+      final otherVoices = voices
+          .where((v) => !(v['locale']?.startsWith('zh') ?? false))
+          .toList();
 
       setState(() {
         _availableVoices = [...chineseVoices, ...otherVoices];
@@ -2783,7 +2986,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _ttsSettings.azureRegion = _azureRegionController.text.trim();
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+      await prefs.setString(
+        TtsSettings.prefKey,
+        jsonEncode(_ttsSettings.toJson()),
+      );
 
       // 通知 TtsProvider 重新加载配置
       if (mounted) {
@@ -2808,15 +3014,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
   }
-  
+
   // Helper Methods
-  
+
   void _addApiKey() {
     setState(() {
       _azureKeyControllers.add(TextEditingController());
     });
   }
-  
+
   void _removeApiKey(int index) {
     if (_azureKeyControllers.length > 1) {
       setState(() {
@@ -2828,7 +3034,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _azureKeyControllers[index].clear();
     }
   }
-  
+
   Future<void> _previewVoice(String voiceName) async {
     // Stop any existing playback first
     try {
@@ -2845,31 +3051,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
       return; // Toggle off
     }
-    
+
     // Check keys
     final keys = _azureKeyControllers
         .map((c) => c.text.trim())
         .where((text) => text.isNotEmpty)
         .toList();
-        
+
     if (keys.isEmpty || _azureRegionController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先配置 Azure TTS')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先配置 Azure TTS')));
       return;
     }
-    
+
     setState(() {
       _isPreviewingVoice = true;
       _previewingVoiceName = voiceName;
     });
-    
+
     try {
       final service = StreamingTtsService(
         apiKeys: keys,
         region: _azureRegionController.text.trim(),
       );
-      
+
       final audioPath = await service.previewVoice(voiceName: voiceName);
 
       await _previewPlayer.setFilePath(audioPath);
@@ -2884,7 +3090,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           });
         }
       });
-      
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -2897,7 +3102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
   }
-  
+
   void _toggleFavorite(String voiceName) {
     setState(() {
       if (_ttsSettings.favoriteVoices.contains(voiceName)) {
@@ -2907,7 +3112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     });
     // Auto save? Maybe not, wait for explicit save.
-    // But user might expect immediate feedback. 
+    // But user might expect immediate feedback.
     // Let's just update state for now, save happens on "Save Settings".
   }
 
@@ -2915,9 +3120,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _showVoicePickerDialog() async {
     // 如果没有加载声音，尝试自动加载
     if (_availableVoices.isEmpty) {
-       await _fetchVoices();
-       if (!mounted) return;
-       if (_availableVoices.isEmpty) return; // 加载失败或取消
+      await _fetchVoices();
+      if (!mounted) return;
+      if (_availableVoices.isEmpty) return; // 加载失败或取消
     }
 
     String searchQuery = '';
@@ -2929,29 +3134,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (context, setDialogState) {
           // 1. 过滤语音列表
           var filteredVoices = _availableVoices.where((voice) {
-            final matchesSearch = searchQuery.isEmpty ||
-                (voice['localName']?.toString().toLowerCase().contains(searchQuery.toLowerCase()) ?? false) ||
-                (voice['shortName']?.toString().toLowerCase().contains(searchQuery.toLowerCase()) ?? false);
-            
-            final matchesLocale = selectedLocale == 'all' ||
-                (voice['locale']?.toString().startsWith(selectedLocale ?? '') ?? false);
-            
+            final matchesSearch =
+                searchQuery.isEmpty ||
+                (voice['localName']?.toString().toLowerCase().contains(
+                      searchQuery.toLowerCase(),
+                    ) ??
+                    false) ||
+                (voice['shortName']?.toString().toLowerCase().contains(
+                      searchQuery.toLowerCase(),
+                    ) ??
+                    false);
+
+            final matchesLocale =
+                selectedLocale == 'all' ||
+                (voice['locale']?.toString().startsWith(selectedLocale ?? '') ??
+                    false);
+
             return matchesSearch && matchesLocale;
           }).toList();
-          
+
           // 2. 分离收藏和非收藏
           final favoriteItems = <Map<String, String>>[];
           final otherItems = <Map<String, String>>[];
-          
+
           // 按收藏顺序添加
           for (var shortName in _ttsSettings.favoriteVoices) {
             // 只有在过滤结果中存在的才显示
             try {
-              final voice = filteredVoices.firstWhere((v) => v['shortName'] == shortName);
+              final voice = filteredVoices.firstWhere(
+                (v) => v['shortName'] == shortName,
+              );
               favoriteItems.add(voice);
             } catch (_) {}
           }
-          
+
           // 添加其他
           for (var voice in filteredVoices) {
             if (!_ttsSettings.favoriteVoices.contains(voice['shortName'])) {
@@ -2994,7 +3210,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             label: const Text('全部'),
                             selected: selectedLocale == 'all',
                             onSelected: (selected) {
-                              if (selected) setDialogState(() => selectedLocale = 'all');
+                              if (selected)
+                                setDialogState(() => selectedLocale = 'all');
                             },
                           ),
                           const SizedBox(width: 8),
@@ -3002,7 +3219,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             label: const Text('中文'),
                             selected: selectedLocale == 'zh',
                             onSelected: (selected) {
-                              if (selected) setDialogState(() => selectedLocale = 'zh');
+                              if (selected)
+                                setDialogState(() => selectedLocale = 'zh');
                             },
                           ),
                           const SizedBox(width: 8),
@@ -3010,7 +3228,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             label: const Text('英语'),
                             selected: selectedLocale == 'en',
                             onSelected: (selected) {
-                              if (selected) setDialogState(() => selectedLocale = 'en');
+                              if (selected)
+                                setDialogState(() => selectedLocale = 'en');
                             },
                           ),
                           const SizedBox(width: 8),
@@ -3018,7 +3237,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             label: const Text('日语'),
                             selected: selectedLocale == 'ja',
                             onSelected: (selected) {
-                              if (selected) setDialogState(() => selectedLocale = 'ja');
+                              if (selected)
+                                setDialogState(() => selectedLocale = 'ja');
                             },
                           ),
                         ],
@@ -3034,8 +3254,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         // 收藏部分
                         if (favoriteItems.isNotEmpty) ...[
                           const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                            child: Text('已收藏 (长按拖拽排序)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 8,
+                            ),
+                            child: Text(
+                              '已收藏 (长按拖拽排序)',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange,
+                              ),
+                            ),
                           ),
                           ReorderableListView.builder(
                             shrinkWrap: true,
@@ -3047,31 +3276,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               }
                               final item = favoriteItems.removeAt(oldIndex);
                               favoriteItems.insert(newIndex, item);
-                              
+
                               // Update settings
                               final shortName = item['shortName']!;
                               _ttsSettings.favoriteVoices.remove(shortName);
-                              _ttsSettings.favoriteVoices.insert(newIndex, shortName);
-                              
+                              _ttsSettings.favoriteVoices.insert(
+                                newIndex,
+                                shortName,
+                              );
+
                               setDialogState(() {});
                             },
                             itemBuilder: (context, index) {
                               final voice = favoriteItems[index];
-                              return _buildVoiceTile(voice, true, setDialogState, Key(voice['shortName']!));
+                              return _buildVoiceTile(
+                                voice,
+                                true,
+                                setDialogState,
+                                Key(voice['shortName']!),
+                              );
                             },
                           ),
                           const Divider(),
                         ],
-                        
+
                         // 其他部分
                         if (otherItems.isNotEmpty) ...[
                           const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                            child: Text('所有语音', style: TextStyle(fontWeight: FontWeight.bold)),
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 8,
+                            ),
+                            child: Text(
+                              '所有语音',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
                           ),
-                          ...otherItems.map((voice) => _buildVoiceTile(voice, false, setDialogState, null)),
+                          ...otherItems.map(
+                            (voice) => _buildVoiceTile(
+                              voice,
+                              false,
+                              setDialogState,
+                              null,
+                            ),
+                          ),
                         ],
-                        
+
                         if (favoriteItems.isEmpty && otherItems.isEmpty)
                           const Padding(
                             padding: EdgeInsets.all(32),
@@ -3108,13 +3358,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final localName = voice['localName']!;
     final locale = voice['locale'];
     final isSelected = shortName == _ttsSettings.defaultVoiceName;
-    final isPreviewing = _isPreviewingVoice && _previewingVoiceName == shortName;
+    final isPreviewing =
+        _isPreviewingVoice && _previewingVoiceName == shortName;
 
     return ListTile(
       key: key,
       selected: isSelected,
       leading: IconButton(
-        icon: Icon(isPreviewing ? Icons.stop_circle : Icons.play_circle_outline),
+        icon: Icon(
+          isPreviewing ? Icons.stop_circle : Icons.play_circle_outline,
+        ),
         color: isPreviewing ? Colors.red : Colors.blue,
         onPressed: () async {
           await _previewVoice(shortName);
@@ -3144,8 +3397,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               setDialogState(() {});
             },
           ),
-          if (isSelected)
-            Icon(Icons.check_circle, color: Colors.blue[300]),
+          if (isSelected) Icon(Icons.check_circle, color: Colors.blue[300]),
         ],
       ),
       onTap: () {
@@ -3189,8 +3441,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 如果没有偏好，先获取
     preference ??= await PromptTemplateService.instance.getActivePreference();
 
-    final nameController = TextEditingController(text: preference?.name ?? '默认偏好');
-    final contentController = TextEditingController(text: preference?.systemPrompt ?? '');
+    final nameController = TextEditingController(
+      text: preference?.name ?? '默认偏好',
+    );
+    final contentController = TextEditingController(
+      text: preference?.systemPrompt ?? '',
+    );
 
     if (!mounted) return;
 
@@ -3243,7 +3499,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (preference != null) {
                 preference.name = name;
                 preference.systemPrompt = content;
-                await PromptTemplateService.instance.updatePreference(preference);
+                await PromptTemplateService.instance.updatePreference(
+                  preference,
+                );
               } else {
                 await PromptTemplateService.instance.createPreference(
                   name: name,
@@ -3329,7 +3587,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
         // 保存设置
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(TtsSettings.prefKey, jsonEncode(_ttsSettings.toJson()));
+        await prefs.setString(
+          TtsSettings.prefKey,
+          jsonEncode(_ttsSettings.toJson()),
+        );
         // 通知 TtsProvider
         if (mounted) {
           final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
@@ -3366,7 +3627,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         perspectives.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
 
         // 只需要自定义视角
-        final customPerspectives = perspectives.where((p) => !p.isBuiltin).toList();
+        final customPerspectives = perspectives
+            .where((p) => !p.isBuiltin)
+            .toList();
 
         // 按分组组织自定义视角
         final customGrouped = <String, List<PerspectiveEntity>>{};
@@ -3383,10 +3646,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ];
 
         // 自定义分组顺序（排除内置分组后按字母排序）
-        final customCategoryOrder = customGrouped.keys
-            .where((c) => !builtinCategoryOrder.contains(c))
-            .toList()
-          ..sort();
+        final customCategoryOrder =
+            customGrouped.keys
+                .where((c) => !builtinCategoryOrder.contains(c))
+                .toList()
+              ..sort();
 
         return Card(
           child: Padding(
@@ -3429,11 +3693,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.lightbulb_outline, color: Colors.grey[400], size: 20),
+                        Icon(
+                          Icons.lightbulb_outline,
+                          color: Colors.grey[400],
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           '点击“添加”创建你的第一个视角',
-                          style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                          style: TextStyle(
+                            color: Colors.grey[500],
+                            fontSize: 13,
+                          ),
                         ),
                       ],
                     ),
@@ -3441,7 +3712,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 else ...[
                   // 按自定义分组展示
                   for (final category in customCategoryOrder) ...[
-                    _buildCustomCategoryHeader(category, customGrouped[category]!.length),
+                    _buildCustomCategoryHeader(
+                      category,
+                      customGrouped[category]!.length,
+                    ),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
@@ -3456,7 +3730,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   for (final category in builtinCategoryOrder) ...[
                     if (customGrouped.containsKey(category)) ...[
                       _buildCustomCategoryHeader(
-                        category, 
+                        category,
                         customGrouped[category]!.length,
                         isBuiltinCategory: true,
                       ),
@@ -3482,12 +3756,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// 构建自定义分组标题
   Widget _buildCustomCategoryHeader(
-    String category, 
+    String category,
     int perspectiveCount, {
     bool isBuiltinCategory = false,
   }) {
     // 如果是内置分组，使用内置配色
-    final name = isBuiltinCategory 
+    final name = isBuiltinCategory
         ? BuiltinPerspectives.categoryNames[category] ?? category
         : category;
     final icon = isBuiltinCategory
@@ -3496,7 +3770,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final color = isBuiltinCategory
         ? BuiltinPerspectives.categoryColors[category] ?? Colors.teal
         : Colors.teal;
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
@@ -3518,10 +3792,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(width: 6),
           Text(
             '$perspectiveCount',
-            style: TextStyle(
-              fontSize: 11,
-              color: color.withValues(alpha: 0.7),
-            ),
+            style: TextStyle(fontSize: 11, color: color.withValues(alpha: 0.7)),
           ),
         ],
       ),
@@ -3603,10 +3874,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('删除失败'),
-              backgroundColor: Colors.red,
-            ),
+            const SnackBar(content: Text('删除失败'), backgroundColor: Colors.red),
           );
         }
       }
@@ -3618,21 +3886,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final isEditing = perspective != null;
 
     final nameController = TextEditingController(text: perspective?.name ?? '');
-    final iconController = TextEditingController(text: perspective?.icon ?? '🔍');
-    final descController = TextEditingController(text: perspective?.description ?? '');
-    final promptController = TextEditingController(text: perspective?.promptTemplate ?? _defaultPromptTemplate);
+    final iconController = TextEditingController(
+      text: perspective?.icon ?? '🔍',
+    );
+    final descController = TextEditingController(
+      text: perspective?.description ?? '',
+    );
+    final promptController = TextEditingController(
+      text: perspective?.promptTemplate ?? _defaultPromptTemplate,
+    );
     final customCategoryController = TextEditingController();
-    
+
     // 初始化分组选择
     String selectedCategory = perspective?.category ?? '';
-    bool isCustomCategory = perspective != null && 
+    bool isCustomCategory =
+        perspective != null &&
         !BuiltinPerspectives.categoryOrder.contains(perspective.category);
     if (isCustomCategory) {
       customCategoryController.text = perspective.category;
     }
-    
+
     // 获取现有的自定义分组
-    final existingCustomCategories = await InsightService.instance.getCustomCategories();
+    final existingCustomCategories = await InsightService.instance
+        .getCustomCategories();
 
     if (!mounted) return;
 
@@ -3692,7 +3968,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // 分组选择
                   Row(
                     children: [
-                      const Text('分组', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                      const Text(
+                        '分组',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         '可选择现有分组或输入新分组',
@@ -3707,11 +3989,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     runSpacing: 8,
                     children: [
                       ...BuiltinPerspectives.categoryOrder.map((category) {
-                        final isSelected = !isCustomCategory && selectedCategory == category;
-                        final name = BuiltinPerspectives.categoryNames[category] ?? category;
-                        final icon = BuiltinPerspectives.categoryIcons[category] ?? '📁';
+                        final isSelected =
+                            !isCustomCategory && selectedCategory == category;
+                        final name =
+                            BuiltinPerspectives.categoryNames[category] ??
+                            category;
+                        final icon =
+                            BuiltinPerspectives.categoryIcons[category] ?? '📁';
                         return ChoiceChip(
-                          avatar: Text(icon, style: const TextStyle(fontSize: 12)),
+                          avatar: Text(
+                            icon,
+                            style: const TextStyle(fontSize: 12),
+                          ),
                           label: Text(name),
                           selected: isSelected,
                           onSelected: (selected) {
@@ -3727,9 +4016,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }),
                       // 现有自定义分组
                       ...existingCustomCategories.map((category) {
-                        final isSelected = isCustomCategory && selectedCategory == category;
+                        final isSelected =
+                            isCustomCategory && selectedCategory == category;
                         return ChoiceChip(
-                          avatar: const Text('📌', style: TextStyle(fontSize: 12)),
+                          avatar: const Text(
+                            '📌',
+                            style: TextStyle(fontSize: 12),
+                          ),
                           label: Text(category),
                           selected: isSelected,
                           selectedColor: Colors.teal.withValues(alpha: 0.2),
@@ -3793,7 +4086,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 16),
 
                   // Prompt 模板
-                  const Text('Prompt 模板', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                  const Text(
+                    'Prompt 模板',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     '使用 {queries} 作为用户提问列表的占位符',
@@ -3808,7 +4104,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       alignLabelWithHint: true,
                     ),
                     maxLines: 12,
-                    style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontFamily: 'monospace',
+                    ),
                   ),
                 ],
               ),
@@ -3825,27 +4124,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 final icon = iconController.text.trim();
                 final desc = descController.text.trim();
                 final prompt = promptController.text.trim();
-                final category = isCustomCategory 
-                    ? customCategoryController.text.trim() 
+                final category = isCustomCategory
+                    ? customCategoryController.text.trim()
                     : selectedCategory;
 
                 if (name.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('请输入视角名称')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('请输入视角名称')));
                   return;
                 }
 
                 if (category.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('请选择或输入分组名称')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('请选择或输入分组名称')));
                   return;
                 }
 
                 if (!prompt.contains('{queries}')) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Prompt 模板必须包含 {queries} 占位符')),
+                    const SnackBar(
+                      content: Text('Prompt 模板必须包含 {queries} 占位符'),
+                    ),
                   );
                   return;
                 }

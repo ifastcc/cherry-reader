@@ -80,7 +80,7 @@ class CherryViewerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       // 路由配置
       routes: {
-        '/home': (context) => const ConversationHubScreen(),
+        '/home': (context) => const WebViewOverlayScreen(),
         '/onboarding': (context) => const OnboardingScreen(),
         '/settings': (context) => const SettingsScreen(),
       },

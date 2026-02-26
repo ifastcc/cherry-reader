@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,11 +12,15 @@ import '../drift/app_database.dart';
 /// Cherry Sync Server 增量同步服务
 ///
 /// 从自建同步服务器增量拉取 Topic 数据，写入本地 Drift DB。
-/// 每次同步只拉取上次同步时间之后的变更。
+/// 每次同步只拉取上次同步 cursor 之后的变更。
 class ServerSyncService {
   static const String _lastSyncKey = 'server_sync_last_timestamp';
   static const String _serverUrlKey = 'server_sync_url';
   static const String _serverTokenKey = 'server_sync_token';
+  static const Duration _requestTimeout = Duration(seconds: 15);
+  static const int _changePageSize = 200;
+  static const int _topicWriteBatchSize = 20;
+  static const int _topicDeleteBatchSize = 100;
 
   final AppDb _appDb;
 
@@ -36,7 +43,10 @@ class ServerSyncService {
     required String token,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_serverUrlKey, serverUrl.replaceAll(RegExp(r'/+$'), ''));
+    await prefs.setString(
+      _serverUrlKey,
+      serverUrl.replaceAll(RegExp(r'/+$'), ''),
+    );
     await prefs.setString(_serverTokenKey, token);
   }
 
@@ -63,88 +73,154 @@ class ServerSyncService {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final lastSync = prefs.getInt(_lastSyncKey) ?? 0;
-
-    onStatus?.call('正在查询变更...');
-
-    // 1. 拉取变更列表
-    final syncResp = await http.get(
-      Uri.parse('$serverUrl/api/sync?since=$lastSync'),
-      headers: {'Authorization': 'Bearer $token'},
+    final syncCursorKey = _buildScopedLastSyncKey(
+      serverUrl: serverUrl,
+      token: token,
     );
+    final headers = {'Authorization': 'Bearer $token'};
+    var cursor = prefs.getInt(syncCursorKey) ?? 0;
+    var upsertedCount = 0;
+    var deletedCount = 0;
 
-    if (syncResp.statusCode == 401) {
-      throw StateError('认证失败，请检查 Token');
-    }
-    if (syncResp.statusCode != 200) {
-      throw StateError('同步服务器返回 ${syncResp.statusCode}');
-    }
+    while (true) {
+      onStatus?.call('正在查询变更...');
+      final syncResp = await _getWithTimeout(
+        Uri.parse(
+          '$serverUrl/api/sync/changes?cursor=$cursor&limit=$_changePageSize&includePayload=1',
+        ),
+        headers: headers,
+        timeoutMessage: '查询变更超时，请检查网络或服务器状态',
+      );
 
-    final syncData = jsonDecode(syncResp.body) as Map<String, dynamic>;
-    final upserts = (syncData['upserts'] as List).cast<String>();
-    final deletes = (syncData['deletes'] as List).cast<String>();
-    final serverTime = syncData['serverTime'] as int;
+      if (syncResp.statusCode == 401) {
+        throw StateError('认证失败，请检查 Token');
+      }
+      if (syncResp.statusCode != 200) {
+        throw StateError('同步服务器返回 ${syncResp.statusCode}');
+      }
 
-    if (upserts.isEmpty && deletes.isEmpty) {
-      onStatus?.call('已是最新');
-      await prefs.setInt(_lastSyncKey, serverTime);
-      return (upserted: 0, deleted: 0);
-    }
+      final syncData = jsonDecode(syncResp.body) as Map<String, dynamic>;
+      final items = (syncData['items'] as List<dynamic>? ?? const []);
+      final hasMore = syncData['hasMore'] == true;
+      final nextCursor = (syncData['nextCursor'] as num?)?.toInt() ?? cursor;
 
-    onStatus?.call('发现 ${upserts.length} 个新增/更新, ${deletes.length} 个删除');
+      if (items.isEmpty) {
+        await prefs.setInt(syncCursorKey, nextCursor);
+        if (!hasMore) {
+          onStatus?.call(
+            upsertedCount == 0 && deletedCount == 0
+                ? '已是最新'
+                : '同步完成: +$upsertedCount -$deletedCount',
+          );
+          return (upserted: upsertedCount, deleted: deletedCount);
+        }
+        cursor = nextCursor;
+        continue;
+      }
 
-    // 2. 拉取并写入新增/更新的 Topic
-    int upsertedCount = 0;
-    for (final topicId in upserts) {
-      try {
-        onStatus?.call('正在同步 ${upsertedCount + 1}/${upserts.length}...');
+      final upsertPayloads = <Map<String, dynamic>>[];
+      final deleteIds = <String>[];
+      final failedUpserts = <String>{};
+      final failedDeletes = <String>{};
 
-        final topicResp = await http.get(
-          Uri.parse('$serverUrl/api/topics/$topicId'),
-          headers: {'Authorization': 'Bearer $token'},
+      for (final item in items) {
+        if (item is! Map<String, dynamic>) continue;
+        final op = item['op'] as String? ?? '';
+        final topicId = item['topicId'] as String? ?? '';
+        if (topicId.isEmpty) continue;
+
+        if (op == 'upsert') {
+          final payload = item['topic'];
+          if (payload is Map<String, dynamic>) {
+            upsertPayloads.add(payload);
+          } else {
+            failedUpserts.add(topicId);
+          }
+        } else if (op == 'delete') {
+          deleteIds.add(topicId);
+        }
+      }
+
+      if (upsertPayloads.isNotEmpty || deleteIds.isNotEmpty) {
+        onStatus?.call(
+          '发现 ${upsertPayloads.length} 个新增/更新, ${deleteIds.length} 个删除',
         );
+      }
 
-        if (topicResp.statusCode != 200) continue;
+      // 分批写入 upsert，减少大事务压力。
+      for (var i = 0; i < upsertPayloads.length; i += _topicWriteBatchSize) {
+        final end = (i + _topicWriteBatchSize).clamp(0, upsertPayloads.length);
+        final chunk = upsertPayloads.sublist(i, end);
 
-        final row = jsonDecode(topicResp.body) as Map<String, dynamic>;
-        final topicData = row['data'] as Map<String, dynamic>;
+        try {
+          await db.transaction(() async {
+            for (final topicData in chunk) {
+              await _importTopicFromServerInTransaction(db, topicData);
+            }
+          });
+          upsertedCount += chunk.length;
+        } catch (e) {
+          // 批量写入失败时降级逐条写入，尽量保留成功项并定位失败话题。
+          for (final topicData in chunk) {
+            final topicId = topicData['topicId'] as String? ?? '';
+            try {
+              await _importTopicFromServer(db, topicData);
+              upsertedCount++;
+            } catch (inner) {
+              if (topicId.isNotEmpty) failedUpserts.add(topicId);
+              debugPrint('[ServerSync] Failed to write topic $topicId: $inner');
+            }
+          }
+        }
+      }
 
-        await _importTopicFromServer(db, topicData);
-        upsertedCount++;
-      } catch (e) {
-        // 单个 Topic 失败不影响整体同步
-        print('[ServerSync] Failed to sync topic $topicId: $e');
+      // 删除改为批次事务，显著降低逐条事务开销。
+      for (var i = 0; i < deleteIds.length; i += _topicDeleteBatchSize) {
+        final end = (i + _topicDeleteBatchSize).clamp(0, deleteIds.length);
+        final chunk = deleteIds.sublist(i, end);
+        try {
+          await _deleteTopicsBatch(db, chunk);
+          deletedCount += chunk.length;
+        } catch (e) {
+          for (final topicId in chunk) {
+            try {
+              await _deleteTopicsBatch(db, [topicId]);
+              deletedCount++;
+            } catch (inner) {
+              failedDeletes.add(topicId);
+              debugPrint('[ServerSync] Failed to delete topic $topicId: $inner');
+            }
+          }
+        }
+      }
+
+      // 存在失败时不推进 cursor，下次同步可继续重试未完成项。
+      if (failedUpserts.isNotEmpty || failedDeletes.isNotEmpty) {
+        throw StateError(
+          '部分同步失败：新增/更新失败 ${failedUpserts.length} 条，删除失败 ${failedDeletes.length} 条',
+        );
+      }
+
+      cursor = nextCursor;
+      await prefs.setInt(syncCursorKey, cursor);
+      onStatus?.call('同步中: +$upsertedCount -$deletedCount');
+
+      if (!hasMore) {
+        onStatus?.call('同步完成: +$upsertedCount -$deletedCount');
+        return (upserted: upsertedCount, deleted: deletedCount);
       }
     }
-
-    // 3. 删除已删除的 Topic
-    int deletedCount = 0;
-    for (final topicId in deletes) {
-      try {
-        await db.transaction(() async {
-          await (db.delete(db.messageBlocks)..where((t) => t.topicId.equals(topicId))).go();
-          await (db.delete(db.messages)..where((t) => t.topicId.equals(topicId))).go();
-          await (db.delete(db.topicAssistants)..where((t) => t.topicId.equals(topicId))).go();
-          await (db.delete(db.topics)..where((t) => t.topicId.equals(topicId))).go();
-        });
-        deletedCount++;
-      } catch (e) {
-        print('[ServerSync] Failed to delete topic $topicId: $e');
-      }
-    }
-
-    // 4. 保存同步时间戳
-    await prefs.setInt(_lastSyncKey, serverTime);
-
-    onStatus?.call('同步完成: +$upsertedCount -$deletedCount');
-
-    return (upserted: upsertedCount, deleted: deletedCount);
   }
 
   /// 重置同步状态（强制全量重新拉取）
   static Future<void> resetSyncState() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_lastSyncKey);
+    final keys = prefs.getKeys();
+    for (final key in keys) {
+      if (key == _lastSyncKey || key.startsWith('$_lastSyncKey:')) {
+        await prefs.remove(key);
+      }
+    }
   }
 
   // ── 数据写入 ──────────────────────────────────────────────────────
@@ -153,6 +229,15 @@ class ServerSyncService {
   // 服务端返回的数据中 blocks 已内联在 messages 中，无需外部 blockMap。
 
   Future<void> _importTopicFromServer(
+    ImportDatabase db,
+    Map<String, dynamic> topicData,
+  ) async {
+    await db.transaction(() async {
+      await _importTopicFromServerInTransaction(db, topicData);
+    });
+  }
+
+  Future<void> _importTopicFromServerInTransaction(
     ImportDatabase db,
     Map<String, dynamic> topicData,
   ) async {
@@ -177,27 +262,34 @@ class ServerSyncService {
       roundMap[i] = roundIndex.clamp(0, 1 << 30);
     }
 
-    await db.transaction(() async {
-      // 写入 Assistant（如果有）
-      if (assistantId != null && assistantId.isNotEmpty) {
-        final now = DateTime.now().millisecondsSinceEpoch;
-        await db.into(db.assistants).insertOnConflictUpdate(
-              AssistantsCompanion(
-                assistantId: Value(assistantId),
-                name: Value(assistantName ?? '未命名'),
-                topicCount: const Value(0),
-                createdAt: Value(now),
-                updatedAt: Value(now),
-              ),
-            );
-      }
+    // 写入 Assistant（如果有）
+    if (assistantId != null && assistantId.isNotEmpty) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await db
+          .into(db.assistants)
+          .insertOnConflictUpdate(
+            AssistantsCompanion(
+              assistantId: Value(assistantId),
+              name: Value(assistantName ?? '未命名'),
+              topicCount: const Value(0),
+              createdAt: Value(now),
+              updatedAt: Value(now),
+            ),
+          );
+    }
 
       // 先清除旧数据（因为是 Topic 级别整体覆盖）
-      await (db.delete(db.messageBlocks)..where((t) => t.topicId.equals(topicId))).go();
-      await (db.delete(db.messages)..where((t) => t.topicId.equals(topicId))).go();
+      await (db.delete(
+        db.messageBlocks,
+      )..where((t) => t.topicId.equals(topicId))).go();
+      await (db.delete(
+        db.messages,
+      )..where((t) => t.topicId.equals(topicId))).go();
 
       // 写入 Topic
-      await db.into(db.topics).insertOnConflictUpdate(
+      await db
+          .into(db.topics)
+          .insertOnConflictUpdate(
             TopicsCompanion(
               topicId: Value(topicId),
               name: Value(topicName),
@@ -209,9 +301,13 @@ class ServerSyncService {
           );
 
       // 写入 TopicAssistants 关联
-      await (db.delete(db.topicAssistants)..where((t) => t.topicId.equals(topicId))).go();
+      await (db.delete(
+        db.topicAssistants,
+      )..where((t) => t.topicId.equals(topicId))).go();
       if (assistantId != null && assistantId.isNotEmpty) {
-        await db.into(db.topicAssistants).insertOnConflictUpdate(
+        await db
+            .into(db.topicAssistants)
+            .insertOnConflictUpdate(
               TopicAssistantsCompanion(
                 topicId: Value(topicId),
                 assistantId: Value(assistantId),
@@ -246,9 +342,15 @@ class ServerSyncService {
             useful: Value((msg['useful'] as bool?) ?? true),
             modelId: Value(modelId),
             modelName: Value(modelName),
-            usageJson: Value(msg['usage'] != null ? jsonEncode(msg['usage']) : null),
-            metricsJson: Value(msg['metrics'] != null ? jsonEncode(msg['metrics']) : null),
-            mentionsJson: Value(msg['mentions'] != null ? jsonEncode(msg['mentions']) : null),
+            usageJson: Value(
+              msg['usage'] != null ? jsonEncode(msg['usage']) : null,
+            ),
+            metricsJson: Value(
+              msg['metrics'] != null ? jsonEncode(msg['metrics']) : null,
+            ),
+            mentionsJson: Value(
+              msg['mentions'] != null ? jsonEncode(msg['mentions']) : null,
+            ),
             createdAt: Value(_parseTimestamp(msg['createdAt'])),
             status: Value(msg['status'] as String? ?? 'success'),
           ),
@@ -266,7 +368,9 @@ class ServerSyncService {
           final type = block['type'] as String? ?? 'main_text';
           final content = block['content'] is String
               ? block['content'] as String
-              : (block['content'] != null ? jsonEncode(block['content']) : null);
+              : (block['content'] != null
+                    ? jsonEncode(block['content'])
+                    : null);
 
           blockRows.add(
             MessageBlocksCompanion(
@@ -276,9 +380,13 @@ class ServerSyncService {
               orderIndex: Value(j),
               type: Value(type),
               content: Value(content),
-              thinkingMillsec: Value((block['thinking_millsec'] as num?)?.toDouble()),
+              thinkingMillsec: Value(
+                (block['thinking_millsec'] as num?)?.toDouble(),
+              ),
               url: Value(block['url'] as String?),
-              fileJson: Value(block['file'] != null ? jsonEncode(block['file']) : null),
+              fileJson: Value(
+                block['file'] != null ? jsonEncode(block['file']) : null,
+              ),
               toolJson: Value(
                 block['toolId'] != null || block['toolName'] != null
                     ? jsonEncode({
@@ -288,25 +396,60 @@ class ServerSyncService {
                       })
                     : null,
               ),
-              errorJson: Value(block['error'] != null ? jsonEncode(block['error']) : null),
+              errorJson: Value(
+                block['error'] != null ? jsonEncode(block['error']) : null,
+              ),
               targetLanguage: Value(block['targetLanguage'] as String?),
-              responseJson: Value(block['response'] != null ? jsonEncode(block['response']) : null),
-              knowledgeJson: Value(block['knowledge'] != null ? jsonEncode(block['knowledge']) : null),
+              responseJson: Value(
+                block['response'] != null
+                    ? jsonEncode(block['response'])
+                    : null,
+              ),
+              knowledgeJson: Value(
+                block['knowledge'] != null
+                    ? jsonEncode(block['knowledge'])
+                    : null,
+              ),
               createdAt: Value(_parseTimestamp(block['createdAt'])),
             ),
           );
         }
       }
 
-      // 批量插入
-      await db.batch((b) {
-        if (messageRows.isNotEmpty) {
-          b.insertAll(db.messages, messageRows, mode: InsertMode.insertOrReplace);
-        }
-        if (blockRows.isNotEmpty) {
-          b.insertAll(db.messageBlocks, blockRows, mode: InsertMode.insertOrReplace);
-        }
-      });
+    // 批量插入
+    await db.batch((b) {
+      if (messageRows.isNotEmpty) {
+        b.insertAll(
+          db.messages,
+          messageRows,
+          mode: InsertMode.insertOrReplace,
+        );
+      }
+      if (blockRows.isNotEmpty) {
+        b.insertAll(
+          db.messageBlocks,
+          blockRows,
+          mode: InsertMode.insertOrReplace,
+        );
+      }
+    });
+  }
+
+  Future<void> _deleteTopicsBatch(ImportDatabase db, List<String> topicIds) async {
+    if (topicIds.isEmpty) return;
+    await db.transaction(() async {
+      await (db.delete(
+        db.messageBlocks,
+      )..where((t) => t.topicId.isIn(topicIds))).go();
+      await (db.delete(
+        db.messages,
+      )..where((t) => t.topicId.isIn(topicIds))).go();
+      await (db.delete(
+        db.topicAssistants,
+      )..where((t) => t.topicId.isIn(topicIds))).go();
+      await (db.delete(
+        db.topics,
+      )..where((t) => t.topicId.isIn(topicIds))).go();
     });
   }
 
@@ -314,9 +457,33 @@ class ServerSyncService {
     if (value == null) return DateTime.now().millisecondsSinceEpoch;
     if (value is int) return value;
     if (value is String) {
+      final numeric = int.tryParse(value);
+      if (numeric != null) return numeric;
       return DateTime.tryParse(value)?.millisecondsSinceEpoch ??
           DateTime.now().millisecondsSinceEpoch;
     }
     return DateTime.now().millisecondsSinceEpoch;
+  }
+
+  Future<http.Response> _getWithTimeout(
+    Uri uri, {
+    required Map<String, String> headers,
+    required String timeoutMessage,
+  }) async {
+    try {
+      return await http.get(uri, headers: headers).timeout(_requestTimeout);
+    } on TimeoutException {
+      throw StateError(timeoutMessage);
+    }
+  }
+
+  String _buildScopedLastSyncKey({
+    required String serverUrl,
+    required String token,
+  }) {
+    final scope = sha1
+        .convert(utf8.encode('${serverUrl.trim().toLowerCase()}|${token.trim()}'))
+        .toString();
+    return '$_lastSyncKey:$scope';
   }
 }

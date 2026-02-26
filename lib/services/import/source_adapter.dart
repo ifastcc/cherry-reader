@@ -27,12 +27,9 @@ class SourceAdapter {
     }
 
     final isZip = lower.endsWith('.zip');
-    final extractor = CherryExtractor(
+    return CherryExtractor.loadInBackground(
       zipPath: isZip ? path : null,
       dataJsonPath: isZip ? null : path,
     );
-    await extractor.load();
-    return extractor;
   }
 }
-

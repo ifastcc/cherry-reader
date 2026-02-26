@@ -10,6 +10,7 @@ import '../services/repository_provider.dart';
 import '../services/webdav_service.dart';
 import '../services/local_folder_sync_service.dart';
 import '../services/ai_provider_service.dart';
+import '../services/topic_index_service.dart';
 import '../services/sync_status_notifier.dart';
 import '../services/sync/sync_coordinator.dart';
 import '../services/sync/sync_preferences.dart';
@@ -17,8 +18,6 @@ import '../services/sync/sync_source_type.dart';
 import '../services/sync/server_sync_service.dart';
 import '../services/sync/sync_candidate.dart';
 import '../services/import/source_adapter.dart';
-import '../services/data_import/drift_data_import_service_impl.dart';
-import '../services/unified_import_manager.dart';
 import '../models/domain/status_bar_state.dart';
 import '../models/computed_timeline.dart';
 import 'conversation_screen.dart';
@@ -32,34 +31,50 @@ import '../widgets/sync_status_widget.dart';
 
 /// 同步阶段
 enum SyncStage {
-  connecting,  // 连接服务器
+  connecting, // 连接服务器
   downloading, // 下载中
-  parsing,     // 解析中
-  completed,   // 完成
+  parsing, // 解析中
+  completed, // 完成
 }
 
 /// 首页视图模式
 enum HomeViewMode {
-  tree,      // 树形结构（按助手分组）
-  timeline,  // 时间线（按更新时间倒序）
+  tree, // 树形结构（按助手分组）
+  timeline, // 时间线（按更新时间倒序）
+}
+
+/// 全局缓存 HomeScreen 的数据状态（用于 Drawer 重新构建时立即恢复）
+class HomeCache {
+  static Map<String, List<Map<String, dynamic>>>? topicIndex;
+  static Map<String, Map<String, dynamic>>? assistantMap;
+  static ComputedTimeline? computedTimeline;
+  static bool hasData = false;
+
+  static void cache(
+    Map<String, List<Map<String, dynamic>>> index,
+    Map<String, Map<String, dynamic>> am,
+    ComputedTimeline timeline,
+  ) {
+    topicIndex = index.isEmpty ? null : index;
+    assistantMap = am.isEmpty ? null : am;
+    computedTimeline = timeline;
+    hasData = true;
+  }
 }
 
 class HomeScreen extends StatefulWidget {
   final bool embedMode;
   final void Function(String topicId, String topicName)? onSelectTopic;
 
-  const HomeScreen({
-    super.key,
-    this.embedMode = false,
-    this.onSelectTopic,
-  });
+  const HomeScreen({super.key, this.embedMode = false, this.onSelectTopic});
 
   @override
   State<HomeScreen> createState() => HomeScreenState();
 }
 
 class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  bool _isLoading = false;  // 仅用于首次加载无缓存时
+  bool _isLoading = false; // 仅用于首次加载无缓存时
+  bool _isInitializing = false; // 防止 _initAndLoad 并发
   bool _autoWebDavEnabled = false;
   bool _autoLocalFolderEnabled = false;
   bool _autoHttpPullEnabled = false;
@@ -106,6 +121,16 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _syncNotifier = SyncStatusNotifier();
+
+    if (HomeCache.hasData) {
+      _topicIndex = HomeCache.topicIndex;
+      _assistantMap = HomeCache.assistantMap;
+      _computedTimeline = HomeCache.computedTimeline;
+      _isLoading = false;
+    } else {
+      _isLoading = true;
+    }
+
     _loadViewMode();
     _initSyncCoordinator();
     _initAndLoad();
@@ -114,8 +139,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _initSyncCoordinator() {
     unawaited(SyncCoordinator.instance.init());
     _syncCandidateSubscription?.cancel();
-    _syncCandidateSubscription =
-        SyncCoordinator.instance.candidateStream.listen(_onSyncCandidate);
+    _syncCandidateSubscription = SyncCoordinator.instance.candidateStream
+        .listen(_onSyncCandidate);
   }
 
   /// 加载视图模式偏好
@@ -124,7 +149,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final savedMode = prefs.getString('home_view_mode');
     if (savedMode != null && mounted) {
       setState(() {
-        _viewMode = savedMode == 'timeline' ? HomeViewMode.timeline : HomeViewMode.tree;
+        _viewMode = savedMode == 'timeline'
+            ? HomeViewMode.timeline
+            : HomeViewMode.tree;
       });
     }
   }
@@ -142,8 +169,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final assistants = await provider.assistantRepository.getAllAssistants();
       final topics = await provider.topicRepository.getAllTopics();
       await provider.database.init();
-      final previews = await provider.database
-          .getTopicCardPreviews(topics.map((t) => t.topicId).toList());
+      final previews = await provider.database.getTopicCardPreviews(
+        topics.map((t) => t.topicId).toList(),
+      );
 
       final assistantMap = <String, Map<String, dynamic>>{};
       for (final a in assistants) {
@@ -166,17 +194,23 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             'assistantId': assistantId,
             'messageCount': t.messageCount,
             'roundCount': t.roundCount,
-            'createdAt': DateTime.fromMillisecondsSinceEpoch(t.createdAt).toIso8601String(),
-            'updatedAt': DateTime.fromMillisecondsSinceEpoch(t.updatedAt).toIso8601String(),
+            'createdAt': DateTime.fromMillisecondsSinceEpoch(
+              t.createdAt,
+            ).toIso8601String(),
+            'updatedAt': DateTime.fromMillisecondsSinceEpoch(
+              t.updatedAt,
+            ).toIso8601String(),
           });
         }
       }
 
       for (final list in topicIndex.values) {
         list.sort((a, b) {
-          final aTime = DateTime.tryParse(a['updatedAt']?.toString() ?? '') ??
+          final aTime =
+              DateTime.tryParse(a['updatedAt']?.toString() ?? '') ??
               DateTime.fromMillisecondsSinceEpoch(0);
-          final bTime = DateTime.tryParse(b['updatedAt']?.toString() ?? '') ??
+          final bTime =
+              DateTime.tryParse(b['updatedAt']?.toString() ?? '') ??
               DateTime.fromMillisecondsSinceEpoch(0);
           return bTime.compareTo(aTime);
         });
@@ -189,10 +223,12 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         previews.aiPreviews,
       );
 
+      HomeCache.cache(topicIndex, assistantMap, timeline);
+
       if (!mounted) return;
       setState(() {
-        _topicIndex = topicIndex.isEmpty ? null : topicIndex;
-        _assistantMap = assistantMap.isEmpty ? null : assistantMap;
+        _topicIndex = HomeCache.topicIndex;
+        _assistantMap = HomeCache.assistantMap;
         _computedTimeline = timeline;
         _isComputingTimeline = false;
         _isLoading = false;
@@ -225,7 +261,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final updatedAt = _parseUpdatedAt(topic['updatedAt']) ?? now;
         final group = _getTimeGroup(updatedAt);
         final assistantId = topic['assistantId']?.toString() ?? '';
-        final assistantName = assistantMap[assistantId]?['name']?.toString() ?? '未命名助手';
+        final assistantName =
+            assistantMap[assistantId]?['name']?.toString() ?? '未命名助手';
 
         final item = TopicItem(
           topicId: topicId,
@@ -262,9 +299,18 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final groups = <TimelineGroup>[
       TimelineGroup(type: TimeGroup.today, topics: grouped[TimeGroup.today]!),
-      TimelineGroup(type: TimeGroup.yesterday, topics: grouped[TimeGroup.yesterday]!),
-      TimelineGroup(type: TimeGroup.thisWeek, topics: grouped[TimeGroup.thisWeek]!),
-      TimelineGroup(type: TimeGroup.earlier, topics: grouped[TimeGroup.earlier]!),
+      TimelineGroup(
+        type: TimeGroup.yesterday,
+        topics: grouped[TimeGroup.yesterday]!,
+      ),
+      TimelineGroup(
+        type: TimeGroup.thisWeek,
+        topics: grouped[TimeGroup.thisWeek]!,
+      ),
+      TimelineGroup(
+        type: TimeGroup.earlier,
+        topics: grouped[TimeGroup.earlier]!,
+      ),
     ].where((g) => g.topics.isNotEmpty).toList();
 
     return ComputedTimeline(
@@ -297,50 +343,63 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 初始化并加载数据
   Future<void> _initAndLoad({bool forceReload = false}) async {
-    if (_isLoading) {
+    if (_isInitializing) {
       debugPrint('⚠️ _initAndLoad: 已在加载中，跳过');
       return;
     }
+    _isInitializing = true;
 
-    final prevAutoWebDavEnabled = _autoWebDavEnabled;
-    final prevAutoLocalFolderEnabled = _autoLocalFolderEnabled;
-    final prevAutoHttpPullEnabled = _autoHttpPullEnabled;
-    final prevAutoLanReceiveEnabled = _autoLanReceiveEnabled;
-    final prevAutoServerSyncEnabled = _autoServerSyncEnabled;
+    try {
+      final prevAutoWebDavEnabled = _autoWebDavEnabled;
+      final prevAutoLocalFolderEnabled = _autoLocalFolderEnabled;
+      final prevAutoHttpPullEnabled = _autoHttpPullEnabled;
+      final prevAutoLanReceiveEnabled = _autoLanReceiveEnabled;
+      final prevAutoServerSyncEnabled = _autoServerSyncEnabled;
 
-    await SyncPreferences.migrateFromLegacyIfNeeded();
-    final sources = await SyncPreferences.getAutoSources();
+      await SyncPreferences.migrateFromLegacyIfNeeded();
+      final sources = await SyncPreferences.getAutoSources();
 
-    _autoWebDavEnabled = sources[SyncSourceType.webdav] ?? false;
-    _autoLocalFolderEnabled = sources[SyncSourceType.localFolder] ?? false;
-    _autoHttpPullEnabled = sources[SyncSourceType.httpPull] ?? false;
-    _autoLanReceiveEnabled = sources[SyncSourceType.lanReceive] ?? false;
-    _autoServerSyncEnabled = sources[SyncSourceType.serverSync] ?? false;
+      _autoWebDavEnabled = sources[SyncSourceType.webdav] ?? false;
+      _autoLocalFolderEnabled = sources[SyncSourceType.localFolder] ?? false;
+      _autoHttpPullEnabled = sources[SyncSourceType.httpPull] ?? false;
+      _autoLanReceiveEnabled = sources[SyncSourceType.lanReceive] ?? false;
+      _autoServerSyncEnabled = sources[SyncSourceType.serverSync] ?? false;
 
-    final webdavConfig = await WebDavService.loadConfig();
-    _hasValidWebDavConfig = webdavConfig.isValid;
-    final localConfig = await LocalFolderSyncService.loadConfig();
-    _hasValidLocalFolderConfig = localConfig.isValid;
+      final webdavConfig = await WebDavService.loadConfig();
+      _hasValidWebDavConfig = webdavConfig.isValid;
+      final localConfig = await LocalFolderSyncService.loadConfig();
+      _hasValidLocalFolderConfig = localConfig.isValid;
 
-    await SyncCoordinator.instance.startWatchingLocalFolderIfEnabled();
+      await SyncCoordinator.instance.startWatchingLocalFolderIfEnabled();
 
-    final settingsChanged = prevAutoWebDavEnabled != _autoWebDavEnabled ||
-        prevAutoLocalFolderEnabled != _autoLocalFolderEnabled ||
-        prevAutoHttpPullEnabled != _autoHttpPullEnabled ||
-        prevAutoServerSyncEnabled != _autoServerSyncEnabled ||
-        prevAutoLanReceiveEnabled != _autoLanReceiveEnabled;
+      final settingsChanged =
+          prevAutoWebDavEnabled != _autoWebDavEnabled ||
+          prevAutoLocalFolderEnabled != _autoLocalFolderEnabled ||
+          prevAutoHttpPullEnabled != _autoHttpPullEnabled ||
+          prevAutoServerSyncEnabled != _autoServerSyncEnabled ||
+          prevAutoLanReceiveEnabled != _autoLanReceiveEnabled;
 
-    // 如果正在同步，只更新配置状态
-    if (_isSyncing) {
-      debugPrint('ℹ️ _initAndLoad: 同步中，只更新配置状态');
+      // 如果正在同步，只更新配置状态
+      if (_isSyncing) {
+        debugPrint('ℹ️ _initAndLoad: 同步中，只更新配置状态');
+        if (mounted) {
+          setState(() {
+            // 避免在同步状态下提前 return 时首屏一直停留在 loading
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+
       if (mounted) setState(() {});
-      return;
-    }
 
-    if (mounted) setState(() {});
-
-    if (forceReload || settingsChanged || _topicIndex == null) {
-      await _autoLoadData();
+      if (forceReload ||
+          settingsChanged ||
+          (_topicIndex == null && !HomeCache.hasData)) {
+        await _autoLoadData();
+      }
+    } finally {
+      _isInitializing = false;
     }
   }
 
@@ -348,6 +407,14 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _refreshFromDatabase(showLoading: !widget.embedMode);
     if (_hasAnySyncSourceSelected) {
       _syncFromEnabledSources();
+    }
+  }
+
+  Future<void> _rebuildTopicIndexSafely() async {
+    try {
+      await TopicIndexService.instance.rebuild();
+    } catch (e) {
+      debugPrint('⚠️ TopicIndex 重建失败（不影响主流程）: $e');
     }
   }
 
@@ -387,10 +454,12 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _syncNotifier.startChecking();
 
     try {
-      final discovery =
-          await SyncCoordinator.instance.discoverLatestCandidatesForTypes(enabledTypes);
+      final discovery = await SyncCoordinator.instance
+          .discoverLatestCandidatesForTypes(enabledTypes);
       if (!mounted) return;
-      final candidate = SyncCoordinator.instance.chooseLatest(discovery.candidates);
+      final candidate = SyncCoordinator.instance.chooseLatest(
+        discovery.candidates,
+      );
       if (candidate == null) {
         if (discovery.warnings.isNotEmpty) {
           final msg = discovery.warnings.join('\n');
@@ -441,16 +510,25 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_autoServerSyncEnabled) {
       try {
         final service = ServerSyncService(RepositoryProvider.instance.database);
-        final result = await service.incrementalSync(
+        await service.incrementalSync(
           onStatus: (msg) {
             if (mounted) _syncNotifier.updateDownloadProgress(0, msg);
-          }
+          },
         );
         if (mounted) {
-           _syncNotifier.complete();
-           _statusError = null;
+          _syncNotifier.complete();
+          _statusError = null;
         }
         await _refreshFromDatabase();
+        await _rebuildTopicIndexSafely();
+        final keepPrimaryZip =
+            _autoWebDavEnabled ||
+            _autoLocalFolderEnabled ||
+            _autoHttpPullEnabled ||
+            _autoLanReceiveEnabled;
+        await DataPersistenceManager.pruneBackupArtifacts(
+          keepPrimary: keepPrimaryZip,
+        );
       } catch (e) {
         if (mounted) {
           _syncNotifier.setError('Cherry Sync 失败\\n\\n$e');
@@ -466,9 +544,12 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     try {
-      final discovery = await SyncCoordinator.instance.discoverLatestCandidates();
+      final discovery = await SyncCoordinator.instance
+          .discoverLatestCandidates();
       if (!mounted) return;
-      final candidate = SyncCoordinator.instance.chooseLatest(discovery.candidates);
+      final candidate = SyncCoordinator.instance.chooseLatest(
+        discovery.candidates,
+      );
       if (candidate == null) {
         if (discovery.warnings.isNotEmpty) {
           final msg = discovery.warnings.join('\n');
@@ -582,22 +663,20 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
     );
 
-    if (!mounted) return;
-    if (localPath == null) throw Exception('获取失败');
+    if (localPath == null) throw Exception('获取文件失败');
 
     _syncNotifier.startParsing();
-    final loadSuccess = await _loadFile(
-      localPath,
-      silent: _topicIndex != null,
-    );
+    final loadSuccess = await _loadFile(localPath, silent: _topicIndex != null);
 
-    if (loadSuccess) {
-      await SyncPreferences.setLastImported(
-        fingerprint: candidate.fingerprint,
-        modifiedAt: candidate.modifiedAt,
-        sourceType: candidate.sourceType,
-      );
+    if (!loadSuccess) {
+      throw Exception('导入失败');
     }
+
+    await SyncPreferences.setLastImported(
+      fingerprint: candidate.fingerprint,
+      modifiedAt: candidate.modifiedAt,
+      sourceType: candidate.sourceType,
+    );
 
     if (mounted) {
       setState(() {
@@ -610,37 +689,38 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 显示更新确认对话框（无倒计时）
   Future<bool> _showUpdateDialog(wd.File remoteFile) async {
     return await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('发现新版本'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('当前处于移动网络，是否下载更新？'),
-              const SizedBox(height: 16),
-              Text('文件：${remoteFile.name}'),
-              const SizedBox(height: 4),
-              Text('大小：${(remoteFile.size ?? 0) ~/ 1024} KB'),
-              const SizedBox(height: 4),
-              Text('时间：${remoteFile.mTime}'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('暂不更新'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('立即下载'),
-            ),
-          ],
-        );
-      },
-    ) ?? false;
+          context: context,
+          barrierDismissible: false,
+          builder: (context) {
+            return AlertDialog(
+              title: const Text('发现新版本'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('当前处于移动网络，是否下载更新？'),
+                  const SizedBox(height: 16),
+                  Text('文件：${remoteFile.name}'),
+                  const SizedBox(height: 4),
+                  Text('大小：${(remoteFile.size ?? 0) ~/ 1024} KB'),
+                  const SizedBox(height: 4),
+                  Text('时间：${remoteFile.mTime}'),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('暂不更新'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('立即下载'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
   }
 
   /// 加载待更新的本地备份
@@ -653,7 +733,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   /// 加载本地备份（后台静默加载，不阻塞 UI）
-  Future<void> _loadLocalBackup(LocalBackupInfo backup, {int retryCount = 0}) async {
+  Future<void> _loadLocalBackup(
+    LocalBackupInfo backup, {
+    int retryCount = 0,
+  }) async {
     if (_isSyncing) return;
 
     const maxRetries = 3;
@@ -672,7 +755,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (localPath == null) {
         // ZIP 文件可能还在写入中，尝试重试
         if (retryCount < maxRetries) {
-          debugPrint('⏳ ZIP 文件未就绪，${retryDelay.inSeconds}秒后重试 (${retryCount + 1}/$maxRetries)');
+          debugPrint(
+            '⏳ ZIP 文件未就绪，${retryDelay.inSeconds}秒后重试 (${retryCount + 1}/$maxRetries)',
+          );
           _isSyncing = false;
           _syncNotifier.complete();
           await Future.delayed(retryDelay);
@@ -681,12 +766,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         throw Exception('文件复制失败：ZIP 文件可能不完整');
       }
 
-      if (!mounted) return;
       _syncNotifier.startParsing();
-      final success = await _loadFile(
-        localPath,
-        silent: _topicIndex != null,
-      );
+      final success = await _loadFile(localPath, silent: _topicIndex != null);
       if (!success) {
         throw Exception('导入失败');
       }
@@ -736,14 +817,18 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// 【增量更新】刷新时间线分组（可在应用恢复前台时调用）
   void _refreshTimelineIfNeeded() {
     if (_computedTimeline == null) return;
-    
+
     final now = DateTime.now();
     final computedAt = _computedTimeline!.computedAt;
-    
+
     // 如果跨越了日期边界，重新分组
-    final computedDate = DateTime(computedAt.year, computedAt.month, computedAt.day);
+    final computedDate = DateTime(
+      computedAt.year,
+      computedAt.month,
+      computedAt.day,
+    );
     final nowDate = DateTime(now.year, now.month, now.day);
-    
+
     if (nowDate != computedDate) {
       debugPrint('📅 时间线跨越日期边界，重新分组');
       _regroupTimeline();
@@ -758,10 +843,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 【新增】处理损坏的文件
   ///
-  /// 当检测到ZIP文件损坏时:
-  /// 1. 删除损坏的文件
-  /// 2. 清除所有缓存
-  /// 3. 清除文件时间戳
+  /// 当检测到 ZIP 文件损坏时，仅清理损坏文件本身，不影响已有数据库数据。
   Future<void> _handleCorruptedFile(String filePath) async {
     try {
       debugPrint('🗑️  开始清理损坏的文件: $filePath');
@@ -773,9 +855,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         debugPrint('✅ 已删除损坏的ZIP文件');
       }
 
-      // 2. 清除Isar数据库中的导入数据
-      await RepositoryProvider.instance.database.clearImportedData();
-      debugPrint('✅ 已清除Isar缓存');
+      // 2. 不清空数据库：导入失败时保留旧数据，避免误删
+      debugPrint('ℹ️ 保留现有数据库数据，不执行清库');
     } catch (e) {
       debugPrint('❌ 清理失败: $e');
     }
@@ -857,7 +938,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _statusError = null;
         });
       } else if (_statusError != null &&
-          (_statusError!.contains('ZIP') || _statusError!.contains('FormatException'))) {
+          (_statusError!.contains('ZIP') ||
+              _statusError!.contains('FormatException'))) {
         debugPrint('❌ 用户选择的文件损坏');
         await _handleCorruptedFile(effectivePath);
       }
@@ -917,14 +999,18 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 加载指定文件
   /// [silent] 为 true 时静默加载，不显示加载动画
-  Future<bool> _loadFile(String filePath, {bool saveCache = false, bool silent = false}) async {
+  Future<bool> _loadFile(
+    String filePath, {
+    bool saveCache = false,
+    bool silent = false,
+  }) async {
     if (!silent) {
-      setState(() {
-        _isLoading = true;
-        _statusError = null;
-        _topicIndex = null;
-        _assistantMap = null;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _statusError = null;
+        });
+      }
     }
 
     try {
@@ -936,8 +1022,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // 不需要重新解包 ZIP，直接从 extractor.rawData 中提取
       try {
         if (extractor.rawData != null) {
-          final count = await AIProviderService.instance
-              .importFromParsedData(extractor.rawData!);
+          final count = await AIProviderService.instance.importFromParsedData(
+            extractor.rawData!,
+          );
           if (count > 0) {
             debugPrint('✅ 自动导入了 $count 个 AI Provider');
           }
@@ -950,20 +1037,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final elapsed = DateTime.now().difference(startTime).inMilliseconds;
       debugPrint('💡 文件加载完成，耗时 ${elapsed}ms');
 
-      _syncNotifier.updateImportProgress('清理旧数据...');
       final db = RepositoryProvider.instance.database;
       await db.init();
-      final importDbBytesBefore = await db.getImportDbSizeBytes();
-      await db.clearImportedData();
-      if (importDbBytesBefore > 100 * 1024 * 1024) {
-        _syncNotifier.updateImportProgress('释放数据库空间...');
-        await db.reclaimImportDbSpace();
-      }
-
       _syncNotifier.updateImportProgress('导入中...');
-      final manager =
-          DataImportManager(DriftDataImportServiceImpl(RepositoryProvider.instance.database));
-      final importResult = await manager.importData(
+      final importResult = await db.importFromExtractorAtomically(
         extractor,
         onProgress: (progress, message) {
           _syncNotifier.updateImportProgress(message, progress: progress);
@@ -974,15 +1051,18 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       await _refreshFromDatabase(showLoading: false);
+      await _rebuildTopicIndexSafely();
       return true; // 加载成功
     } catch (e, stackTrace) {
       debugPrint('❌ 文件加载失败: $e');
       debugPrint('   堆栈: $stackTrace');
 
-      setState(() {
-        _statusError = '文件加载失败\n\n$e';
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _statusError = '文件加载失败\n\n$e';
+          _isLoading = false;
+        });
+      }
 
       return false; // 加载失败
     }
@@ -1017,7 +1097,9 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 leading: const Icon(Icons.sync),
                 title: const Text('同步最新'),
                 subtitle: Text(
-                  _hasAnySyncSourceSelected ? _syncModeLabel : '未选择来源：去设置选择同步来源',
+                  _hasAnySyncSourceSelected
+                      ? _syncModeLabel
+                      : '未选择来源：去设置选择同步来源',
                 ),
                 onTap: () async {
                   Navigator.pop(context);
@@ -1064,12 +1146,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_topicIndex == null) {
       _pickAndLoadFile();
     } else if (_topicIndex != null) {
-       Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const InsightScreen(),
-          ),
-        );
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const InsightScreen()),
+      );
     }
   }
 
@@ -1086,17 +1166,26 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildBody() {
-    // 首次加载时显示加载动画
+    // 加载中仍保留 AppBar，避免影响设置入口。
     if (_isLoading) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('正在加载...'),
-          ],
-        ),
+      return CustomScrollView(
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          _buildSliverAppBar(),
+          const SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('正在加载...'),
+                ],
+              ),
+            ),
+          ),
+        ],
       );
     }
 
@@ -1104,31 +1193,34 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       physics: const BouncingScrollPhysics(),
       slivers: [
         _buildSliverAppBar(),
-        
+
         // 内容区域
         if (_topicIndex == null)
           SliverFillRemaining(
-            child: _isSyncing 
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.sync, size: 48, color: Colors.blue[300]),
-                      const SizedBox(height: 16),
-                      Text(
-                        _syncMessage ?? '同步中...',
-                        style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                      ),
-                    ],
-                  ),
-                )
-              : _buildEmptyState(),
+            child: _isSyncing
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.sync, size: 48, color: Colors.blue[300]),
+                        const SizedBox(height: 16),
+                        Text(
+                          _syncMessage ?? '同步中...',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : _buildEmptyState(),
           )
         else
-          _viewMode == HomeViewMode.tree 
-              ? _buildTopicListSliver() 
+          _viewMode == HomeViewMode.tree
+              ? _buildTopicListSliver()
               : _buildTimelineListSliver(),
-          
+
         // 底部留白，防止被 Dock 遮挡
         const SliverPadding(padding: EdgeInsets.only(bottom: 100)),
       ],
@@ -1155,21 +1247,23 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // 搜索按钮
         IconButton(
           icon: const Icon(Icons.search),
-          onPressed: _isLoading ? null : () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => const SearchScreen(),
-              ),
-            );
-          },
+          onPressed: _isLoading
+              ? null
+              : () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const SearchScreen(),
+                    ),
+                  );
+                },
           tooltip: '搜索',
         ),
 
         // 设置按钮
-         IconButton(
+        IconButton(
           icon: const Icon(Icons.settings_outlined),
-          onPressed: _isLoading ? null : () async {
+          onPressed: () async {
             await Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const SettingsScreen()),
@@ -1185,7 +1279,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ],
     );
   }
-  
+
   /// 构建状态徽章 (Mini version for AppBar Action)
   Widget _buildStatusBadge() {
     // 【性能优化】同步进行中时使用独立的 SyncStatusWidget，不触发全局重建
@@ -1199,7 +1293,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onTap: () => _onStatusBarTap(_computeStatusBarState()),
           );
         }
-        
+
         // 否则使用原有逻辑
         final state = _computeStatusBarState();
         final badgeState = switch (state.phase) {
@@ -1208,7 +1302,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           StatusBarPhase.hasUpdate => StatusBadgeState.hasUpdate,
           StatusBarPhase.error => StatusBadgeState.error,
         };
-        
+
         return StatusBadge(
           state: badgeState,
           message: null,
@@ -1217,10 +1311,13 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
     );
   }
-  
+
   /// 计算当前状态栏状态
   StatusBarState _computeStatusBarState() {
-    final topicCount = _topicIndex?.values.fold<int>(0, (sum, list) => sum + list.length);
+    final topicCount = _topicIndex?.values.fold<int>(
+      0,
+      (sum, list) => sum + list.length,
+    );
 
     // 计算今日话题数
     int todayTopicCount = 0;
@@ -1344,65 +1441,66 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final assistantEntries = _topicIndex!.entries.toList();
 
     return SliverList(
-      delegate: SliverChildBuilderDelegate(
-        (context, index) {
-          final entry = assistantEntries[index];
-          final assistantId = entry.key;
-          final topics = entry.value;
+      delegate: SliverChildBuilderDelegate((context, index) {
+        final entry = assistantEntries[index];
+        final assistantId = entry.key;
+        final topics = entry.value;
 
-          // 获取 Assistant 信息
-          final assistantInfo =
-              _assistantMap?[assistantId] ?? {'id': assistantId, 'name': '未命名助手'};
+        // 获取 Assistant 信息
+        final assistantInfo =
+            _assistantMap?[assistantId] ?? {'id': assistantId, 'name': '未命名助手'};
 
-          return Card(
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            elevation: 0,
-            color: Theme.of(context).cardColor,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(
-                color: Theme.of(context).colorScheme.outline.withValues(alpha: 26),
-              ),
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          elevation: 0,
+          color: Theme.of(context).cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(
+              color: Theme.of(
+                context,
+              ).colorScheme.outline.withValues(alpha: 26),
             ),
-            child: ExpansionTile(
-              shape: const Border(), // Remove borders when expanded
-              leading: CircleAvatar(
-                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                child: Text(
-                  (assistantInfo['name'] as String?)?.substring(0, 1) ?? '?',
-                  style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
+          ),
+          child: ExpansionTile(
+            shape: const Border(), // Remove borders when expanded
+            leading: CircleAvatar(
+              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+              child: Text(
+                (assistantInfo['name'] as String?)?.substring(0, 1) ?? '?',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
                 ),
               ),
-              title: Text(
-                assistantInfo['name'] as String? ?? '未命名助手',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              subtitle: Text('${topics.length} 个话题'),
-              children: [
-                // 显示所有话题（使用 Column 替代 ListView.builder 避免 shrinkWrap 问题）
-                ...topics.map((topic) {
-                  final topicName = topic['name'] as String? ?? '未命名话题';
-                  final topicId = topic['id'] as String;
-                  final messageCount = topic['messageCount'] as int? ?? 0;
-                  final roundCount = topic['roundCount'] as int? ?? 0;
-
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 4,
-                    ),
-                    title: Text(topicName),
-                    subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
-                    trailing: const Icon(Icons.chevron_right, size: 16),
-                    onTap: () => _openTopic(topicId, topicName),
-                  );
-                }),
-              ],
             ),
-          );
-        },
-        childCount: assistantEntries.length,
-      ),
+            title: Text(
+              assistantInfo['name'] as String? ?? '未命名助手',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text('${topics.length} 个话题'),
+            children: [
+              // 显示所有话题（使用 Column 替代 ListView.builder 避免 shrinkWrap 问题）
+              ...topics.map((topic) {
+                final topicName = topic['name'] as String? ?? '未命名话题';
+                final topicId = topic['id'] as String;
+                final messageCount = topic['messageCount'] as int? ?? 0;
+                final roundCount = topic['roundCount'] as int? ?? 0;
+
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 4,
+                  ),
+                  title: Text(topicName),
+                  subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
+                  trailing: const Icon(Icons.chevron_right, size: 16),
+                  onTap: () => _openTopic(topicId, topicName),
+                );
+              }),
+            ],
+          ),
+        );
+      }, childCount: assistantEntries.length),
     );
   }
 
@@ -1435,42 +1533,39 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return SliverList(
-      delegate: SliverChildBuilderDelegate(
-        (context, index) {
-          final item = flatItems[index];
-          
-          // 分组标题
-          if (item is TimelineGroup) {
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-              child: Text(
-                item.type.title,
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
+      delegate: SliverChildBuilderDelegate((context, index) {
+        final item = flatItems[index];
+
+        // 分组标题
+        if (item is TimelineGroup) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+            child: Text(
+              item.type.title,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onSurface,
               ),
-            );
-          }
-          
-          // 话题卡片（使用预计算的数据）
-          if (item is TopicItem) {
-            return TopicCard(
-              title: item.name,
-              date: item.timeDisplay,
-              assistantName: item.assistantName,
-              roundCount: item.roundCount,
-              userPreview: item.userPreview,
-              aiPreview: item.aiPreview,
-              onTap: () => _openTopic(item.topicId, item.name),
-            );
-          }
-          
-          return const SizedBox.shrink();
-        },
-        childCount: flatItems.length,
-      ),
+            ),
+          );
+        }
+
+        // 话题卡片（使用预计算的数据）
+        if (item is TopicItem) {
+          return TopicCard(
+            title: item.name,
+            date: item.timeDisplay,
+            assistantName: item.assistantName,
+            roundCount: item.roundCount,
+            userPreview: item.userPreview,
+            aiPreview: item.aiPreview,
+            onTap: () => _openTopic(item.topicId, item.name),
+          );
+        }
+
+        return const SizedBox.shrink();
+      }, childCount: flatItems.length),
     );
   }
 
@@ -1533,10 +1628,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     for (final entry in _topicIndex!.entries) {
       final assistantId = entry.key;
       for (final topic in entry.value) {
-        allTopics.add({
-          ...topic,
-          'assistantId': assistantId,
-        });
+        allTopics.add({...topic, 'assistantId': assistantId});
       }
     }
 
@@ -1562,33 +1654,38 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     // 构建分组列表
-    final groups = [TimeGroup.today, TimeGroup.yesterday, TimeGroup.thisWeek, TimeGroup.earlier];
+    final groups = [
+      TimeGroup.today,
+      TimeGroup.yesterday,
+      TimeGroup.thisWeek,
+      TimeGroup.earlier,
+    ];
     final flatItems = <Widget>[];
-    
+
     for (final group in groups) {
       final topics = groupedTopics[group];
       if (topics == null || topics.isEmpty) continue;
-      
+
       // Header
       flatItems.add(
-         Padding(
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-            child: Text(
-              _getGroupTitle(group),
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
+          child: Text(
+            _getGroupTitle(group),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.onSurface,
             ),
           ),
+        ),
       );
-      
+
       // Items
       for (final topic in topics) {
         flatItems.add(_buildTopicCard(topic, group));
       }
-      
+
       // Group spacing
       flatItems.add(const SizedBox(height: 16));
     }
@@ -1651,14 +1748,15 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final now = DateTime.now();
     final timeStr = DateFormat('HH:mm').format(dt);
     final isThisYear = dt.year == now.year;
-    
+
     return switch (group) {
       TimeGroup.today => timeStr,
       TimeGroup.yesterday => timeStr,
       TimeGroup.thisWeek => '${_getWeekdayName(dt.weekday)} $timeStr',
-      TimeGroup.earlier => isThisYear 
-          ? '${DateFormat('MM-dd').format(dt)} $timeStr'
-          : '${DateFormat('yyyy-MM-dd').format(dt)} $timeStr',
+      TimeGroup.earlier =>
+        isThisYear
+            ? '${DateFormat('MM-dd').format(dt)} $timeStr'
+            : '${DateFormat('yyyy-MM-dd').format(dt)} $timeStr',
     };
   }
 
@@ -1700,7 +1798,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onTap: () => _openTopic(topicId, topicName),
     );
   }
-  
+
   Future<void> _openTopic(String topicId, String topicName) async {
     final onSelectTopic = widget.onSelectTopic;
     if (onSelectTopic != null) {
@@ -1710,10 +1808,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ConversationScreen(
-          topicId: topicId,
-          topicName: topicName,
-        ),
+        builder: (context) =>
+            ConversationScreen(topicId: topicId, topicName: topicName),
       ),
     );
   }
@@ -1733,24 +1829,36 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             height: 100,
             decoration: BoxDecoration(
               color: (_autoWebDavEnabled)
-                  ? (_hasValidWebDavConfig ? Colors.blue[50] : Colors.orange[50])
+                  ? (_hasValidWebDavConfig
+                        ? Colors.blue[50]
+                        : Colors.orange[50])
                   : (_autoLocalFolderEnabled)
-                      ? (_hasValidLocalFolderConfig ? Colors.blue[50] : Colors.orange[50])
-                      : Colors.grey[100],
+                  ? (_hasValidLocalFolderConfig
+                        ? Colors.blue[50]
+                        : Colors.orange[50])
+                  : Colors.grey[100],
               borderRadius: BorderRadius.circular(24),
             ),
             child: Icon(
               (_autoWebDavEnabled)
-                  ? (_hasValidWebDavConfig ? Icons.cloud_queue : Icons.cloud_off)
+                  ? (_hasValidWebDavConfig
+                        ? Icons.cloud_queue
+                        : Icons.cloud_off)
                   : (_autoLocalFolderEnabled)
-                      ? (_hasValidLocalFolderConfig ? Icons.folder_copy_outlined : Icons.folder_off_outlined)
-                      : Icons.folder_open,
+                  ? (_hasValidLocalFolderConfig
+                        ? Icons.folder_copy_outlined
+                        : Icons.folder_off_outlined)
+                  : Icons.folder_open,
               size: 48,
               color: (_autoWebDavEnabled)
-                  ? (_hasValidWebDavConfig ? Colors.blue[400] : Colors.orange[400])
+                  ? (_hasValidWebDavConfig
+                        ? Colors.blue[400]
+                        : Colors.orange[400])
                   : (_autoLocalFolderEnabled)
-                      ? (_hasValidLocalFolderConfig ? Colors.blue[400] : Colors.orange[400])
-                      : Colors.grey[500],
+                  ? (_hasValidLocalFolderConfig
+                        ? Colors.blue[400]
+                        : Colors.orange[400])
+                  : Colors.grey[500],
             ),
           ),
 
@@ -1760,14 +1868,12 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Text(
             _hasAnySyncSourceSelected
                 ? ((_autoWebDavEnabled && !_hasValidWebDavConfig) ||
-                        (_autoLocalFolderEnabled && !_hasValidLocalFolderConfig))
-                    ? '配置同步来源'
-                    : '暂无数据'
+                          (_autoLocalFolderEnabled &&
+                              !_hasValidLocalFolderConfig))
+                      ? '配置同步来源'
+                      : '暂无数据'
                 : '选择数据文件',
-            style: const TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
           ),
 
           const SizedBox(height: 12),
@@ -1776,9 +1882,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Text(
             _hasAnySyncSourceSelected
                 ? ((_autoWebDavEnabled && !_hasValidWebDavConfig) ||
-                        (_autoLocalFolderEnabled && !_hasValidLocalFolderConfig))
-                    ? '先在设置页补全同步来源配置'
-                    : '点击下方按钮同步并导入最新备份'
+                          (_autoLocalFolderEnabled &&
+                              !_hasValidLocalFolderConfig))
+                      ? '先在设置页补全同步来源配置'
+                      : '点击下方按钮同步并导入最新备份'
                 : '导入 Cherry Studio 导出的 ZIP 或 JSON 文件',
             style: TextStyle(
               color: Colors.grey[600],
@@ -1795,20 +1902,23 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if ((_autoWebDavEnabled && !_hasValidWebDavConfig) ||
                 (_autoLocalFolderEnabled && !_hasValidLocalFolderConfig))
               ElevatedButton.icon(
-                onPressed: _isLoading
-                    ? null
-                    : () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                        ).then((_) {
-                          if (mounted) _initAndLoad();
-                        });
-                      },
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const SettingsScreen(),
+                    ),
+                  ).then((_) {
+                    if (mounted) _initAndLoad();
+                  });
+                },
                 icon: const Icon(Icons.settings),
                 label: const Text('去配置'),
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 14,
+                  ),
                 ),
               )
             else
@@ -1817,7 +1927,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 icon: const Icon(Icons.cloud_sync),
                 label: const Text('立即同步'),
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 14,
+                  ),
                 ),
               ),
           ] else ...[
@@ -1836,10 +1949,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const SizedBox(width: 12),
                   Text(
                     '点击右上角“同步”导入文件',
-                    style: TextStyle(
-                      color: Colors.blue[800],
-                      fontSize: 14,
-                    ),
+                    style: TextStyle(color: Colors.blue[800], fontSize: 14),
                   ),
                 ],
               ),
@@ -1873,10 +1983,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const SizedBox(width: 8),
               const Text(
                 '快速开始',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
               ),
             ],
           ),
@@ -1943,13 +2050,14 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Expanded(
                   child: Text(
                     '去设置选择并配置同步来源（WebDAV / 本地文件夹 / HTTP）',
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 13,
-                    ),
+                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
                   ),
                 ),
-                Icon(Icons.arrow_forward_ios, color: Colors.grey[400], size: 14),
+                Icon(
+                  Icons.arrow_forward_ios,
+                  color: Colors.grey[400],
+                  size: 14,
+                ),
               ],
             ),
           ),

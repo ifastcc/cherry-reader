@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'context_selector.dart' show TopicSummary;
 import '../services/topic_index_service.dart';
@@ -81,6 +83,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
 
   // 索引服务引用
   final _indexService = TopicIndexService.instance;
+  StreamSubscription<void>? _indexUpdateSub;
 
   final ScrollController _scrollController = ScrollController();
 
@@ -92,6 +95,10 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
     super.initState();
     _parseContextData();
     _initFromIndexService();
+    _indexUpdateSub = _indexService.onIndexUpdated.listen((_) {
+      if (!mounted || !_indexService.isInitialized) return;
+      _buildFromIndexService();
+    });
   }
 
   /// 从索引服务初始化（同步，无闪烁）
@@ -277,6 +284,7 @@ class _ContextSelectorWithStylesState extends State<ContextSelectorWithStyles> {
 
   @override
   void dispose() {
+    _indexUpdateSub?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
