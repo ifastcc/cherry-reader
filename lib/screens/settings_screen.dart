@@ -92,6 +92,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isTestingServerSync = false;
   bool _isSyncingNow = false;
   String? _serverSyncTestMessage;
+  ServerSyncMode _serverSyncMode = ServerSyncMode.pullOnly;
+  ServerSyncConflictPolicy _serverSyncConflictPolicy =
+      ServerSyncConflictPolicy.serverWins;
+  List<ServerSyncPendingConflict> _serverSyncPendingConflicts = const [];
+  bool _isResolvingServerSyncConflict = false;
+  String? _resolvingServerSyncConflictKey;
 
   LanHttpSyncConfig? _lanHttpSyncConfig;
   LanHttpSyncServerStatus _lanHttpSyncStatus = const LanHttpSyncStopped();
@@ -264,6 +270,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 加载同步服务器配置
     final serverSyncUrl = await ServerSyncService.getServerUrl();
     final serverSyncToken = await ServerSyncService.getServerToken();
+    final serverSyncMode = await ServerSyncService.getSyncMode();
+    final serverSyncConflictPolicy =
+        await ServerSyncService.getConflictPolicy();
 
     final webdavConfigured = webdavConfig.isValid;
     final localFolderConfigured = localFolderConfig.folderPath
@@ -272,7 +281,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final httpPullConfigured =
         httpPullPrefs.baseUrl.trim().isNotEmpty &&
         httpPullPrefs.baseUrl.trim() != 'http://';
-    final serverSyncConfigured = serverSyncUrl.isNotEmpty;
+    final serverSyncConfigured =
+        serverSyncUrl.trim().isNotEmpty && serverSyncToken.trim().isNotEmpty;
 
     LanHttpSyncConfig? lanHttpSyncConfig;
     LanHttpSyncServerStatus lanHttpSyncStatus = const LanHttpSyncStopped();
@@ -313,6 +323,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _httpPullTokenController.text = httpPullPrefs.token;
       _serverSyncUrlController.text = serverSyncUrl;
       _serverSyncTokenController.text = serverSyncToken;
+      _serverSyncMode = serverSyncMode;
+      _serverSyncConflictPolicy = serverSyncConflictPolicy;
       _lanHttpSyncConfig = lanHttpSyncConfig;
       _lanHttpSyncStatus = lanHttpSyncStatus;
       _lanHttpSyncPortController.text =
@@ -355,6 +367,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _azureRegionController.text = _ttsSettings.azureRegion;
       _isLoading = false;
     });
+
+    await _refreshServerSyncConflicts(silent: true);
 
     if (PlatformUtils.isDesktop) {
       _lanHttpSyncStatusSubscription?.cancel();
@@ -812,7 +826,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   bool get _serverSyncConfigValid =>
-      _serverSyncUrlController.text.trim().isNotEmpty;
+      _serverSyncUrlController.text.trim().isNotEmpty &&
+      _serverSyncTokenController.text.trim().isNotEmpty;
 
   Future<void> _setAutoSource(SyncSourceType type, bool enabled) async {
     // 互斥逻辑：serverSync 与其他同步源互斥
@@ -966,7 +981,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _buildSyncSourceItem(
         type: SyncSourceType.serverSync,
         icon: Icons.sync_outlined,
-        description: '从自建同步服务器增量拉取（与其他来源互斥）',
+        description: '与自建同步服务器增量双向同步（与其他来源互斥）',
         enabled: _autoServerSyncEnabled,
         configured: _serverSyncConfigValid,
         body: _buildServerSyncConfigCard(),
@@ -1166,12 +1181,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _saveServerSyncConfig() async {
+  Future<void> _saveServerSyncConfig({bool showToast = true}) async {
     await ServerSyncService.saveConfig(
       serverUrl: _serverSyncUrlController.text.trim(),
       token: _serverSyncTokenController.text.trim(),
     );
-    if (!mounted) return;
+    await ServerSyncService.saveSyncBehavior(
+      mode: _serverSyncMode,
+      conflictPolicy: _serverSyncConflictPolicy,
+    );
+    await _refreshServerSyncConflicts(silent: true);
+    if (!showToast || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('同步服务器配置已保存'),
@@ -1180,28 +1200,174 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _refreshServerSyncConflicts({bool silent = false}) async {
+    if (!_serverSyncConfigValid) {
+      if (!mounted) return;
+      setState(() => _serverSyncPendingConflicts = const []);
+      return;
+    }
+
+    try {
+      final service = ServerSyncService(AppDb());
+      final conflicts = await service.getPendingConflicts();
+      if (!mounted) return;
+      setState(() => _serverSyncPendingConflicts = conflicts);
+    } catch (e) {
+      if (!silent && mounted) {
+        setState(() {
+          _serverSyncTestMessage = '读取冲突列表失败：${e.toString().split('\n').first}';
+        });
+      }
+    }
+  }
+
+  Future<void> _clearServerSyncConflicts() async {
+    if (_isResolvingServerSyncConflict) return;
+    setState(() {
+      _isResolvingServerSyncConflict = true;
+      _resolvingServerSyncConflictKey = null;
+      _serverSyncTestMessage = '正在清空冲突列表...';
+    });
+    await _saveServerSyncConfig(showToast: false);
+
+    try {
+      final service = ServerSyncService(AppDb());
+      await service.clearPendingConflicts();
+      await _refreshServerSyncConflicts(silent: true);
+      if (!mounted) return;
+      setState(() {
+        _isResolvingServerSyncConflict = false;
+        _serverSyncTestMessage = '冲突列表已清空';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isResolvingServerSyncConflict = false;
+        _serverSyncTestMessage = '清空冲突失败：${e.toString().split('\n').first}';
+      });
+    }
+  }
+
+  Future<void> _resolveServerSyncConflict(
+    ServerSyncPendingConflict conflict,
+    ServerSyncConflictPolicy policy,
+  ) async {
+    if (_isResolvingServerSyncConflict) return;
+    final key = '${conflict.operation}:${conflict.topicId}';
+    setState(() {
+      _isResolvingServerSyncConflict = true;
+      _resolvingServerSyncConflictKey = key;
+      _serverSyncTestMessage = policy == ServerSyncConflictPolicy.localWins
+          ? '按本地优先处理冲突中...'
+          : '按服务端优先处理冲突中...';
+    });
+    await _saveServerSyncConfig(showToast: false);
+
+    try {
+      final service = ServerSyncService(AppDb());
+      final result = await service.resolvePendingConflict(
+        conflict: conflict,
+        policy: policy,
+        onStatus: (msg) {
+          if (!mounted) return;
+          setState(() => _serverSyncTestMessage = msg);
+        },
+      );
+      await _refreshServerSyncConflicts(silent: true);
+      if (!mounted) return;
+      setState(() {
+        _isResolvingServerSyncConflict = false;
+        _resolvingServerSyncConflictKey = null;
+        _serverSyncTestMessage = result.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isResolvingServerSyncConflict = false;
+        _resolvingServerSyncConflictKey = null;
+        _serverSyncTestMessage = '处理冲突失败：${e.toString().split('\n').first}';
+      });
+    }
+  }
+
+  String _conflictOperationLabel(String operation) {
+    switch (operation) {
+      case 'delete':
+        return '删除冲突';
+      case 'upsert':
+      default:
+        return '更新冲突';
+    }
+  }
+
+  String _conflictStatusLabel(String status) {
+    switch (status) {
+      case 'stale':
+        return '本地版本落后';
+      case 'conflict':
+        return '版本冲突';
+      default:
+        return status;
+    }
+  }
+
+  String _conflictReasonLabel(String? reason) {
+    if (reason == null || reason.trim().isEmpty) return '未知原因';
+    switch (reason) {
+      case 'stale':
+        return '本地版本落后（可选择本地回写）';
+      case 'conflict':
+        return '版本冲突（需选择本地/服务端）';
+      case 'revision_mismatch':
+        return '版本号不匹配';
+      case 'topic_not_found_for_expected_revision':
+        return '服务端版本已变化（目标不存在）';
+      default:
+        return reason;
+    }
+  }
+
+  String _formatConflictTime(int? ms) {
+    if (ms == null || ms <= 0) return '-';
+    return DateTime.fromMillisecondsSinceEpoch(
+      ms,
+    ).toLocal().toString().split('.').first;
+  }
+
   Future<void> _testServerSync() async {
     if (_isTestingServerSync) return;
     setState(() {
       _isTestingServerSync = true;
       _serverSyncTestMessage = '测试中...';
     });
-    await _saveServerSyncConfig();
+    await _saveServerSyncConfig(showToast: false);
 
     try {
       final url = _serverSyncUrlController.text.trim().replaceAll(
         RegExp(r'/+$'),
         '',
       );
+      final token = _serverSyncTokenController.text.trim();
       final resp = await http
-          .get(Uri.parse('$url/health'))
+          .get(
+            Uri.parse(
+              '$url/api/sync/changes?cursor=0&limit=1&includePayload=0',
+            ),
+            headers: {'Authorization': 'Bearer $token'},
+          )
           .timeout(const Duration(seconds: 5));
       if (!mounted) return;
       if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body);
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
         setState(() {
           _isTestingServerSync = false;
-          _serverSyncTestMessage = '连接成功 · ${data['topics'] ?? 0} 个话题';
+          _serverSyncTestMessage =
+              '连接成功 · 认证通过 · 变更条数 ${data['totalChanges'] ?? 0}';
+        });
+      } else if (resp.statusCode == 401 || resp.statusCode == 403) {
+        setState(() {
+          _isTestingServerSync = false;
+          _serverSyncTestMessage = '认证失败：请检查 Token';
         });
       } else {
         setState(() {
@@ -1224,20 +1390,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _isSyncingNow = true;
       _serverSyncTestMessage = '正在同步...';
     });
-    await _saveServerSyncConfig();
+    await _saveServerSyncConfig(showToast: false);
 
     try {
       final service = ServerSyncService(AppDb());
-      final result = await service.incrementalSync(
+      final result = await service.syncNow(
         onStatus: (msg) {
           if (!mounted) return;
           setState(() => _serverSyncTestMessage = msg);
         },
       );
+      await _refreshServerSyncConflicts(silent: true);
       if (!mounted) return;
       setState(() {
         _isSyncingNow = false;
-        _serverSyncTestMessage = '同步完成：+${result.upserted} -${result.deleted}';
+        _serverSyncTestMessage = result.summaryLine;
       });
     } catch (e) {
       if (!mounted) return;
@@ -1265,13 +1432,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '增量同步模式：仅同步新增/更新/删除的话题，无需下载完整备份。启用后其他同步来源将自动关闭。',
+                  '支持增量拉取与推送，可按策略自动处理冲突。启用后其他同步来源将自动关闭。',
                   style: TextStyle(color: Colors.orange[800], fontSize: 13),
                 ),
               ),
             ],
           ),
         ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<ServerSyncMode>(
+          initialValue: _serverSyncMode,
+          decoration: _panelInputDecoration(
+            labelText: '同步模式',
+            prefixIcon: Icons.swap_horiz,
+          ),
+          items: ServerSyncMode.values
+              .map(
+                (mode) =>
+                    DropdownMenuItem(value: mode, child: Text(mode.label)),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => _serverSyncMode = value);
+          },
+        ),
+        if (_serverSyncMode != ServerSyncMode.pullOnly) ...[
+          const SizedBox(height: 12),
+          DropdownButtonFormField<ServerSyncConflictPolicy>(
+            initialValue: _serverSyncConflictPolicy,
+            decoration: _panelInputDecoration(
+              labelText: '冲突策略',
+              prefixIcon: Icons.merge_type,
+            ),
+            items: ServerSyncConflictPolicy.values
+                .map(
+                  (policy) => DropdownMenuItem(
+                    value: policy,
+                    child: Text(policy.label),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _serverSyncConflictPolicy = value);
+            },
+          ),
+        ],
         const SizedBox(height: 12),
         TextField(
           controller: _serverSyncUrlController,
@@ -1307,6 +1514,169 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ],
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.red[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.red[100]!),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber_outlined,
+                    color: Colors.red[700],
+                    size: 18,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '待处理冲突：${_serverSyncPendingConflicts.length}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red[800],
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: _isResolvingServerSyncConflict
+                        ? null
+                        : () => _refreshServerSyncConflicts(),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    tooltip: '刷新冲突列表',
+                  ),
+                  IconButton(
+                    onPressed:
+                        _isResolvingServerSyncConflict ||
+                            _serverSyncPendingConflicts.isEmpty
+                        ? null
+                        : _clearServerSyncConflicts,
+                    icon: const Icon(Icons.clear_all, size: 18),
+                    tooltip: '清空冲突列表',
+                  ),
+                ],
+              ),
+              if (_serverSyncPendingConflicts.isEmpty)
+                Text(
+                  '暂无待手动处理的冲突',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                ),
+              if (_serverSyncPendingConflicts.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                ..._serverSyncPendingConflicts.take(8).map((conflict) {
+                  final key = '${conflict.operation}:${conflict.topicId}';
+                  final busy =
+                      _isResolvingServerSyncConflict &&
+                      _resolvingServerSyncConflictKey == key;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.red[100]!),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          conflict.topicId,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_conflictOperationLabel(conflict.operation)} · ${_conflictStatusLabel(conflict.status)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '原因：${_conflictReasonLabel(conflict.reason)}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '发现于 ${_formatConflictTime(conflict.detectedAt)}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '服务端 revision: ${conflict.serverRevision?.toString() ?? '-'}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '本地更新时间: ${_formatConflictTime(conflict.localUpdatedAt)} · 服务端更新时间: ${_formatConflictTime(conflict.serverUpdatedAt)}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '服务端客户端时间: ${_formatConflictTime(conflict.serverClientUpdatedAt)}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton(
+                              onPressed: busy
+                                  ? null
+                                  : () => _resolveServerSyncConflict(
+                                      conflict,
+                                      ServerSyncConflictPolicy.serverWins,
+                                    ),
+                              child: const Text('服务端优先'),
+                            ),
+                            ElevatedButton(
+                              onPressed: busy
+                                  ? null
+                                  : () => _resolveServerSyncConflict(
+                                      conflict,
+                                      ServerSyncConflictPolicy.localWins,
+                                    ),
+                              child: const Text('本地优先回写'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                if (_serverSyncPendingConflicts.length > 8)
+                  Text(
+                    '仅展示前 8 条冲突，请先处理后再刷新。',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  ),
+              ],
+            ],
+          ),
+        ),
         const SizedBox(height: 12),
         _buildPanelActionRow([
           OutlinedButton.icon(

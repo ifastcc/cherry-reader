@@ -510,7 +510,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_autoServerSyncEnabled) {
       try {
         final service = ServerSyncService(RepositoryProvider.instance.database);
-        await service.incrementalSync(
+        await service.syncNow(
           onStatus: (msg) {
             if (mounted) _syncNotifier.updateDownloadProgress(0, msg);
           },
