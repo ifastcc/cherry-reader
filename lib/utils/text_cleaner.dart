@@ -124,15 +124,23 @@ String cleanMarkdownForDisplay(String text) {
     // 返回开头部分作为 snippet
     final maxLen = (snippetLength * 2).clamp(0, cleanedContent.length);
     return (
-      snippet: cleanedContent.substring(0, maxLen) + (maxLen < cleanedContent.length ? '...' : ''),
+      snippet:
+          cleanedContent.substring(0, maxLen) +
+          (maxLen < cleanedContent.length ? '...' : ''),
       matchStart: 0,
       matchEnd: 0,
     );
   }
 
   // 3. 计算 snippet 范围
-  final snippetStart = (matchIndex - snippetLength).clamp(0, cleanedContent.length);
-  final snippetEnd = (matchIndex + keyword.length + snippetLength).clamp(0, cleanedContent.length);
+  final snippetStart = (matchIndex - snippetLength).clamp(
+    0,
+    cleanedContent.length,
+  );
+  final snippetEnd = (matchIndex + keyword.length + snippetLength).clamp(
+    0,
+    cleanedContent.length,
+  );
 
   var snippet = cleanedContent.substring(snippetStart, snippetEnd);
 
@@ -156,6 +164,7 @@ String cleanMarkdownForDisplay(String text) {
 String fixMarkdownStrongAfterCjkPunctuation(String text) {
   if (text.isEmpty) return text;
   if (!text.contains('**')) return text;
+  const separator = '\u200B';
 
   final opener = RegExp(
     r'([0-9A-Za-z\u4E00-\u9FFF])\*\*(?=[:;,.!?，。！？：；、（）【】《》「」『』、“”‘’…—])',
@@ -173,8 +182,8 @@ String fixMarkdownStrongAfterCjkPunctuation(String text) {
         buffer.write(
           line
               .substring(i)
-              .replaceAllMapped(opener, (m) => '${m.group(1)}<!-- -->**')
-              .replaceAllMapped(closer, (m) => '${m.group(1)}**<!-- -->'),
+              .replaceAllMapped(opener, (m) => '${m.group(1)}$separator**')
+              .replaceAllMapped(closer, (m) => '${m.group(1)}**$separator'),
         );
         break;
       }
@@ -182,12 +191,13 @@ String fixMarkdownStrongAfterCjkPunctuation(String text) {
       buffer.write(
         line
             .substring(i, tickAt)
-            .replaceAllMapped(opener, (m) => '${m.group(1)}<!-- -->**')
-            .replaceAllMapped(closer, (m) => '${m.group(1)}**<!-- -->'),
+            .replaceAllMapped(opener, (m) => '${m.group(1)}$separator**')
+            .replaceAllMapped(closer, (m) => '${m.group(1)}**$separator'),
       );
 
       var run = 1;
-      while (tickAt + run < line.length && line.codeUnitAt(tickAt + run) == 0x60) {
+      while (tickAt + run < line.length &&
+          line.codeUnitAt(tickAt + run) == 0x60) {
         run++;
       }
       final fence = '`' * run;

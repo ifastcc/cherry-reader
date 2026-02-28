@@ -11,9 +11,6 @@ import 'package:file_picker/file_picker.dart';
 import '../services/data_persistence_manager.dart';
 import '../services/webdav_service.dart';
 import '../services/local_folder_sync_service.dart';
-import '../services/lan_http_sync/lan_http_sync_config.dart';
-import '../services/lan_http_sync/lan_http_sync_pull_prefs.dart';
-import '../services/lan_http_sync/lan_http_sync_server_service.dart';
 import '../services/sync/sync_preferences.dart';
 import '../services/sync/sync_source_type.dart';
 import '../services/streaming_tts_service.dart';
@@ -34,9 +31,6 @@ import '../services/insight_service.dart';
 import '../services/perspective_storage.dart';
 import '../models/isar/prompt_template_entity.dart';
 import '../models/isar/perspective_entity.dart';
-import 'lan_transfer_receive_screen.dart';
-import 'lan_transfer_send_screen.dart';
-import 'lan_http_sync_pull_screen.dart';
 import '../services/sync/server_sync_service.dart';
 
 // SharedPreferences 键名常量
@@ -74,21 +68,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _autoWebDavEnabled = false;
   bool _autoLocalFolderEnabled = false;
-  bool _autoLanReceiveEnabled = false;
-  bool _autoHttpPullEnabled = false;
   bool _autoServerSyncEnabled = false;
+  bool _autoManualImportEnabled = false;
 
   final Map<SyncSourceType, bool> _syncSourceExpanded = {};
-  final Map<String, bool> _syncToolExpanded = {};
-
-  late TextEditingController _httpPullBaseUrlController;
-  late TextEditingController _httpPullTokenController;
-  bool _isTestingHttpPull = false;
-  String? _httpPullTestMessage;
 
   // 同步服务器配置
   late TextEditingController _serverSyncUrlController;
   late TextEditingController _serverSyncTokenController;
+  int _serverSyncIntervalSeconds = ServerSyncService.defaultSyncIntervalSeconds;
   bool _isTestingServerSync = false;
   bool _isSyncingNow = false;
   String? _serverSyncTestMessage;
@@ -98,11 +86,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<ServerSyncPendingConflict> _serverSyncPendingConflicts = const [];
   bool _isResolvingServerSyncConflict = false;
   String? _resolvingServerSyncConflictKey;
-
-  LanHttpSyncConfig? _lanHttpSyncConfig;
-  LanHttpSyncServerStatus _lanHttpSyncStatus = const LanHttpSyncStopped();
-  StreamSubscription<LanHttpSyncServerStatus>? _lanHttpSyncStatusSubscription;
-  late TextEditingController _lanHttpSyncPortController;
 
   // TTS 配置
   // late TextEditingController _azureKeyController; // Deprecated: single key
@@ -125,7 +108,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   bool _obscureWebdavPassword = true;
   String _currentViewMode = 'timeline';
-  bool _useWebViewConversation = false; // WebView 版话题详情页开关
 
   @override
   void initState() {
@@ -138,9 +120,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavPasswordController = TextEditingController();
     _webdavPathController = TextEditingController();
     _localFolderPathController = TextEditingController();
-    _httpPullBaseUrlController = TextEditingController();
-    _httpPullTokenController = TextEditingController();
-    _lanHttpSyncPortController = TextEditingController();
     _serverSyncUrlController = TextEditingController();
     _serverSyncTokenController = TextEditingController();
     // _azureKeyController = TextEditingController();
@@ -153,7 +132,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 取消防抖 Timer 并立即保存 TTS 设置
     _ttsSaveTimer?.cancel();
     _saveTtsSettingsSync();
-    _lanHttpSyncStatusSubscription?.cancel();
 
     _apiUrlController.dispose();
     _apiKeyController.dispose();
@@ -163,9 +141,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavPasswordController.dispose();
     _webdavPathController.dispose();
     _localFolderPathController.dispose();
-    _httpPullBaseUrlController.dispose();
-    _httpPullTokenController.dispose();
-    _lanHttpSyncPortController.dispose();
     _serverSyncUrlController.dispose();
     _serverSyncTokenController.dispose();
     // _azureKeyController.dispose();
@@ -252,10 +227,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 加载视图模式
     final viewMode = prefs.getString('home_view_mode') ?? 'timeline';
 
-    // 加载 WebView 话题详情页开关
-    final useWebViewConversation =
-        prefs.getBool('use_webview_conversation') ?? false;
-
     await SyncPreferences.migrateFromLegacyIfNeeded();
     final autoSources = await SyncPreferences.getAutoSources();
 
@@ -265,32 +236,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final localFolderConfig = await LocalFolderSyncService.loadConfig();
     final localFolderAutoLoad = await LocalFolderSyncService.getAutoLoad();
 
-    final httpPullPrefs = await LanHttpSyncPullPrefs.load();
-
     // 加载同步服务器配置
     final serverSyncUrl = await ServerSyncService.getServerUrl();
     final serverSyncToken = await ServerSyncService.getServerToken();
     final serverSyncMode = await ServerSyncService.getSyncMode();
     final serverSyncConflictPolicy =
         await ServerSyncService.getConflictPolicy();
+    final serverSyncIntervalSeconds =
+        await ServerSyncService.getSyncIntervalSeconds();
 
     final webdavConfigured = webdavConfig.isValid;
     final localFolderConfigured = localFolderConfig.folderPath
         .trim()
         .isNotEmpty;
-    final httpPullConfigured =
-        httpPullPrefs.baseUrl.trim().isNotEmpty &&
-        httpPullPrefs.baseUrl.trim() != 'http://';
     final serverSyncConfigured =
         serverSyncUrl.trim().isNotEmpty && serverSyncToken.trim().isNotEmpty;
-
-    LanHttpSyncConfig? lanHttpSyncConfig;
-    LanHttpSyncServerStatus lanHttpSyncStatus = const LanHttpSyncStopped();
-    if (PlatformUtils.isDesktop) {
-      await LanHttpSyncServerService.instance.init();
-      lanHttpSyncConfig = LanHttpSyncServerService.instance.config;
-      lanHttpSyncStatus = LanHttpSyncServerService.instance.currentStatus;
-    }
 
     // 加载 TTS 设置
     final ttsJson = prefs.getString(TtsSettings.prefKey);
@@ -303,48 +263,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() {
       _currentViewMode = viewMode;
-      _useWebViewConversation = useWebViewConversation;
       _apiUrlController.text = apiUrl;
       _apiKeyController.text = apiKey;
       _modelController.text = model;
       _autoWebDavEnabled = autoSources[SyncSourceType.webdav] ?? false;
       _autoLocalFolderEnabled =
           autoSources[SyncSourceType.localFolder] ?? false;
-      _autoLanReceiveEnabled = autoSources[SyncSourceType.lanReceive] ?? false;
-      _autoHttpPullEnabled = autoSources[SyncSourceType.httpPull] ?? false;
       _autoServerSyncEnabled = autoSources[SyncSourceType.serverSync] ?? false;
+      _autoManualImportEnabled =
+          autoSources[SyncSourceType.manualImport] ?? false;
       _webdavUrlController.text = webdavConfig.url;
       _webdavUsernameController.text = webdavConfig.username;
       _webdavPasswordController.text = webdavConfig.password;
       _webdavPathController.text = webdavConfig.path;
       _localFolderPathController.text = localFolderConfig.folderPath;
       _localFolderAutoLoad = localFolderAutoLoad;
-      _httpPullBaseUrlController.text = httpPullPrefs.baseUrl;
-      _httpPullTokenController.text = httpPullPrefs.token;
       _serverSyncUrlController.text = serverSyncUrl;
       _serverSyncTokenController.text = serverSyncToken;
       _serverSyncMode = serverSyncMode;
       _serverSyncConflictPolicy = serverSyncConflictPolicy;
-      _lanHttpSyncConfig = lanHttpSyncConfig;
-      _lanHttpSyncStatus = lanHttpSyncStatus;
-      _lanHttpSyncPortController.text =
-          (lanHttpSyncConfig?.port ?? LanHttpSyncConfig.defaultPort).toString();
+      _serverSyncIntervalSeconds = serverSyncIntervalSeconds;
 
       _syncSourceExpanded[SyncSourceType.webdav] =
           (autoSources[SyncSourceType.webdav] ?? false) && !webdavConfigured;
       _syncSourceExpanded[SyncSourceType.localFolder] =
           (autoSources[SyncSourceType.localFolder] ?? false) &&
           !localFolderConfigured;
-      _syncSourceExpanded[SyncSourceType.httpPull] =
-          (autoSources[SyncSourceType.httpPull] ?? false) &&
-          !httpPullConfigured;
-      _syncSourceExpanded[SyncSourceType.lanReceive] =
-          (autoSources[SyncSourceType.lanReceive] ?? false) == true;
       _syncSourceExpanded[SyncSourceType.serverSync] =
           (autoSources[SyncSourceType.serverSync] ?? false) &&
           !serverSyncConfigured;
-      _syncToolExpanded['httpServer'] =
-          (lanHttpSyncStatus is LanHttpSyncRunning);
+      _syncSourceExpanded[SyncSourceType.manualImport] =
+          (autoSources[SyncSourceType.manualImport] ?? false) == true;
 
       // Load Azure Keys
       _azureKeyControllers.clear();
@@ -369,19 +318,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
 
     await _refreshServerSyncConflicts(silent: true);
-
-    if (PlatformUtils.isDesktop) {
-      _lanHttpSyncStatusSubscription?.cancel();
-      _lanHttpSyncStatusSubscription = LanHttpSyncServerService
-          .instance
-          .statusStream
-          .listen((status) {
-            if (!mounted) return;
-            setState(() {
-              _lanHttpSyncStatus = status;
-            });
-          });
-    }
   }
 
   @override
@@ -407,11 +343,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // ========== 数据与同步 ==========
                   _buildSectionHeader('数据与同步', Icons.cloud_sync_outlined),
                   _buildSyncSettingsSection(),
-                  const SizedBox(height: 24),
-
-                  // ========== 知识管理 ==========
-                  _buildSectionHeader('知识管理', Icons.psychology),
-                  _buildPerspectiveManagementSection(),
                   const SizedBox(height: 24),
 
                   // ========== 智能模型 ==========
@@ -752,25 +683,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 await prefs.setString('home_view_mode', mode);
               },
             ),
-            const Divider(height: 24),
-            // WebView 话题详情页开关
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text(
-                '使用 WebView 话题详情页',
-                style: TextStyle(fontWeight: FontWeight.w500),
-              ),
-              subtitle: Text(
-                '实验性功能：更好的文本选择和高亮体验',
-                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-              ),
-              value: _useWebViewConversation,
-              onChanged: (value) async {
-                setState(() => _useWebViewConversation = value);
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setBool('use_webview_conversation', value);
-              },
-            ),
           ],
         ),
       ),
@@ -789,22 +701,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Divider(height: 1),
             const SizedBox(height: 14),
             const Text(
-              '同步来源（可多选）',
+              '同步来源',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             _buildSyncSourcesCard(),
-            if (PlatformUtils.isDesktop) ...[
-              const SizedBox(height: 14),
-              const Divider(height: 1),
-              const SizedBox(height: 14),
-              const Text(
-                '局域网工具',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              _buildSyncLanToolsCard(),
-            ],
           ],
         ),
       ),
@@ -820,23 +721,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool get _localFolderConfigValid =>
       _localFolderPathController.text.trim().isNotEmpty;
 
-  bool get _httpPullConfigValid {
-    final v = _httpPullBaseUrlController.text.trim();
-    return v.isNotEmpty && v != 'http://';
-  }
-
   bool get _serverSyncConfigValid =>
       _serverSyncUrlController.text.trim().isNotEmpty &&
       _serverSyncTokenController.text.trim().isNotEmpty;
 
   Future<void> _setAutoSource(SyncSourceType type, bool enabled) async {
-    // 互斥逻辑：serverSync 与其他同步源互斥
-    final isServerSync = type == SyncSourceType.serverSync;
-    final otherFileBasedSources = [
+    // 互斥逻辑：
+    // 1) 同步服务器与文件类来源互斥
+    // 2) 手动导入与其他来源互斥（手动模式不会自动更新）
+    final otherSources = [
       SyncSourceType.webdav,
       SyncSourceType.localFolder,
-      SyncSourceType.lanReceive,
-      SyncSourceType.httpPull,
+      SyncSourceType.serverSync,
+      SyncSourceType.manualImport,
     ];
 
     setState(() {
@@ -847,45 +744,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
         case SyncSourceType.localFolder:
           _autoLocalFolderEnabled = enabled;
           break;
-        case SyncSourceType.lanReceive:
-          _autoLanReceiveEnabled = enabled;
-          break;
-        case SyncSourceType.httpPull:
-          _autoHttpPullEnabled = enabled;
-          break;
         case SyncSourceType.serverSync:
           _autoServerSyncEnabled = enabled;
           break;
         case SyncSourceType.manualImport:
+          _autoManualImportEnabled = enabled;
           break;
       }
 
-      // 启用 serverSync 时禁用其他源
-      if (enabled && isServerSync) {
-        _autoWebDavEnabled = false;
-        _autoLocalFolderEnabled = false;
-        _autoLanReceiveEnabled = false;
-        _autoHttpPullEnabled = false;
-      }
-      // 启用其他源时禁用 serverSync
-      if (enabled && !isServerSync && type != SyncSourceType.manualImport) {
-        _autoServerSyncEnabled = false;
+      if (enabled) {
+        if (type == SyncSourceType.serverSync ||
+            type == SyncSourceType.manualImport) {
+          _autoWebDavEnabled = false;
+          _autoLocalFolderEnabled = false;
+          _autoServerSyncEnabled = type == SyncSourceType.serverSync;
+          _autoManualImportEnabled = type == SyncSourceType.manualImport;
+        } else {
+          _autoServerSyncEnabled = false;
+          _autoManualImportEnabled = false;
+        }
       }
     });
 
     await SyncPreferences.setAutoSourceEnabled(type, enabled);
 
     // 持久化互斥状态
-    if (enabled && isServerSync) {
-      for (final other in otherFileBasedSources) {
-        await SyncPreferences.setAutoSourceEnabled(other, false);
+    if (enabled) {
+      if (type == SyncSourceType.serverSync ||
+          type == SyncSourceType.manualImport) {
+        for (final other in otherSources) {
+          if (other == type) continue;
+          await SyncPreferences.setAutoSourceEnabled(other, false);
+        }
+      } else {
+        await SyncPreferences.setAutoSourceEnabled(
+          SyncSourceType.serverSync,
+          false,
+        );
+        await SyncPreferences.setAutoSourceEnabled(
+          SyncSourceType.manualImport,
+          false,
+        );
       }
-    }
-    if (enabled && !isServerSync && type != SyncSourceType.manualImport) {
-      await SyncPreferences.setAutoSourceEnabled(
-        SyncSourceType.serverSync,
-        false,
-      );
     }
 
     if (!mounted) return;
@@ -893,9 +793,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final shouldReveal = switch (type) {
       SyncSourceType.webdav => !_webdavConfigValid,
       SyncSourceType.localFolder => !_localFolderConfigValid,
-      SyncSourceType.httpPull => !_httpPullConfigValid,
       SyncSourceType.serverSync => !_serverSyncConfigValid,
-      SyncSourceType.lanReceive => true,
       SyncSourceType.manualImport => false,
     };
     if (shouldReveal) {
@@ -944,8 +842,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_autoServerSyncEnabled) selected.add('同步服务器');
     if (_autoLocalFolderEnabled) selected.add('本地文件夹');
     if (_autoWebDavEnabled) selected.add('WebDAV');
-    if (_autoHttpPullEnabled) selected.add('HTTP 拉取');
-    if (_autoLanReceiveEnabled) selected.add('局域网接收');
+    if (_autoManualImportEnabled) selected.add('手动导入');
 
     final summary = selected.isEmpty ? '未选择来源' : selected.join(' + ');
 
@@ -964,7 +861,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          '应用会自动按已选来源检查并导入“最新版本”；也可以在首页选择 ZIP 手动导入。',
+          '自动来源会周期性检查更新。手动导入属于静态数据来源，需手动触发导入。',
           style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.4),
         ),
         const SizedBox(height: 10),
@@ -1003,59 +900,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           configured: _localFolderConfigValid,
           body: _buildLocalFolderConfigCard(),
         ),
-      if (PlatformUtils.isMobile)
-        _buildSyncSourceItem(
-          type: SyncSourceType.httpPull,
-          icon: Icons.download_outlined,
-          description: '从桌面端 HTTP 同步源下载最新备份',
-          enabled: _autoHttpPullEnabled,
-          configured: _httpPullConfigValid,
-          body: _buildHttpPullConfigCard(),
-        ),
-      if (PlatformUtils.isMobile)
-        _buildSyncSourceItem(
-          type: SyncSourceType.lanReceive,
-          icon: Icons.wifi_tethering_outlined,
-          description: '接收电脑推送的备份 ZIP',
-          enabled: _autoLanReceiveEnabled,
-          configured: true,
-          body: _buildLanReceiveSourceCard(),
-        ),
-    ];
-
-    final children = <Widget>[];
-    for (var i = 0; i < items.length; i++) {
-      if (i > 0) children.add(const Divider(height: 1));
-      children.add(items[i]);
-    }
-
-    return Column(children: children);
-  }
-
-  Widget _buildSyncLanToolsCard() {
-    final items = <Widget>[
-      _buildSyncToolItem(
-        id: 'httpServer',
-        icon: Icons.router_outlined,
-        title: 'HTTP 同步源（桌面端）',
-        subtitle: () {
-          final status = _lanHttpSyncStatus;
-          final isRunning = status is LanHttpSyncRunning;
-          final port = isRunning
-              ? status.port
-              : (_lanHttpSyncConfig?.port ?? LanHttpSyncConfig.defaultPort);
-          return isRunning ? '运行中：$port' : '未运行';
-        }(),
-        body: _buildLanHttpSyncServerCard(),
-      ),
-      _buildSyncToolItem(
-        id: 'lanPush',
-        icon: Icons.send_outlined,
-        title: '局域网推送',
-        subtitle: PlatformUtils.isDesktop
-            ? '桌面端推送 / HTTP 同步源'
-            : '手机端接收 / HTTP 拉取',
-        body: _buildLanSyncSection(),
+      _buildSyncSourceItem(
+        type: SyncSourceType.manualImport,
+        icon: Icons.upload_file_outlined,
+        description: '手动选择 ZIP/JSON/Markdown 文件作为数据来源（不会自动更新）',
+        enabled: _autoManualImportEnabled,
+        configured: true,
+        body: _buildManualImportSourceCard(),
       ),
     ];
 
@@ -1133,54 +984,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildSyncToolItem({
-    required String id,
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required Widget body,
-  }) {
-    final expanded = _syncToolExpanded[id] ?? false;
-    return Column(
-      children: [
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 2,
-          ),
-          leading: Icon(icon, color: Colors.grey[700]),
-          title: Text(
-            title,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(
-            subtitle,
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey[600],
-              height: 1.35,
-            ),
-          ),
-          trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
-          onTap: () {
-            setState(() => _syncToolExpanded[id] = !expanded);
-          },
-        ),
-        AnimatedCrossFade(
-          firstChild: const SizedBox.shrink(),
-          secondChild: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: body,
-          ),
-          crossFadeState: expanded
-              ? CrossFadeState.showSecond
-              : CrossFadeState.showFirst,
-          duration: const Duration(milliseconds: 200),
-        ),
-      ],
-    );
-  }
-
   Future<void> _saveServerSyncConfig({bool showToast = true}) async {
     await ServerSyncService.saveConfig(
       serverUrl: _serverSyncUrlController.text.trim(),
@@ -1189,6 +992,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await ServerSyncService.saveSyncBehavior(
       mode: _serverSyncMode,
       conflictPolicy: _serverSyncConflictPolicy,
+      intervalSeconds: _serverSyncIntervalSeconds,
     );
     await _refreshServerSyncConflicts(silent: true);
     if (!showToast || !mounted) return;
@@ -1415,6 +1219,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  static String _formatServerSyncIntervalLabel(int seconds) {
+    if (seconds < 60) return '$seconds 秒';
+    if (seconds % 3600 == 0) return '${seconds ~/ 3600} 小时';
+    if (seconds % 60 == 0) return '${seconds ~/ 60} 分钟';
+    return '$seconds 秒';
+  }
+
   Widget _buildServerSyncConfigCard() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1479,6 +1290,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
         ],
+        const SizedBox(height: 12),
+        DropdownButtonFormField<int>(
+          initialValue: _serverSyncIntervalSeconds,
+          decoration: _panelInputDecoration(
+            labelText: '自动同步间隔',
+            prefixIcon: Icons.schedule_outlined,
+          ),
+          items: const [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600]
+              .map(
+                (seconds) => DropdownMenuItem(
+                  value: seconds,
+                  child: Text(_formatServerSyncIntervalLabel(seconds)),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value == null) return;
+            setState(() => _serverSyncIntervalSeconds = value);
+          },
+        ),
         const SizedBox(height: 12),
         TextField(
           controller: _serverSyncUrlController,
@@ -1877,515 +1708,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _saveHttpPullPrefs() async {
-    await LanHttpSyncPullPrefs.save(
-      baseUrl: _httpPullBaseUrlController.text,
-      token: _httpPullTokenController.text,
-    );
-  }
-
-  Future<void> _testHttpPull() async {
-    if (_isTestingHttpPull) return;
-    setState(() {
-      _isTestingHttpPull = true;
-      _httpPullTestMessage = '测试中...';
-    });
-    await _saveHttpPullPrefs();
-
-    final info = await LanHttpSyncPullPrefs.fetchLatestInfo(
-      baseUrl: _httpPullBaseUrlController.text,
-      token: _httpPullTokenController.text,
-    );
-
-    if (!mounted) return;
-    setState(() {
-      _isTestingHttpPull = false;
-      _httpPullTestMessage = info == null
-          ? '不可用：请检查地址、令牌、网络'
-          : '可用：${info.name} · ${(info.size / 1024 / 1024).toStringAsFixed(1)}MB';
-    });
-  }
-
-  Future<void> _importHttpPullFromClipboard() async {
-    final data = await Clipboard.getData('text/plain');
-    final raw = data?.text ?? '';
-    final parsed = LanHttpSyncPullPrefs.parseImportText(raw);
-    if (parsed == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('剪贴板内容不可识别：请复制桌面端“导入串/下载地址”'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
-    _httpPullBaseUrlController.text = parsed.baseUrl;
-    _httpPullTokenController.text = parsed.token;
-    await _saveHttpPullPrefs();
-
-    if (!mounted) return;
-    setState(() => _httpPullTestMessage = null);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已从剪贴板导入'), duration: Duration(seconds: 2)),
-    );
-  }
-
-  Widget _buildHttpPullConfigCard() {
+  Widget _buildManualImportSourceCard() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '适合不方便用 WebDAV 时：桌面端开启同步源，手机端通过 HTTP 下载最新备份。',
-          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _httpPullBaseUrlController,
-          decoration: _panelInputDecoration(
-            labelText: '桌面端地址',
-            hintText: 'http://192.168.1.10:9531',
-            prefixIcon: Icons.link,
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.amber[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.amber[100]!),
           ),
-          onChanged: (_) => _saveHttpPullPrefs(),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _httpPullTokenController,
-          decoration: _panelInputDecoration(
-            labelText: '令牌（可选）',
-            prefixIcon: Icons.key,
-          ),
-          onChanged: (_) => _saveHttpPullPrefs(),
-        ),
-        const SizedBox(height: 12),
-        _buildPanelActionRow([
-          OutlinedButton.icon(
-            onPressed: _importHttpPullFromClipboard,
-            icon: const Icon(Icons.content_paste),
-            label: const Text('从剪贴板导入'),
-          ),
-          OutlinedButton.icon(
-            onPressed: _isTestingHttpPull ? null : _testHttpPull,
-            icon: _isTestingHttpPull
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.wifi_find),
-            label: Text(_isTestingHttpPull ? '测试中...' : '测试连接'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () async {
-              await _saveHttpPullPrefs();
-              if (!mounted) return;
-              await Navigator.push<void>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const LanHttpSyncPullScreen(),
-                ),
-              );
-            },
-            icon: const Icon(Icons.download),
-            label: const Text('打开下载页'),
-          ),
-        ]),
-        if (_httpPullTestMessage != null) ...[
-          const SizedBox(height: 10),
-          Text(
-            _httpPullTestMessage!,
-            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildLanReceiveSourceCard() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '电脑端可扫描并推送备份 ZIP 到手机；手机端需要打开接收页。',
-          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
-        ),
-        const SizedBox(height: 12),
-        _buildPanelActionRow([
-          OutlinedButton.icon(
-            onPressed: () async {
-              final received = await Navigator.push<bool>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const LanTransferReceiveScreen(),
-                ),
-              );
-              if (!mounted) return;
-              if (received == true) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('✅ 已接收备份文件，返回首页后点右上角“同步”导入'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-                Navigator.of(context).pop();
-                return;
-              }
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('保持接收页打开，发送完成后返回首页可导入（右上角“同步”）'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-            icon: const Icon(Icons.wifi_tethering_outlined),
-            label: const Text('打开接收页'),
-          ),
-        ]),
-      ],
-    );
-  }
-
-  Future<void> _applyLanHttpSyncConfig(LanHttpSyncConfig next) async {
-    await LanHttpSyncServerService.instance.updateConfig(next);
-    if (!PlatformUtils.isDesktop) return;
-
-    if (!next.enabled) {
-      await LanHttpSyncServerService.instance.stop();
-      return;
-    }
-    if (LanHttpSyncServerService.instance.currentStatus is LanHttpSyncRunning) {
-      await LanHttpSyncServerService.instance.restart(port: next.port);
-    } else {
-      await LanHttpSyncServerService.instance.start(port: next.port);
-    }
-  }
-
-  Widget _buildLanHttpSyncServerCard() {
-    final cfg = _lanHttpSyncConfig;
-    final status = _lanHttpSyncStatus;
-    final isRunning = status is LanHttpSyncRunning;
-    final enabled = cfg?.enabled ?? false;
-    final addresses = isRunning ? status.addresses : const <String>[];
-    final port = isRunning
-        ? status.port
-        : (cfg?.port ?? LanHttpSyncConfig.defaultPort);
-    final token = cfg?.token ?? '';
-    final preferredAddress = addresses.isEmpty
-        ? null
-        : addresses.firstWhere(
-            (e) => !(e.startsWith('127.') || e == 'localhost'),
-            orElse: () => addresses.first,
-          );
-    final preferredBaseUrl = preferredAddress == null
-        ? ''
-        : 'http://$preferredAddress:$port';
-    final importText = preferredBaseUrl.isEmpty
-        ? ''
-        : LanHttpSyncPullPrefs.buildImportString(
-            baseUrl: preferredBaseUrl,
-            token: token,
-          );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('运行 HTTP 同步源'),
-          subtitle: Text(
-            !enabled
-                ? '已关闭'
-                : (status is LanHttpSyncRunning)
-                ? '运行中：$port'
-                : (status is LanHttpSyncError)
-                ? '启动失败：${status.message}'
-                : '启动中...',
-            style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-          ),
-          value: enabled,
-          onChanged: (value) async {
-            final current = _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
-            final next = current.copyWith(enabled: value, autoStart: value);
-            setState(() => _lanHttpSyncConfig = next);
-            await _applyLanHttpSyncConfig(next);
-          },
-        ),
-        Text(
-          '打开开关即启动 HTTP 服务；手机端可通过「HTTP 拉取」下载最新备份。',
-          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
-        ),
-        const SizedBox(height: 12),
-        const Divider(height: 24),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _lanHttpSyncPortController,
-                decoration: _panelInputDecoration(
-                  labelText: '端口',
-                  prefixIcon: Icons.numbers,
-                ),
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              ),
-            ),
-            const SizedBox(width: 12),
-            ElevatedButton(
-              onPressed: () async {
-                final raw = _lanHttpSyncPortController.text.trim();
-                final nextPort = int.tryParse(raw);
-                if (nextPort == null || nextPort <= 0 || nextPort > 65535)
-                  return;
-                final current =
-                    _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
-                final next = current.copyWith(port: nextPort);
-                setState(() => _lanHttpSyncConfig = next);
-                await _applyLanHttpSyncConfig(next);
-              },
-              child: const Text('保存端口'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(
-          token.isEmpty ? '令牌：无' : '令牌：$token',
-          style: TextStyle(fontSize: 12, color: Colors.grey[800]),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 10),
-        _buildPanelActionRow([
-          OutlinedButton.icon(
-            onPressed: token.isEmpty
-                ? null
-                : () async {
-                    await Clipboard.setData(ClipboardData(text: token));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('已复制令牌'),
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  },
-            icon: const Icon(Icons.copy),
-            label: const Text('复制令牌'),
-          ),
-          TextButton.icon(
-            onPressed: () async {
-              final current =
-                  _lanHttpSyncConfig ?? LanHttpSyncConfig.defaults();
-              final next = current.copyWith(
-                token: LanHttpSyncConfig.generateToken(),
-              );
-              setState(() => _lanHttpSyncConfig = next);
-              await _applyLanHttpSyncConfig(next);
-            },
-            icon: const Icon(Icons.refresh),
-            label: const Text('重置令牌'),
-          ),
-        ]),
-        if (addresses.isNotEmpty) ...[
-          const Divider(height: 24),
-          Text(
-            '当前 URL',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
+          child: Row(
             children: [
+              Icon(Icons.info_outline, color: Colors.amber[800], size: 18),
+              const SizedBox(width: 8),
               Expanded(
-                child: SelectableText(
-                  preferredBaseUrl,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+                child: Text(
+                  '手动导入属于静态数据来源：启用后会关闭其他来源，数据仅在你手动导入时更新。',
+                  style: TextStyle(fontSize: 12, color: Colors.amber[900]),
                 ),
-              ),
-              IconButton(
-                onPressed: preferredBaseUrl.isEmpty
-                    ? null
-                    : () async {
-                        await Clipboard.setData(
-                          ClipboardData(text: preferredBaseUrl),
-                        );
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('已复制 URL'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                      },
-                icon: const Icon(Icons.copy),
-                tooltip: '复制',
               ),
             ],
           ),
-          if (importText.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Text(
-              '导入串（复制到手机端「HTTP 拉取」即可一键导入）',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[700],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: SelectableText(
-                    importText,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[800]),
-                  ),
-                ),
-                IconButton(
-                  onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: importText));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('已复制导入串'),
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.copy),
-                  tooltip: '复制',
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 10),
-          Text(
-            '下载地址',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(height: 8),
-          ...addresses.map((addr) {
-            final url = 'http://$addr:$port/lan-sync/latest.zip';
-            final withToken = token.isEmpty ? url : '$url?token=$token';
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: SelectableText(
-                      withToken,
-                      style: TextStyle(fontSize: 12, color: Colors.grey[800]),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: withToken));
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('已复制下载地址'),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.copy),
-                    tooltip: '复制',
-                  ),
-                ],
-              ),
-            );
-          }),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildLanSyncSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          PlatformUtils.isDesktop
-              ? '桌面端可扫描手机并推送备份；手机端需要打开接收页。'
-              : '手机端需要保持接收页打开，电脑端才能发现并发送备份。',
-          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.3),
         ),
-        const SizedBox(height: 12),
-        if (PlatformUtils.isMobile) ...[
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.wifi_tethering_outlined),
-            title: const Text('手机端：打开接收页'),
-            subtitle: Text(
-              '打开后电脑端即可发现并发送备份 ZIP',
-              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () async {
-              final received = await Navigator.push<bool>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const LanTransferReceiveScreen(),
-                ),
-              );
-              if (!mounted) return;
-              if (received == true) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('✅ 已接收备份文件，返回首页后点右上角“同步”导入'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-                Navigator.of(context).pop();
-                return;
-              }
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('保持接收页打开，发送完成后返回首页可导入（右上角“同步”）'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-          ),
-        ] else ...[
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.send_outlined),
-            title: const Text('桌面端：扫描并推送到手机'),
-            subtitle: Text(
-              '选择备份来源（WebDAV/本地目录/手动 ZIP）→ 推送到手机',
-              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () async {
-              await Navigator.push<void>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const LanTransferSendScreen(),
-                ),
-              );
-            },
-          ),
-          const Divider(height: 24),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.wifi_tethering_outlined),
-            title: const Text('移动端：需要打开接收页'),
-            subtitle: Text(
-              '在手机上：设置 → 数据与同步 → 局域网同步工具 → 手机端：打开接收页',
-              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-            ),
-            trailing: const Icon(Icons.info_outline),
-            onTap: null,
-          ),
-        ],
+        const SizedBox(height: 10),
+        Text(
+          '使用方式：在首页点击“同步”，选择 ZIP/JSON/Markdown 文件进行导入。',
+          style: TextStyle(fontSize: 12, color: Colors.grey[600], height: 1.35),
+        ),
       ],
     );
   }

@@ -17,8 +17,6 @@ class SyncPreferences {
   static const Map<String, bool> _defaultAutoSources = {
     'webdav': false,
     'localFolder': false,
-    'lanReceive': false,
-    'httpPull': false,
     'serverSync': false,
     'manualImport': false,
   };

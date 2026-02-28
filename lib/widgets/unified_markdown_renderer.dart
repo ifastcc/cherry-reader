@@ -32,11 +32,11 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
 
   /// 是否支持独立滚动
   final bool scrollable;
-  
+
   /// 【性能优化】虚拟化阈值（字符数）
   /// 超过此阈值时启用增量渲染优化
   final int virtualizeThreshold;
-  
+
   /// 【性能优化】是否启用虚拟化
   /// 设为 true 时，长内容会分块渲染
   final bool enableVirtualization;
@@ -57,38 +57,51 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? const Color(0xFFE8E8E8) : const Color(0xFF1A1A2E);
-    final normalizedData = fixMarkdownStrongAfterCjkPunctuation(data);
-    
+    final textColor = isDark
+        ? const Color(0xFFE8E8E8)
+        : const Color(0xFF1A1A2E);
+    final sanitizedData = data
+        .replaceAll('<!-- -->', '')
+        .replaceAll('<!---->', '');
+    final normalizedData = fixMarkdownStrongAfterCjkPunctuation(sanitizedData);
+
     // 创建自定义主题 - Cherry Studio 风格
     final themeData = _buildThemeData(context, isDark, textColor);
 
     // 默认的正文样式 - Cherry Studio 风格
-    final bodyColor = isDark ? const Color(0xFFD4D4D4) : const Color(0xFF374151);
-    final defaultTextStyle = textStyle ?? TextStyle(
-      fontSize: largeFont ? 17 : 14,
-      height: 1.6, // Cherry Studio 的 line-height: 1.6
-      color: bodyColor,
-      letterSpacing: 0.1,
-    );
-    
+    final bodyColor = isDark
+        ? const Color(0xFFD4D4D4)
+        : const Color(0xFF374151);
+    final defaultTextStyle =
+        textStyle ??
+        TextStyle(
+          fontSize: largeFont ? 17 : 14,
+          height: 1.6, // Cherry Studio 的 line-height: 1.6
+          color: bodyColor,
+          letterSpacing: 0.1,
+        );
+
     // 【性能优化】长内容虚拟化渲染
-    final shouldVirtualize = enableVirtualization && 
-                              normalizedData.length > virtualizeThreshold;
+    final shouldVirtualize =
+        enableVirtualization && normalizedData.length > virtualizeThreshold;
 
     Widget markdownWidget;
-    
+
     if (shouldVirtualize) {
       // 长内容：使用增量渲染
       markdownWidget = _buildVirtualizedContent(
-        context, 
+        context,
         normalizedData,
-        themeData, 
+        themeData,
         defaultTextStyle,
       );
     } else {
       // 短内容：直接渲染
-      markdownWidget = _buildDirectContent(normalizedData, themeData, defaultTextStyle);
+      markdownWidget = _buildDirectContent(
+        normalizedData,
+        themeData,
+        defaultTextStyle,
+      );
     }
 
     // 根据 scrollable 和 padding 包装
@@ -102,11 +115,11 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
 
     return markdownWidget;
   }
-  
+
   /// 构建主题数据
   GptMarkdownThemeData _buildThemeData(
-    BuildContext context, 
-    bool isDark, 
+    BuildContext context,
+    bool isDark,
     Color textColor,
   ) {
     return GptMarkdownThemeData(
@@ -150,15 +163,15 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
       ),
       // 【关键】分割线更细更透明
       hrLineThickness: 0.5,
-      hrLineColor: isDark 
-          ? Colors.white.withValues(alpha: 0.15) 
+      hrLineColor: isDark
+          ? Colors.white.withValues(alpha: 0.15)
           : Colors.black.withValues(alpha: 0.08),
       linkColor: const Color(0xFF3B82F6),
       // 默认高亮颜色
       highlightColor: const Color(0xFFFBC02D),
     );
   }
-  
+
   /// 直接渲染（短内容）
   Widget _buildDirectContent(
     String markdown,
@@ -178,9 +191,9 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
       ),
     );
   }
-  
+
   /// 【性能优化】虚拟化渲染（长内容）
-  /// 
+  ///
   /// 策略：将长内容分成多个段落，使用 RepaintBoundary 隔离重绘
   Widget _buildVirtualizedContent(
     BuildContext context,
@@ -190,7 +203,7 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
   ) {
     // 按段落分割（使用双换行作为分隔符）
     final chunks = _splitIntoChunks(markdown);
-    
+
     return GptMarkdownTheme(
       gptThemeData: themeData,
       child: Column(
@@ -211,19 +224,19 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
       ),
     );
   }
-  
+
   /// 将内容分割成块
-  /// 
+  ///
   /// 按双换行或特定标记分割，保持语义完整性
   List<String> _splitIntoChunks(String content) {
     // 按双换行分割（Markdown 段落边界）
     final paragraphs = content.split(RegExp(r'\n\n+'));
-    
+
     // 合并小段落，避免过多碎片
     final chunks = <String>[];
     final buffer = StringBuffer();
     const maxChunkSize = 2000; // 每块最大字符数
-    
+
     for (final para in paragraphs) {
       if (buffer.length + para.length > maxChunkSize && buffer.isNotEmpty) {
         chunks.add(buffer.toString().trim());
@@ -232,11 +245,11 @@ class UnifiedMarkdownRenderer extends StatelessWidget {
       buffer.write(para);
       buffer.write('\n\n');
     }
-    
+
     if (buffer.isNotEmpty) {
       chunks.add(buffer.toString().trim());
     }
-    
+
     return chunks.isEmpty ? [content] : chunks;
   }
 }

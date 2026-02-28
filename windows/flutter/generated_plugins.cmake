@@ -3,10 +3,8 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  bonsoir_windows
   connectivity_plus
   file_selector_windows
-  flutter_inappwebview_windows
   sqlite3_flutter_libs
   url_launcher_windows
 )

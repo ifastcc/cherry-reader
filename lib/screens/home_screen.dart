@@ -23,7 +23,6 @@ import '../models/computed_timeline.dart';
 import 'conversation_screen.dart';
 import 'settings_screen.dart';
 import 'search_screen.dart';
-import 'insight_screen.dart';
 import 'package:intl/intl.dart';
 import '../widgets/status_badge.dart';
 import '../widgets/topic_card.dart';
@@ -77,10 +76,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isInitializing = false; // 防止 _initAndLoad 并发
   bool _autoWebDavEnabled = false;
   bool _autoLocalFolderEnabled = false;
-  bool _autoHttpPullEnabled = false;
-  bool _autoLanReceiveEnabled = false;
   bool _autoServerSyncEnabled = false;
+  bool _autoManualImportEnabled = false;
   StreamSubscription<SyncCandidate>? _syncCandidateSubscription;
+  Timer? _serverSyncTimer;
 
   // 视图模式（默认为时间线）
   HomeViewMode _viewMode = HomeViewMode.timeline;
@@ -154,6 +153,18 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             : HomeViewMode.tree;
       });
     }
+  }
+
+  Future<void> _setViewMode(HomeViewMode mode) async {
+    if (_viewMode == mode) return;
+    setState(() {
+      _viewMode = mode;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'home_view_mode',
+      mode == HomeViewMode.timeline ? 'timeline' : 'tree',
+    );
   }
 
   Future<void> _refreshFromDatabase({bool showLoading = false}) async {
@@ -325,6 +336,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _syncCandidateSubscription?.cancel();
+    _serverSyncTimer?.cancel();
     unawaited(SyncCoordinator.instance.stopWatchingLocalFolder());
     _skeletonTimer?.cancel();
     _syncNotifier.dispose();
@@ -352,18 +364,16 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final prevAutoWebDavEnabled = _autoWebDavEnabled;
       final prevAutoLocalFolderEnabled = _autoLocalFolderEnabled;
-      final prevAutoHttpPullEnabled = _autoHttpPullEnabled;
-      final prevAutoLanReceiveEnabled = _autoLanReceiveEnabled;
       final prevAutoServerSyncEnabled = _autoServerSyncEnabled;
+      final prevAutoManualImportEnabled = _autoManualImportEnabled;
 
       await SyncPreferences.migrateFromLegacyIfNeeded();
       final sources = await SyncPreferences.getAutoSources();
 
       _autoWebDavEnabled = sources[SyncSourceType.webdav] ?? false;
       _autoLocalFolderEnabled = sources[SyncSourceType.localFolder] ?? false;
-      _autoHttpPullEnabled = sources[SyncSourceType.httpPull] ?? false;
-      _autoLanReceiveEnabled = sources[SyncSourceType.lanReceive] ?? false;
       _autoServerSyncEnabled = sources[SyncSourceType.serverSync] ?? false;
+      _autoManualImportEnabled = sources[SyncSourceType.manualImport] ?? false;
 
       final webdavConfig = await WebDavService.loadConfig();
       _hasValidWebDavConfig = webdavConfig.isValid;
@@ -371,13 +381,13 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _hasValidLocalFolderConfig = localConfig.isValid;
 
       await SyncCoordinator.instance.startWatchingLocalFolderIfEnabled();
+      await _restartServerSyncTimer();
 
       final settingsChanged =
           prevAutoWebDavEnabled != _autoWebDavEnabled ||
           prevAutoLocalFolderEnabled != _autoLocalFolderEnabled ||
-          prevAutoHttpPullEnabled != _autoHttpPullEnabled ||
           prevAutoServerSyncEnabled != _autoServerSyncEnabled ||
-          prevAutoLanReceiveEnabled != _autoLanReceiveEnabled;
+          prevAutoManualImportEnabled != _autoManualImportEnabled;
 
       // 如果正在同步，只更新配置状态
       if (_isSyncing) {
@@ -405,9 +415,23 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _autoLoadData() async {
     await _refreshFromDatabase(showLoading: !widget.embedMode);
-    if (_hasAnySyncSourceSelected) {
+    if (_hasAnyAutoSyncSourceSelected) {
       _syncFromEnabledSources();
     }
+  }
+
+  Future<void> _restartServerSyncTimer() async {
+    _serverSyncTimer?.cancel();
+    _serverSyncTimer = null;
+
+    if (!_autoServerSyncEnabled) return;
+
+    final intervalSeconds = await ServerSyncService.getSyncIntervalSeconds();
+    final duration = Duration(seconds: intervalSeconds);
+    _serverSyncTimer = Timer.periodic(duration, (_) {
+      if (!mounted || _isSyncing || !_autoServerSyncEnabled) return;
+      unawaited(_syncFromEnabledSources(force: false));
+    });
   }
 
   Future<void> _rebuildTopicIndexSafely() async {
@@ -422,13 +446,14 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final enabled = <String>[];
     if (_autoLocalFolderEnabled) enabled.add('文件夹');
     if (_autoWebDavEnabled) enabled.add('WebDAV');
-    if (_autoHttpPullEnabled) enabled.add('HTTP');
-    if (_autoLanReceiveEnabled) enabled.add('局域网接收');
     if (_autoServerSyncEnabled) enabled.add('Cherry Sync');
+    if (_autoManualImportEnabled) enabled.add('手动导入');
     return enabled;
   }
 
   bool get _hasAnySyncSourceSelected => _selectedSourceLabels.isNotEmpty;
+  bool get _hasAnyAutoSyncSourceSelected =>
+      _autoLocalFolderEnabled || _autoWebDavEnabled || _autoServerSyncEnabled;
 
   String get _syncModeLabel {
     final enabled = _selectedSourceLabels;
@@ -499,6 +524,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _syncFromEnabledSources({bool force = false}) async {
     if (_isSyncing) return;
     if (!_hasAnySyncSourceSelected) return;
+    if (_autoManualImportEnabled) {
+      await _pickAndLoadFile();
+      return;
+    }
 
     _isSyncing = true;
     _statusError = null;
@@ -521,11 +550,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
         await _refreshFromDatabase();
         await _rebuildTopicIndexSafely();
-        final keepPrimaryZip =
-            _autoWebDavEnabled ||
-            _autoLocalFolderEnabled ||
-            _autoHttpPullEnabled ||
-            _autoLanReceiveEnabled;
+        final keepPrimaryZip = _autoWebDavEnabled || _autoLocalFolderEnabled;
         await DataPersistenceManager.pruneBackupArtifacts(
           keepPrimary: keepPrimaryZip,
         );
@@ -952,51 +977,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _pickAndLoadFolder() async {
-    String? initialDirectory;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final lastDir = prefs.getString('last_opened_directory');
-      if (lastDir != null && await Directory(lastDir).exists()) {
-        initialDirectory = lastDir;
-      } else {
-        initialDirectory =
-            Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
-      }
-    } catch (e) {
-      initialDirectory = null;
-    }
-
-    final folderPath = await FilePicker.platform.getDirectoryPath(
-      initialDirectory: initialDirectory,
-      dialogTitle: '选择导入目录',
-    );
-    if (folderPath == null || folderPath.isEmpty) return;
-
-    setState(() {
-      _isLoading = true;
-      _statusError = null;
-    });
-
-    try {
-      debugPrint('📂 用户选择的目录: $folderPath');
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('last_opened_directory', folderPath);
-      } catch (e) {
-        debugPrint('保存目录失败: $e');
-      }
-
-      await _loadFile(folderPath, saveCache: true);
-    } catch (e) {
-      setState(() {
-        _statusError = '目录导入失败: $e';
-        _isLoading = false;
-      });
-      debugPrint('目录导入失败: $e');
-    }
-  }
-
   /// 加载指定文件
   /// [silent] 为 true 时静默加载，不显示加载动画
   Future<bool> _loadFile(
@@ -1077,7 +1057,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('未选择同步来源：请在设置里选择来源，或手动导入 ZIP'),
+        content: Text('未选择同步来源：请在设置里启用一个来源'),
         duration: Duration(seconds: 2),
       ),
     );
@@ -1117,22 +1097,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 },
               ),
               const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.upload_file_outlined),
-                title: const Text('选择 ZIP/JSON/MD 导入'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickAndLoadFile();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.folder_open),
-                title: const Text('选择目录导入'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickAndLoadFolder();
-                },
-              ),
               const SizedBox(height: 12),
             ],
           ),
@@ -1145,11 +1109,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void handleMainAction() {
     if (_topicIndex == null) {
       _pickAndLoadFile();
-    } else if (_topicIndex != null) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const InsightScreen()),
-      );
+    } else {
+      unawaited(_showSyncActionsSheet());
     }
   }
 
@@ -1258,6 +1219,28 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   );
                 },
           tooltip: '搜索',
+        ),
+
+        PopupMenuButton<HomeViewMode>(
+          tooltip: '视图模式',
+          icon: Icon(
+            _viewMode == HomeViewMode.tree
+                ? Icons.account_tree
+                : Icons.timeline,
+          ),
+          onSelected: _isLoading ? null : _setViewMode,
+          itemBuilder: (context) => [
+            CheckedPopupMenuItem<HomeViewMode>(
+              value: HomeViewMode.tree,
+              checked: _viewMode == HomeViewMode.tree,
+              child: const Text('按助手分组'),
+            ),
+            CheckedPopupMenuItem<HomeViewMode>(
+              value: HomeViewMode.timeline,
+              checked: _viewMode == HomeViewMode.timeline,
+              child: const Text('按时间线'),
+            ),
+          ],
         ),
 
         // 设置按钮
@@ -1483,8 +1466,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ...topics.map((topic) {
                 final topicName = topic['name'] as String? ?? '未命名话题';
                 final topicId = topic['id'] as String;
-                final messageCount = topic['messageCount'] as int? ?? 0;
                 final roundCount = topic['roundCount'] as int? ?? 0;
+                final updatedAt = _parseUpdatedAt(topic['updatedAt']);
+                final lastModifiedText = updatedAt != null
+                    ? _formatRelativeLastModified(updatedAt)
+                    : '未知时间';
 
                 return ListTile(
                   contentPadding: const EdgeInsets.symmetric(
@@ -1492,7 +1478,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     vertical: 4,
                   ),
                   title: Text(topicName),
-                  subtitle: Text('$roundCount 轮对话，$messageCount 条消息'),
+                  subtitle: Text('$roundCount 轮 · $lastModifiedText'),
                   trailing: const Icon(Icons.chevron_right, size: 16),
                   onTap: () => _openTopic(topicId, topicName),
                 );
@@ -1760,6 +1746,24 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
   }
 
+  /// 分组视图中的时间显示（相对时间格式）
+  String _formatRelativeLastModified(DateTime dt) {
+    final group = _getTimeGroup(dt);
+    final timeStr = DateFormat('HH:mm').format(dt);
+    final now = DateTime.now();
+    final isThisYear = dt.year == now.year;
+
+    return switch (group) {
+      TimeGroup.today => '今天 $timeStr',
+      TimeGroup.yesterday => '昨天 $timeStr',
+      TimeGroup.thisWeek => '本周 ${_getWeekdayName(dt.weekday)} $timeStr',
+      TimeGroup.earlier =>
+        isThisYear
+            ? DateFormat('MM-dd HH:mm').format(dt)
+            : DateFormat('yyyy-MM-dd HH:mm').format(dt),
+    };
+  }
+
   /// 获取星期名称
   String _getWeekdayName(int weekday) {
     const names = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -1872,7 +1876,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               !_hasValidLocalFolderConfig))
                       ? '配置同步来源'
                       : '暂无数据'
-                : '选择数据文件',
+                : '先配置同步来源',
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
           ),
 
@@ -1886,7 +1890,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               !_hasValidLocalFolderConfig))
                       ? '先在设置页补全同步来源配置'
                       : '点击下方按钮同步并导入最新备份'
-                : '导入 Cherry Studio 导出的 ZIP 或 JSON 文件',
+                : '在设置页选择同步来源（可选手动导入）',
             style: TextStyle(
               color: Colors.grey[600],
               fontSize: 15,
@@ -1934,7 +1938,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
           ] else ...[
-            // 手动模式，提示使用浮动按钮
+            // 未配置来源时，引导去设置
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -1948,7 +1952,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Icon(Icons.touch_app, color: Colors.blue[700], size: 20),
                   const SizedBox(width: 12),
                   Text(
-                    '点击右上角“同步”导入文件',
+                    '点击右上角“设置”选择同步来源',
                     style: TextStyle(color: Colors.blue[800], fontSize: 14),
                   ),
                 ],
@@ -2011,14 +2015,26 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ] else if (!_hasAnySyncSourceSelected) ...[
             _buildGuideStep(
               number: '1',
-              title: '导出 Cherry Studio 数据',
-              description: '在 Cherry Studio 中：设置 → 数据设置 → 导出菜单设置',
+              title: '进入设置页',
+              description: '打开本应用「设置 → 数据与同步」',
             ),
             const SizedBox(height: 12),
             _buildGuideStep(
               number: '2',
-              title: '导入到本应用',
-              description: '首页右上角“同步” → 手动：选择文件导入',
+              title: '选择同步来源',
+              description: '可选 Cherry Sync / WebDAV / 本地文件夹 / 手动导入',
+            ),
+          ] else if (_autoManualImportEnabled) ...[
+            _buildGuideStep(
+              number: '1',
+              title: '准备导出文件',
+              description: '从 Cherry Studio 导出 ZIP/JSON/Markdown 文件',
+            ),
+            const SizedBox(height: 12),
+            _buildGuideStep(
+              number: '2',
+              title: '手动触发导入',
+              description: '点击上方“同步”并选择导出文件',
             ),
           ] else ...[
             _buildGuideStep(
@@ -2049,7 +2065,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '去设置选择并配置同步来源（WebDAV / 本地文件夹 / HTTP）',
+                    '去设置选择并配置同步来源（Cherry Sync / WebDAV / 本地文件夹 / 手动导入）',
                     style: TextStyle(color: Colors.grey[600], fontSize: 13),
                   ),
                 ),

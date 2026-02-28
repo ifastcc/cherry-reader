@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../lan_http_sync/lan_http_sync_pull_prefs.dart';
 import '../local_folder_sync_service.dart';
 import '../webdav_service.dart';
 import 'sync_candidate.dart';
@@ -102,18 +101,6 @@ class SyncCoordinator {
 
     bool enabled(SyncSourceType type) => enabledTypes.contains(type);
 
-    if (enabled(SyncSourceType.lanReceive)) {
-      final inbox = await SyncPreferences.getInboxCandidate(
-        SyncSourceType.lanReceive,
-      );
-      if (inbox != null && inbox.remoteId.isNotEmpty) {
-        final f = File(inbox.remoteId);
-        if (await f.exists()) {
-          out.add(inbox);
-        }
-      }
-    }
-
     if (enabled(SyncSourceType.webdav)) {
       final config = await WebDavService.loadConfig();
       if (!config.isValid) {
@@ -152,37 +139,6 @@ class SyncCoordinator {
             ),
           );
         }
-      }
-    }
-
-    if (enabled(SyncSourceType.httpPull)) {
-      final inbox = await SyncPreferences.getInboxCandidate(
-        SyncSourceType.httpPull,
-      );
-      if (inbox != null && inbox.remoteId.isNotEmpty) {
-        final f = File(inbox.remoteId);
-        if (await f.exists()) {
-          out.add(inbox);
-        }
-      }
-
-      final prefs = await LanHttpSyncPullPrefs.load();
-      final info = await LanHttpSyncPullPrefs.fetchLatestInfo(
-        baseUrl: prefs.baseUrl,
-        token: prefs.token,
-      );
-      if (info == null) {
-        warnings.add('HTTP 同步源不可用或未配置');
-      } else {
-        out.add(
-          SyncCandidate(
-            sourceType: SyncSourceType.httpPull,
-            name: info.name,
-            remoteId: LanHttpSyncPullPrefs.buildDownloadUrl(prefs.baseUrl),
-            size: info.size,
-            modifiedAt: info.modifiedAt,
-          ),
-        );
       }
     }
 
@@ -271,22 +227,6 @@ class SyncCoordinator {
             size: candidate.size,
             modifiedTime: candidate.modifiedAt,
           ),
-        );
-      case SyncSourceType.lanReceive:
-        if (candidate.remoteId.isEmpty) return null;
-        final f = File(candidate.remoteId);
-        if (await f.exists()) return candidate.remoteId;
-        return null;
-      case SyncSourceType.httpPull:
-        final asFile = File(candidate.remoteId);
-        if (await asFile.exists()) {
-          return candidate.remoteId;
-        }
-        final prefs = await LanHttpSyncPullPrefs.load();
-        return LanHttpSyncPullPrefs.downloadLatestToAppData(
-          baseUrl: prefs.baseUrl,
-          token: prefs.token,
-          onProgress: onWebDavProgress,
         );
       case SyncSourceType.serverSync:
         // serverSync 走独立的增量同步流程（ServerSyncService.incrementalSync）

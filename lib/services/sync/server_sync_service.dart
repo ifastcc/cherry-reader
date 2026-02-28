@@ -263,10 +263,17 @@ class ServerSyncService {
   static const String _serverTokenKey = 'server_sync_token';
   static const String _syncModeKey = 'server_sync_mode';
   static const String _conflictPolicyKey = 'server_sync_conflict_policy';
+  static const String _syncIntervalSecondsKey = 'server_sync_interval_seconds';
+  // 旧版本字段（分钟）保留用于迁移
+  static const String _syncIntervalMinutesLegacyKey =
+      'server_sync_interval_minutes';
   static const String _pendingConflictsKeyPrefix =
       'server_sync_pending_conflicts';
   static const String _pushSnapshotKeyPrefix = 'server_sync_push_topic_ids';
   static const Duration _requestTimeout = Duration(seconds: 15);
+  static const int defaultSyncIntervalSeconds = 30 * 60;
+  static const int minSyncIntervalSeconds = 5;
+  static const int maxSyncIntervalSeconds = 24 * 60 * 60;
   static const int _changePageSize = 200;
   static const int _topicWriteBatchSize = 20;
   static const int _topicDeleteBatchSize = 100;
@@ -314,13 +321,41 @@ class ServerSyncService {
     return ServerSyncConflictPolicy.fromId(prefs.getString(_conflictPolicyKey));
   }
 
+  static Future<int> getSyncIntervalSeconds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawSeconds = prefs.getInt(_syncIntervalSecondsKey);
+    if (rawSeconds != null) {
+      return rawSeconds.clamp(minSyncIntervalSeconds, maxSyncIntervalSeconds);
+    }
+
+    // 兼容旧版本：分钟字段迁移为秒
+    final rawMinutes = prefs.getInt(_syncIntervalMinutesLegacyKey);
+    if (rawMinutes != null) {
+      final migratedSeconds = (rawMinutes.clamp(5, 1440) * 60).clamp(
+        minSyncIntervalSeconds,
+        maxSyncIntervalSeconds,
+      );
+      await prefs.setInt(_syncIntervalSecondsKey, migratedSeconds);
+      return migratedSeconds;
+    }
+
+    return defaultSyncIntervalSeconds;
+  }
+
   static Future<void> saveSyncBehavior({
     required ServerSyncMode mode,
     required ServerSyncConflictPolicy conflictPolicy,
+    int? intervalSeconds,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_syncModeKey, mode.id);
     await prefs.setString(_conflictPolicyKey, conflictPolicy.id);
+    if (intervalSeconds != null) {
+      await prefs.setInt(
+        _syncIntervalSecondsKey,
+        intervalSeconds.clamp(minSyncIntervalSeconds, maxSyncIntervalSeconds),
+      );
+    }
   }
 
   Future<List<ServerSyncPendingConflict>> getPendingConflicts() async {
