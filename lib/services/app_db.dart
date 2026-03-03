@@ -763,6 +763,29 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
     return rows.map(_toUnifiedConversation).toList();
   }
 
+  Future<Map<String, int>> getUnifiedConversationCountsByContextIds(
+    List<String> contextIds,
+  ) async {
+    if (contextIds.isEmpty) return {};
+    final d = userDb;
+    final placeholders = List.filled(contextIds.length, '?').join(', ');
+    final vars = contextIds.map((id) => Variable<String>(id)).toList();
+    final rows = await d.customSelect('''
+SELECT context_id AS contextId, COUNT(*) AS cnt
+FROM unified_conversations
+WHERE context_id IN ($placeholders)
+GROUP BY context_id
+''', variables: vars).get();
+
+    final out = <String, int>{};
+    for (final row in rows) {
+      final contextId = row.read<String>('contextId');
+      final count = row.read<int>('cnt');
+      out[contextId] = count;
+    }
+    return out;
+  }
+
   Future<List<UnifiedConversationEntity>> getUnifiedConversationsByTopicPrefix(
     String topicId,
   ) async {
@@ -1133,6 +1156,30 @@ ORDER BY mb.message_id ASC, mb.order_index ASC
               ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
             .get();
     return rows.map(_toKnowledgeEntry).toList();
+  }
+
+  Future<Map<String, List<KnowledgeEntry>>> getKnowledgeEntriesByMessages(
+    List<String> messageIds,
+  ) async {
+    if (messageIds.isEmpty) return const <String, List<KnowledgeEntry>>{};
+
+    final d = userDb;
+    final rows =
+        await (d.select(d.knowledgeEntries)
+              ..where((t) => t.messageId.isIn(messageIds))
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.messageId),
+                (t) => OrderingTerm.desc(t.createdAt),
+              ]))
+            .get();
+
+    final grouped = <String, List<KnowledgeEntry>>{};
+    for (final row in rows) {
+      final messageId = row.messageId;
+      if (messageId == null || messageId.isEmpty) continue;
+      grouped.putIfAbsent(messageId, () => []).add(_toKnowledgeEntry(row));
+    }
+    return grouped;
   }
 
   Stream<List<KnowledgeEntry>> watchKnowledgeEntriesByMessage(

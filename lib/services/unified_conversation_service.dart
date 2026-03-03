@@ -82,15 +82,21 @@ void _logContextStructure({
 
   final buffer = StringBuffer();
   buffer.writeln('');
-  buffer.writeln('╔══════════════════════════════════════════════════════════════════');
+  buffer.writeln(
+    '╔══════════════════════════════════════════════════════════════════',
+  );
   buffer.writeln('║ 📋 对话结构与选择情况（通过内容匹配验证）');
-  buffer.writeln('╠══════════════════════════════════════════════════════════════════');
+  buffer.writeln(
+    '╠══════════════════════════════════════════════════════════════════',
+  );
   buffer.writeln('║ 话题共 ${rounds.length} 轮对话');
   if (currentRoundIndex != null) {
     buffer.writeln('║ 初始轮次索引: $currentRoundIndex');
   }
   buffer.writeln('║ 实际发送内容长度: ${_formatCharCount(snapshot.length)}字');
-  buffer.writeln('╠══════════════════════════════════════════════════════════════════');
+  buffer.writeln(
+    '╠══════════════════════════════════════════════════════════════════',
+  );
 
   int totalSelectedChars = 0;
   int totalSelectedReplies = 0;
@@ -107,8 +113,8 @@ void _logContextStructure({
     final questionLen = questionText.length;
 
     // 通过字符串匹配判断问题是否被选中
-    final isQuestionSelected = questionText.isNotEmpty &&
-        _isContentInSnapshot(questionText, snapshot);
+    final isQuestionSelected =
+        questionText.isNotEmpty && _isContentInSnapshot(questionText, snapshot);
 
     buffer.writeln('║');
 
@@ -120,7 +126,9 @@ void _logContextStructure({
     final questionPreview = questionText.length > 50
         ? '${questionText.substring(0, 50).replaceAll('\n', ' ')}...'
         : questionText.replaceAll('\n', ' ');
-    buffer.writeln('║   Q: "$questionPreview" (${_formatCharCount(questionLen)}字)$questionMark');
+    buffer.writeln(
+      '║   Q: "$questionPreview" (${_formatCharCount(questionLen)}字)$questionMark',
+    );
 
     if (isQuestionSelected) {
       totalSelectedChars += questionLen;
@@ -141,15 +149,16 @@ void _logContextStructure({
       final replyLen = replyText.length;
 
       // 通过字符串匹配判断回复是否被选中
-      final isReplySelected = replyText.isNotEmpty &&
-          _isContentInSnapshot(replyText, snapshot);
+      final isReplySelected =
+          replyText.isNotEmpty && _isContentInSnapshot(replyText, snapshot);
 
       // 构建标记
       final usefulMark = useful ? ' ← 主线' : '';
       final selectedMark = isReplySelected ? ' ✓' : '';
 
       buffer.writeln(
-          '║     [$j] $modelName (${_formatCharCount(replyLen)}字) useful=$useful$usefulMark$selectedMark');
+        '║     [$j] $modelName (${_formatCharCount(replyLen)}字) useful=$useful$usefulMark$selectedMark',
+      );
 
       if (isReplySelected) {
         totalSelectedChars += replyLen;
@@ -159,9 +168,12 @@ void _logContextStructure({
   }
 
   buffer.writeln('║');
-  buffer.writeln('╠══════════════════════════════════════════════════════════════════');
   buffer.writeln(
-      '║ 匹配结果: $totalSelectedQuestions 问 + $totalSelectedReplies 回复 ≈ ${_formatCharCount(totalSelectedChars)}字');
+    '╠══════════════════════════════════════════════════════════════════',
+  );
+  buffer.writeln(
+    '║ 匹配结果: $totalSelectedQuestions 问 + $totalSelectedReplies 回复 ≈ ${_formatCharCount(totalSelectedChars)}字',
+  );
 
   // 验证：匹配的字符数应该与 snapshot 长度接近
   final snapshotLen = snapshot.length;
@@ -169,16 +181,22 @@ void _logContextStructure({
     // snapshot 包含格式化标记（## 用户问题、### 模型名 等），所以会比纯内容长
     final ratio = totalSelectedChars / snapshotLen;
     if (ratio < 0.5) {
-      buffer.writeln('║ ⚠️ 警告: 匹配内容(${_formatCharCount(totalSelectedChars)}) 明显少于发送内容(${_formatCharCount(snapshotLen)})');
+      buffer.writeln(
+        '║ ⚠️ 警告: 匹配内容(${_formatCharCount(totalSelectedChars)}) 明显少于发送内容(${_formatCharCount(snapshotLen)})',
+      );
       buffer.writeln('║    可能有内容未被识别，请检查实际发送的消息');
     } else if (ratio > 1.5) {
-      buffer.writeln('║ ⚠️ 警告: 匹配内容(${_formatCharCount(totalSelectedChars)}) 明显多于发送内容(${_formatCharCount(snapshotLen)})');
+      buffer.writeln(
+        '║ ⚠️ 警告: 匹配内容(${_formatCharCount(totalSelectedChars)}) 明显多于发送内容(${_formatCharCount(snapshotLen)})',
+      );
       buffer.writeln('║    可能是匹配算法误判，请检查实际发送的消息');
     } else {
       buffer.writeln('║ ✅ 匹配验证通过');
     }
   }
-  buffer.writeln('╚══════════════════════════════════════════════════════════════════');
+  buffer.writeln(
+    '╚══════════════════════════════════════════════════════════════════',
+  );
 
   _printLog(buffer.toString(), 'CONTEXT_STRUCTURE');
 }
@@ -208,7 +226,9 @@ bool _isContentInSnapshot(String content, String snapshot) {
   if (cleanContent.length > 100) {
     final head = cleanContent.substring(0, 50);
     final tail = cleanContent.substring(cleanContent.length - 50);
-    if (cleanSnapshot.contains(head) && cleanSnapshot.contains(tail)) return true;
+    if (cleanSnapshot.contains(head) && cleanSnapshot.contains(tail)) {
+      return true;
+    }
   }
 
   // 策略4：对于短内容，直接匹配
@@ -230,10 +250,16 @@ void _logAIRequest({
 
   final buffer = StringBuffer();
   buffer.writeln('');
-  buffer.writeln('╔══════════════════════════════════════════════════════════════════');
+  buffer.writeln(
+    '╔══════════════════════════════════════════════════════════════════',
+  );
   buffer.writeln('║ 🚀 实际发送给 AI 的消息');
-  buffer.writeln('╠══════════════════════════════════════════════════════════════════');
-  buffer.writeln('║ 对话ID: ${conversationId.length > 8 ? conversationId.substring(0, 8) : conversationId}...');
+  buffer.writeln(
+    '╠══════════════════════════════════════════════════════════════════',
+  );
+  buffer.writeln(
+    '║ 对话ID: ${conversationId.length > 8 ? conversationId.substring(0, 8) : conversationId}...',
+  );
   buffer.writeln('║ 上下文类型: ${contextType.name}');
   buffer.writeln('║ 目标模型: $modelId');
   buffer.writeln('║ 消息数量: ${messages.length}');
@@ -244,7 +270,9 @@ void _logAIRequest({
     totalChars += (msg['content'] ?? '').length;
   }
   buffer.writeln('║ 总字符数: ${_formatCharCount(totalChars)}');
-  buffer.writeln('╠══════════════════════════════════════════════════════════════════');
+  buffer.writeln(
+    '╠══════════════════════════════════════════════════════════════════',
+  );
 
   for (var i = 0; i < messages.length; i++) {
     final msg = messages[i];
@@ -274,7 +302,9 @@ void _logAIRequest({
     }
 
     buffer.writeln('║');
-    buffer.writeln('║ [$i] $roleIcon $roleLabel (${_formatCharCount(charCount)}字)');
+    buffer.writeln(
+      '║ [$i] $roleIcon $roleLabel (${_formatCharCount(charCount)}字)',
+    );
     buffer.writeln('║ ─────────────────────────────────────────────');
 
     // 截断并缩进显示内容
@@ -282,13 +312,17 @@ void _logAIRequest({
     final lines = truncated.split('\n');
     for (final line in lines) {
       // 每行最多显示 75 字符
-      final displayLine = line.length > 75 ? '${line.substring(0, 75)}...' : line;
+      final displayLine = line.length > 75
+          ? '${line.substring(0, 75)}...'
+          : line;
       buffer.writeln('║   $displayLine');
     }
   }
 
   buffer.writeln('║');
-  buffer.writeln('╚══════════════════════════════════════════════════════════════════');
+  buffer.writeln(
+    '╚══════════════════════════════════════════════════════════════════',
+  );
 
   _printLog(buffer.toString(), 'AI_REQUEST');
 }
@@ -388,7 +422,9 @@ class UnifiedConversationService {
   Future<List<UnifiedConversationEntity>> getConversationsByContext(
     String contextId,
   ) async {
-    final conversations = await _db.getUnifiedConversationsByContextId(contextId);
+    final conversations = await _db.getUnifiedConversationsByContextId(
+      contextId,
+    );
     // 修复旧数据：如果 roundCount 为 0 但有消息，重新计算
     for (final conv in conversations) {
       if (conv.roundCount == 0 && conv.messageCount > 0) {
@@ -402,21 +438,7 @@ class UnifiedConversationService {
   /// 批量获取讨论数量
   Future<Map<String, int>> getDiscussionCounts(List<String> contextIds) async {
     if (contextIds.isEmpty) return {};
-
-    final counts = <String, int>{};
-    
-    // 1. 批量查询所有相关对话
-    final conversations = await _db.getUnifiedConversationsByContextIds(contextIds);
-
-    // 2. 在内存中分组统计
-    for (final conv in conversations) {
-      final contextId = conv.contextId;
-      if (contextId.isNotEmpty) {
-        counts[contextId] = (counts[contextId] ?? 0) + 1;
-      }
-    }
-
-    return counts;
+    return _db.getUnifiedConversationCountsByContextIds(contextIds);
   }
 
   /// 获取同一话题下所有轮次的对话列表
@@ -425,7 +447,9 @@ class UnifiedConversationService {
   Future<List<UnifiedConversationEntity>> getConversationsByTopicPrefix(
     String topicId,
   ) async {
-    final conversations = await _db.getUnifiedConversationsByTopicPrefix(topicId);
+    final conversations = await _db.getUnifiedConversationsByTopicPrefix(
+      topicId,
+    );
     // 修复旧数据
     for (final conv in conversations) {
       if (conv.roundCount == 0 && conv.messageCount > 0) {
@@ -449,7 +473,9 @@ class UnifiedConversationService {
 
   /// 删除所有对话
   Future<int> deleteAllConversations() async {
-    final conversations = await _db.getUnifiedConversations(includeArchived: true);
+    final conversations = await _db.getUnifiedConversations(
+      includeArchived: true,
+    );
     for (final conv in conversations) {
       await _db.deleteUnifiedConversation(conv.conversationId);
     }
@@ -462,7 +488,9 @@ class UnifiedConversationService {
   /// 注意：即使对话有系统消息（contextSnapshot），但没有用户消息也视为空对话
   /// 返回删除的对话数量
   Future<int> deleteEmptyConversations() async {
-    final conversations = await _db.getUnifiedConversations(includeArchived: true);
+    final conversations = await _db.getUnifiedConversations(
+      includeArchived: true,
+    );
     int deletedCount = 0;
 
     for (final conv in conversations) {
@@ -478,7 +506,9 @@ class UnifiedConversationService {
 
   /// 获取空对话数量（用于 UI 显示）
   Future<int> getEmptyConversationCount() async {
-    final conversations = await _db.getUnifiedConversations(includeArchived: true);
+    final conversations = await _db.getUnifiedConversations(
+      includeArchived: true,
+    );
     return conversations.where((c) => c.roundCount == 0).length;
   }
 
@@ -505,24 +535,17 @@ class UnifiedConversationService {
   // ============ 消息管理 ============
 
   /// 获取对话的所有消息
-  Future<List<UnifiedMessageEntity>> getMessages(
-    String conversationId,
-  ) async {
+  Future<List<UnifiedMessageEntity>> getMessages(String conversationId) async {
     return _db.getUnifiedMessages(conversationId);
   }
 
   /// 监听对话消息变化
-  Stream<List<UnifiedMessageEntity>> watchMessages(
-    String conversationId,
-  ) {
+  Stream<List<UnifiedMessageEntity>> watchMessages(String conversationId) {
     return _db.watchUnifiedMessages(conversationId);
   }
 
   /// 添加用户消息
-  Future<String> addUserMessage(
-    String conversationId,
-    String content,
-  ) async {
+  Future<String> addUserMessage(String conversationId, String content) async {
     final messageId = _uuid.v4();
     final message = UnifiedMessageEntity.createUserMessage(
       messageId: messageId,
@@ -574,7 +597,7 @@ class UnifiedConversationService {
   ///
   /// 返回 (conversationId, userMessageId)
   Future<({String conversationId, String userMessageId})>
-      createConversationAndAddUserMessage({
+  createConversationAndAddUserMessage({
     String? conversationId,
     ConversationConfig? conversationConfig,
     String? templateId,
@@ -740,7 +763,7 @@ class UnifiedConversationService {
       modelId: modelId,
       modelName: model.name,
       askId: askId,
-      isMainline: false,  // 追加的回复不是主线
+      isMainline: false, // 追加的回复不是主线
       status: 'streaming',
     );
     await _db.saveUnifiedMessage(assistantMessage);
@@ -845,7 +868,8 @@ class UnifiedConversationService {
   /// 返回一个 Record：(Stream<String> stream, Future<String> conversationId)
   /// - stream: AI 回复的流
   /// - conversationId: 创建或使用的对话 ID（在流开始前即可获取）
-  ({Stream<String> stream, String conversationId}) sendStructuredMessageAndStreamWithLazyCreate({
+  ({Stream<String> stream, String conversationId})
+  sendStructuredMessageAndStreamWithLazyCreate({
     String? conversationId,
     ConversationConfig? conversationConfig,
     String? templateId,
@@ -981,7 +1005,7 @@ class UnifiedConversationService {
     yield* _streamAIResponse(
       conversationId,
       message.content,
-      userMessageId: userMessageId,  // 传递用户消息 ID 用于设置 askId
+      userMessageId: userMessageId, // 传递用户消息 ID 用于设置 askId
       debugContextData: debugContextData,
       debugContextSnapshot: contextContent,
     );
@@ -1001,7 +1025,7 @@ class UnifiedConversationService {
     yield* _streamAIResponse(
       conversationId,
       userContent,
-      userMessageId: userMessageId,  // 传递用户消息 ID 用于设置 askId
+      userMessageId: userMessageId, // 传递用户消息 ID 用于设置 askId
     );
   }
 
@@ -1024,8 +1048,8 @@ class UnifiedConversationService {
     }
 
     // 2. 获取用户偏好（System Prompt）
-    final preference =
-        await PromptTemplateService.instance.getActivePreference();
+    final preference = await PromptTemplateService.instance
+        .getActivePreference();
 
     // 3. 获取对话及消息
     final conversation = await _db.getUnifiedConversation(conversationId);
@@ -1034,10 +1058,7 @@ class UnifiedConversationService {
 
     // 添加 System Prompt（如果有）
     if (preference != null && preference.systemPrompt.isNotEmpty) {
-      apiMessages.add({
-        'role': 'system',
-        'content': preference.systemPrompt,
-      });
+      apiMessages.add({'role': 'system', 'content': preference.systemPrompt});
     }
 
     // 4. 根据上下文类型构建要发送给模型的消息
@@ -1050,10 +1071,7 @@ class UnifiedConversationService {
       // 4.1 上下文快照（原始对话的内容，作为参考）
       final snapshot = conversation?.contextSnapshot;
       if (snapshot != null && snapshot.isNotEmpty) {
-        apiMessages.add({
-          'role': 'user',
-          'content': snapshot,
-        });
+        apiMessages.add({'role': 'user', 'content': snapshot});
       }
 
       // 4.2 添加完整的对话历史（跳过 system 消息，因为 snapshot 已经包含了）
@@ -1102,18 +1120,12 @@ class UnifiedConversationService {
               'content': buffer.isEmpty ? m.content : buffer.toString(),
             });
           } else {
-            apiMessages.add({
-              'role': 'user',
-              'content': m.content,
-            });
+            apiMessages.add({'role': 'user', 'content': m.content});
           }
         } else if (m.role == 'assistant') {
           // assistant 消息：只添加主线消息
           if (m.askId == null || mainlineAssistantIds.contains(m.messageId)) {
-            apiMessages.add({
-              'role': 'assistant',
-              'content': m.content,
-            });
+            apiMessages.add({'role': 'assistant', 'content': m.content});
           }
         }
       }
@@ -1147,23 +1159,14 @@ class UnifiedConversationService {
       for (final m in messages) {
         if (m.role == 'system') {
           // 系统消息作为 user 消息发送（上下文）
-          apiMessages.add({
-            'role': 'user',
-            'content': m.content,
-          });
+          apiMessages.add({'role': 'user', 'content': m.content});
         } else if (m.role == 'user') {
           // 用户消息直接添加
-          apiMessages.add({
-            'role': 'user',
-            'content': m.content,
-          });
+          apiMessages.add({'role': 'user', 'content': m.content});
         } else if (m.role == 'assistant') {
           // assistant 消息：只添加主线消息
           if (m.askId == null || mainlineAssistantIds.contains(m.messageId)) {
-            apiMessages.add({
-              'role': 'assistant',
-              'content': m.content,
-            });
+            apiMessages.add({'role': 'assistant', 'content': m.content});
           }
           // 非主线消息跳过
         }
@@ -1173,7 +1176,8 @@ class UnifiedConversationService {
     // 📝 打印对话结构日志（如果有原始数据）
     if (debugContextData != null) {
       // 优先使用传入的 snapshot，否则尝试从 conversation 获取
-      final snapshotForLog = debugContextSnapshot ?? conversation?.contextSnapshot;
+      final snapshotForLog =
+          debugContextSnapshot ?? conversation?.contextSnapshot;
       _logContextStructure(
         contextData: debugContextData,
         contextSnapshot: snapshotForLog,
@@ -1207,7 +1211,7 @@ class UnifiedConversationService {
       modelId: config.modelId,
       modelName: config.modelId,
       askId: effectiveAskId,
-      isMainline: true,  // 第一个回复默认是主线
+      isMainline: true, // 第一个回复默认是主线
       status: 'streaming',
     );
     await _db.saveUnifiedMessage(assistantMessage);
@@ -1358,7 +1362,9 @@ class UnifiedConversationService {
     final allMessages = await getMessages(conversationId);
 
     // 找到用户消息的位置
-    final userMessageIndex = allMessages.indexWhere((m) => m.messageId == askId);
+    final userMessageIndex = allMessages.indexWhere(
+      (m) => m.messageId == askId,
+    );
     if (userMessageIndex == -1) {
       throw Exception('找不到关联的用户消息');
     }
@@ -1370,12 +1376,10 @@ class UnifiedConversationService {
     final apiMessages = <Map<String, String>>[];
 
     // 添加 System Prompt（如果有）
-    final preference = await PromptTemplateService.instance.getActivePreference();
+    final preference = await PromptTemplateService.instance
+        .getActivePreference();
     if (preference != null && preference.systemPrompt.isNotEmpty) {
-      apiMessages.add({
-        'role': 'system',
-        'content': preference.systemPrompt,
-      });
+      apiMessages.add({'role': 'system', 'content': preference.systemPrompt});
     }
 
     // 按 askId 分组找出主线消息
@@ -1441,20 +1445,12 @@ class UnifiedConversationService {
         yield chunk;
 
         // 更新数据库
-        await updateMessageContent(
-          messageId,
-          fullContent,
-          status: 'streaming',
-        );
+        await updateMessageContent(messageId, fullContent, status: 'streaming');
       }
 
       // 完成
       session.complete();
-      await updateMessageContent(
-        messageId,
-        fullContent,
-        status: 'completed',
-      );
+      await updateMessageContent(messageId, fullContent, status: 'completed');
     } catch (e) {
       // 错误处理
       session.setError(e.toString());
@@ -1490,9 +1486,9 @@ class UnifiedConversationService {
 
     // 2. 获取同组的所有消息
     final allMessages = await getMessages(message.conversationId);
-    final sameGroupMessages = allMessages.where(
-      (m) => m.role == 'assistant' && m.askId == message.askId,
-    ).toList();
+    final sameGroupMessages = allMessages
+        .where((m) => m.role == 'assistant' && m.askId == message.askId)
+        .toList();
 
     // 3. 批量更新：取消其他消息的主线状态，设置新主线
     for (final m in sameGroupMessages) {
@@ -1529,9 +1525,9 @@ class UnifiedConversationService {
     // 3. 如果删除的是主线消息，需要选出新的主线
     if (wasMainline && askId != null) {
       final allMessages = await getMessages(conversationId);
-      final remainingGroup = allMessages.where(
-        (m) => m.role == 'assistant' && m.askId == askId,
-      ).toList();
+      final remainingGroup = allMessages
+          .where((m) => m.role == 'assistant' && m.askId == askId)
+          .toList();
 
       // 如果还有剩余消息，将第一个设为主线
       if (remainingGroup.isNotEmpty) {

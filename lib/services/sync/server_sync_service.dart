@@ -70,6 +70,8 @@ class ServerPushResult {
 class ServerSyncResult {
   final int pulledUpserted;
   final int pulledDeleted;
+  final Set<String> pulledUpsertedTopicIds;
+  final Set<String> pulledDeletedTopicIds;
   final ServerPushResult push;
   final ServerSyncMode mode;
   final ServerSyncConflictPolicy conflictPolicy;
@@ -77,6 +79,8 @@ class ServerSyncResult {
   const ServerSyncResult({
     required this.pulledUpserted,
     required this.pulledDeleted,
+    required this.pulledUpsertedTopicIds,
+    required this.pulledDeletedTopicIds,
     required this.push,
     required this.mode,
     required this.conflictPolicy,
@@ -269,7 +273,12 @@ class ServerSyncService {
       'server_sync_interval_minutes';
   static const String _pendingConflictsKeyPrefix =
       'server_sync_pending_conflicts';
+  // 仅用于旧版本 SharedPreferences 快照迁移。
   static const String _pushSnapshotKeyPrefix = 'server_sync_push_topic_ids';
+  // 仅用于旧版本 SharedPreferences 快照迁移。
+  static const String _pushSnapshotVersionKeyPrefix =
+      'server_sync_push_topic_versions';
+  static const String _pushSnapshotTable = 'server_sync_topic_snapshots';
   static const Duration _requestTimeout = Duration(seconds: 15);
   static const int defaultSyncIntervalSeconds = 30 * 60;
   static const int minSyncIntervalSeconds = 5;
@@ -277,6 +286,8 @@ class ServerSyncService {
   static const int _changePageSize = 200;
   static const int _topicWriteBatchSize = 20;
   static const int _topicDeleteBatchSize = 100;
+  static final Map<String, Map<String, int>>
+  _pushTopicVersionsSnapshotMemoryCache = {};
 
   final AppDb _appDb;
 
@@ -412,6 +423,8 @@ class ServerSyncService {
 
     var pulledUpserted = 0;
     var pulledDeleted = 0;
+    final pulledUpsertedTopicIds = <String>{};
+    final pulledDeletedTopicIds = <String>{};
     var pushResult = const ServerPushResult.zero();
 
     final preferLocalFirst =
@@ -426,6 +439,8 @@ class ServerSyncService {
       );
       pulledUpserted += pulled.upserted;
       pulledDeleted += pulled.deleted;
+      pulledUpsertedTopicIds.addAll(pulled.upsertedTopicIds);
+      pulledDeletedTopicIds.addAll(pulled.deletedTopicIds);
     }
 
     if (mode != ServerSyncMode.pullOnly) {
@@ -446,11 +461,15 @@ class ServerSyncService {
       );
       pulledUpserted += pulled.upserted;
       pulledDeleted += pulled.deleted;
+      pulledUpsertedTopicIds.addAll(pulled.upsertedTopicIds);
+      pulledDeletedTopicIds.addAll(pulled.deletedTopicIds);
     }
 
     final result = ServerSyncResult(
       pulledUpserted: pulledUpserted,
       pulledDeleted: pulledDeleted,
+      pulledUpsertedTopicIds: pulledUpsertedTopicIds,
+      pulledDeletedTopicIds: pulledDeletedTopicIds,
       push: pushResult,
       mode: mode,
       conflictPolicy: conflictPolicy,
@@ -521,17 +540,15 @@ class ServerSyncService {
         );
       }
 
-      final snap = _readPushedTopicIdsSnapshot(
-        prefs,
+      final versionSnap = await _readPushedTopicVersionsSnapshot(
         serverUrl: config.serverUrl,
         token: config.token,
       );
-      snap.remove(conflict.topicId);
-      await _writePushedTopicIdsSnapshot(
-        prefs,
+      versionSnap.remove(conflict.topicId);
+      await _writePushedTopicVersionsSnapshot(
         serverUrl: config.serverUrl,
         token: config.token,
-        topicIds: snap,
+        topicVersions: versionSnap,
       );
       map.remove(key);
       await _writePendingConflicts(
@@ -571,17 +588,18 @@ class ServerSyncService {
       );
     }
 
-    final snap = _readPushedTopicIdsSnapshot(
-      prefs,
+    final versionSnap = await _readPushedTopicVersionsSnapshot(
       serverUrl: config.serverUrl,
       token: config.token,
     );
-    snap.add(conflict.topicId);
-    await _writePushedTopicIdsSnapshot(
-      prefs,
+    final localUpdatedAt = _toOptionalInt(topic['updatedAt']);
+    if (localUpdatedAt != null) {
+      versionSnap[conflict.topicId] = localUpdatedAt;
+    }
+    await _writePushedTopicVersionsSnapshot(
       serverUrl: config.serverUrl,
       token: config.token,
-      topicIds: snap,
+      topicVersions: versionSnap,
     );
     map.remove(key);
     await _writePendingConflicts(
@@ -606,11 +624,12 @@ class ServerSyncService {
     final config = await _resolveConfig();
     onStatus?.call('检查同步服务器连接...');
     await _probeServer(config.serverUrl, config.token);
-    return _pullIncremental(
+    final pulled = await _pullIncremental(
       serverUrl: config.serverUrl,
       token: config.token,
       onStatus: onStatus,
     );
+    return (upserted: pulled.upserted, deleted: pulled.deleted);
   }
 
   /// 重置同步状态（强制全量重新拉取）
@@ -664,7 +683,15 @@ class ServerSyncService {
     }
   }
 
-  Future<({int upserted, int deleted})> _pullIncremental({
+  Future<
+    ({
+      int upserted,
+      int deleted,
+      Set<String> upsertedTopicIds,
+      Set<String> deletedTopicIds,
+    })
+  >
+  _pullIncremental({
     required String serverUrl,
     required String token,
     void Function(String message)? onStatus,
@@ -679,6 +706,8 @@ class ServerSyncService {
     var cursor = prefs.getInt(syncCursorKey) ?? 0;
     var upsertedCount = 0;
     var deletedCount = 0;
+    final upsertedTopicIds = <String>{};
+    final deletedTopicIds = <String>{};
 
     while (true) {
       onStatus?.call('正在查询变更...');
@@ -710,7 +739,12 @@ class ServerSyncService {
                 ? '已是最新'
                 : '拉取完成: +$upsertedCount -$deletedCount',
           );
-          return (upserted: upsertedCount, deleted: deletedCount);
+          return (
+            upserted: upsertedCount,
+            deleted: deletedCount,
+            upsertedTopicIds: upsertedTopicIds,
+            deletedTopicIds: deletedTopicIds,
+          );
         }
         cursor = nextCursor;
         continue;
@@ -745,9 +779,26 @@ class ServerSyncService {
         );
       }
 
-      for (var i = 0; i < upsertPayloads.length; i += _topicWriteBatchSize) {
-        final end = (i + _topicWriteBatchSize).clamp(0, upsertPayloads.length);
-        final chunk = upsertPayloads.sublist(i, end);
+      final filteredUpsertPayloads = upsertPayloads.isEmpty
+          ? const <Map<String, dynamic>>[]
+          : await _filterUnchangedUpsertPayloads(db, upsertPayloads);
+      final skippedUnchangedCount =
+          upsertPayloads.length - filteredUpsertPayloads.length;
+      if (skippedUnchangedCount > 0) {
+        debugPrint(
+          '[ServerSync] 跳过 $skippedUnchangedCount 个未变化话题（updatedAt/messageCount/roundCount 一致）',
+        );
+      }
+
+      for (
+        var i = 0;
+        i < filteredUpsertPayloads.length;
+        i += _topicWriteBatchSize
+      ) {
+        final end = i + _topicWriteBatchSize > filteredUpsertPayloads.length
+            ? filteredUpsertPayloads.length
+            : i + _topicWriteBatchSize;
+        final chunk = filteredUpsertPayloads.sublist(i, end);
 
         try {
           await db.transaction(() async {
@@ -756,12 +807,21 @@ class ServerSyncService {
             }
           });
           upsertedCount += chunk.length;
+          for (final topicData in chunk) {
+            final topicId = topicData['topicId'] as String?;
+            if (topicId != null && topicId.isNotEmpty) {
+              upsertedTopicIds.add(topicId);
+            }
+          }
         } catch (e) {
           for (final topicData in chunk) {
             final topicId = topicData['topicId'] as String? ?? '';
             try {
               await _importTopicFromServer(db, topicData);
               upsertedCount++;
+              if (topicId.isNotEmpty) {
+                upsertedTopicIds.add(topicId);
+              }
             } catch (inner) {
               if (topicId.isNotEmpty) failedUpserts.add(topicId);
               debugPrint('[ServerSync] Failed to write topic $topicId: $inner');
@@ -776,11 +836,13 @@ class ServerSyncService {
         try {
           await _deleteTopicsBatch(db, chunk);
           deletedCount += chunk.length;
+          deletedTopicIds.addAll(chunk);
         } catch (e) {
           for (final topicId in chunk) {
             try {
               await _deleteTopicsBatch(db, [topicId]);
               deletedCount++;
+              deletedTopicIds.add(topicId);
             } catch (inner) {
               failedDeletes.add(topicId);
               debugPrint(
@@ -803,7 +865,12 @@ class ServerSyncService {
 
       if (!hasMore) {
         onStatus?.call('拉取完成: +$upsertedCount -$deletedCount');
-        return (upserted: upsertedCount, deleted: deletedCount);
+        return (
+          upserted: upsertedCount,
+          deleted: deletedCount,
+          upsertedTopicIds: upsertedTopicIds,
+          deletedTopicIds: deletedTopicIds,
+        );
       }
     }
   }
@@ -816,15 +883,8 @@ class ServerSyncService {
     void Function(String message)? onStatus,
   }) async {
     final db = _appDb.importDb;
-    final topics = await _buildAllTopicPayloads(db);
-    final payloadById = <String, Map<String, dynamic>>{};
-    for (final topic in topics) {
-      final topicId = topic['topicId'] as String?;
-      if (topicId != null && topicId.isNotEmpty) {
-        payloadById[topicId] = topic;
-      }
-    }
-    final currentTopicIds = payloadById.keys.toSet();
+    final currentTopicVersions = await _loadCurrentTopicVersions(db);
+    final currentTopicIds = currentTopicVersions.keys.toSet();
 
     final prefs = await SharedPreferences.getInstance();
     final pendingMap = <String, ServerSyncPendingConflict>{
@@ -835,22 +895,35 @@ class ServerSyncService {
       ))
         _conflictKey(c.topicId, c.operation): c,
     };
-    final previousTopicIds = _readPushedTopicIdsSnapshot(
-      prefs,
+    final previousTopicVersions = await _readPushedTopicVersionsSnapshot(
       serverUrl: serverUrl,
       token: token,
+      currentTopicVersionsForLegacy: currentTopicVersions,
     );
-    final deletedTopicIds = previousTopicIds
-        .difference(currentTopicIds)
+
+    final changedTopicIds = currentTopicIds.where((topicId) {
+      final previous = previousTopicVersions[topicId];
+      final current = currentTopicVersions[topicId];
+      return previous == null || previous != current;
+    }).toList();
+    final deletedTopicIds = previousTopicVersions.keys
+        .where((topicId) => !currentTopicIds.contains(topicId))
         .toList();
 
-    if (topics.isEmpty && deletedTopicIds.isEmpty) {
+    if (changedTopicIds.isEmpty && deletedTopicIds.isEmpty) {
       onStatus?.call('本地暂无可推送变更');
       return const ServerPushResult.zero();
     }
 
+    final topics = await _buildTopicPayloadsByIds(db, changedTopicIds);
+    final payloadById = <String, Map<String, dynamic>>{
+      for (final topic in topics)
+        if ((topic['topicId'] as String?)?.isNotEmpty ?? false)
+          topic['topicId'] as String: topic,
+    };
+
     if (topics.isNotEmpty) {
-      onStatus?.call('准备推送 ${topics.length} 个本地话题...');
+      onStatus?.call('准备推送 ${topics.length} 个本地变更话题...');
     } else {
       onStatus?.call('未发现新增/更新，正在同步删除...');
     }
@@ -866,6 +939,11 @@ class ServerSyncService {
         conflictPolicy == ServerSyncConflictPolicy.localWins;
     final retryUpsertIds = <String>{};
     final retryDeleteIds = <String>{};
+    final missingTopicCount = changedTopicIds.length - topics.length;
+    if (missingTopicCount > 0) {
+      failed += missingTopicCount;
+      debugPrint('[ServerSync] $missingTopicCount 个变更话题构建 payload 失败，将计入失败项');
+    }
 
     for (var i = 0; i < topics.length; i += _topicWriteBatchSize) {
       final end = (i + _topicWriteBatchSize).clamp(0, topics.length);
@@ -995,11 +1073,11 @@ class ServerSyncService {
     );
 
     if (failed == 0) {
-      await _writePushedTopicIdsSnapshot(
-        prefs,
+      await _writePushedTopicVersionsSnapshot(
         serverUrl: serverUrl,
         token: token,
-        topicIds: currentTopicIds,
+        topicVersions: currentTopicVersions,
+        previousTopicVersions: previousTopicVersions,
       );
     }
 
@@ -1098,6 +1176,88 @@ class ServerSyncService {
     }
 
     return out;
+  }
+
+  Future<List<Map<String, dynamic>>> _filterUnchangedUpsertPayloads(
+    ImportDatabase db,
+    List<Map<String, dynamic>> payloads,
+  ) async {
+    if (payloads.isEmpty) return const [];
+    final topicIds = payloads
+        .map((payload) => payload['topicId']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (topicIds.isEmpty) return const [];
+
+    final localTopics = await (db.select(
+      db.topics,
+    )..where((t) => t.topicId.isIn(topicIds))).get();
+    final localById = <String, Topic>{
+      for (final topic in localTopics) topic.topicId: topic,
+    };
+
+    final filtered = <Map<String, dynamic>>[];
+    for (final payload in payloads) {
+      final topicId = payload['topicId']?.toString() ?? '';
+      if (topicId.isEmpty) {
+        filtered.add(payload);
+        continue;
+      }
+
+      final local = localById[topicId];
+      if (local == null) {
+        filtered.add(payload);
+        continue;
+      }
+
+      final incomingUpdatedAt = _parseSyncTimestampOrNull(payload['updatedAt']);
+      final incomingMessages = payload['messages'];
+      final incomingMessageCount = incomingMessages is List
+          ? incomingMessages.length
+          : null;
+      final incomingRoundCount = incomingMessages is List
+          ? _countPayloadRounds(incomingMessages)
+          : null;
+      final incomingName = payload['name']?.toString();
+
+      final unchanged =
+          incomingUpdatedAt != null &&
+          incomingUpdatedAt == local.updatedAt &&
+          incomingMessageCount != null &&
+          incomingMessageCount == local.messageCount &&
+          incomingRoundCount != null &&
+          incomingRoundCount == local.roundCount &&
+          (incomingName == null || incomingName == local.name);
+
+      if (!unchanged) {
+        filtered.add(payload);
+      }
+    }
+
+    return filtered;
+  }
+
+  int _countPayloadRounds(List<dynamic> messages) {
+    var roundCount = 0;
+    for (final message in messages) {
+      if (message is Map<String, dynamic> && message['role'] == 'user') {
+        roundCount++;
+      }
+    }
+    return roundCount;
+  }
+
+  int? _parseSyncTimestampOrNull(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) {
+      final numeric = int.tryParse(value);
+      if (numeric != null) return numeric;
+      final dt = DateTime.tryParse(value);
+      if (dt != null) return dt.millisecondsSinceEpoch;
+    }
+    return null;
   }
 
   Future<List<_ServerTopicWriteResult>> _postDeleteBatch({
@@ -1392,50 +1552,70 @@ class ServerSyncService {
     ImportDatabase db,
     String topicId,
   ) async {
-    final all = await _buildAllTopicPayloads(db);
-    for (final topic in all) {
-      if (topic['topicId'] == topicId) {
-        return topic;
-      }
-    }
-    return null;
+    if (topicId.isEmpty) return null;
+    final all = await _buildTopicPayloadsByIds(db, [topicId]);
+    return all.isEmpty ? null : all.first;
   }
 
-  Future<List<Map<String, dynamic>>> _buildAllTopicPayloads(
+  Future<List<Map<String, dynamic>>> _buildTopicPayloadsByIds(
     ImportDatabase db,
+    List<String> topicIds,
   ) async {
-    final topics = await (db.select(
-      db.topics,
-    )..orderBy([(t) => OrderingTerm.asc(t.updatedAt)])).get();
+    if (topicIds.isEmpty) return const [];
+    final normalizedTopicIds = topicIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (normalizedTopicIds.isEmpty) return const [];
+
+    final topics =
+        await (db.select(db.topics)
+              ..where((t) => t.topicId.isIn(normalizedTopicIds))
+              ..orderBy([(t) => OrderingTerm.asc(t.updatedAt)]))
+            .get();
     if (topics.isEmpty) return const [];
 
-    final assistants = await db.select(db.assistants).get();
-    final assistantNameById = {
-      for (final row in assistants) row.assistantId: row.name,
-    };
-
     final links =
-        await (db.select(db.topicAssistants)..orderBy([
-              (t) => OrderingTerm.asc(t.topicId),
-              (t) => OrderingTerm.asc(t.assistantId),
-            ]))
+        await (db.select(db.topicAssistants)
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.topicId),
+                (t) => OrderingTerm.asc(t.assistantId),
+              ])
+              ..where((t) => t.topicId.isIn(normalizedTopicIds)))
             .get();
     final topicAssistantByTopicId = <String, String>{};
+    final assistantIds = <String>{};
     for (final link in links) {
       topicAssistantByTopicId.putIfAbsent(link.topicId, () => link.assistantId);
+      assistantIds.add(link.assistantId);
+    }
+
+    final assistantNameById = <String, String>{};
+    if (assistantIds.isNotEmpty) {
+      final assistants = await (db.select(
+        db.assistants,
+      )..where((t) => t.assistantId.isIn(assistantIds.toList()))).get();
+      for (final row in assistants) {
+        assistantNameById[row.assistantId] = row.name;
+      }
     }
 
     final messages =
-        await (db.select(db.messages)..orderBy([
-              (t) => OrderingTerm.asc(t.topicId),
-              (t) => OrderingTerm.asc(t.orderIndex),
-            ]))
+        await (db.select(db.messages)
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.topicId),
+                (t) => OrderingTerm.asc(t.orderIndex),
+              ])
+              ..where((t) => t.topicId.isIn(normalizedTopicIds)))
             .get();
     final blocks =
-        await (db.select(db.messageBlocks)..orderBy([
-              (t) => OrderingTerm.asc(t.messageId),
-              (t) => OrderingTerm.asc(t.orderIndex),
-            ]))
+        await (db.select(db.messageBlocks)
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.messageId),
+                (t) => OrderingTerm.asc(t.orderIndex),
+              ])
+              ..where((t) => t.topicId.isIn(normalizedTopicIds)))
             .get();
 
     final blocksByMessageId = <String, List<MessageBlock>>{};
@@ -1817,24 +1997,154 @@ class ServerSyncService {
     }
   }
 
-  Set<String> _readPushedTopicIdsSnapshot(
-    SharedPreferences prefs, {
+  Future<Map<String, int>> _loadCurrentTopicVersions(ImportDatabase db) async {
+    final rows = await db
+        .customSelect(
+          'SELECT topic_id AS topicId, updated_at AS updatedAt FROM topics',
+        )
+        .get();
+    final out = <String, int>{};
+    for (final row in rows) {
+      final topicId = row.read<String>('topicId');
+      final updatedAt = _toOptionalInt(row.read<dynamic>('updatedAt'));
+      if (topicId.isEmpty || updatedAt == null) continue;
+      out[topicId] = updatedAt;
+    }
+    return out;
+  }
+
+  Future<Map<String, int>> _readPushedTopicVersionsSnapshot({
     required String serverUrl,
     required String token,
-  }) {
-    final raw = prefs.getString(
-      _buildScopedPushSnapshotKey(serverUrl: serverUrl, token: token),
+    Map<String, int>? currentTopicVersionsForLegacy,
+  }) async {
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    final cached = _pushTopicVersionsSnapshotMemoryCache[scope];
+    if (cached != null) return {...cached};
+
+    final db = _appDb.userDb;
+    final rows = await db
+        .customSelect(
+          'SELECT topic_id AS topicId, updated_at AS updatedAt '
+          'FROM $_pushSnapshotTable WHERE scope = ?',
+          variables: [Variable<String>(scope)],
+        )
+        .get();
+    if (rows.isNotEmpty) {
+      final out = <String, int>{};
+      for (final row in rows) {
+        final topicId = row.read<String>('topicId');
+        final updatedAt = _toOptionalInt(row.read<dynamic>('updatedAt'));
+        if (topicId.isEmpty || updatedAt == null) continue;
+        out[topicId] = updatedAt;
+      }
+      _pushTopicVersionsSnapshotMemoryCache[scope] = {...out};
+      return out;
+    }
+
+    final migrated = await _migrateLegacyPushedSnapshotFromPrefs(
+      scope: scope,
+      serverUrl: serverUrl,
+      token: token,
+      currentTopicVersionsForLegacy: currentTopicVersionsForLegacy,
     );
-    if (raw == null || raw.isEmpty) return <String>{};
+    _pushTopicVersionsSnapshotMemoryCache[scope] = {...migrated};
+    return migrated;
+  }
+
+  Future<Map<String, int>> _migrateLegacyPushedSnapshotFromPrefs({
+    required String scope,
+    required String serverUrl,
+    required String token,
+    Map<String, int>? currentTopicVersionsForLegacy,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final legacyVersionKey = _buildScopedPushVersionSnapshotKey(
+      serverUrl: serverUrl,
+      token: token,
+    );
+    final legacyIdsKey = _buildScopedPushSnapshotKey(
+      serverUrl: serverUrl,
+      token: token,
+    );
+
+    final parsedVersions = _readLegacyPushedTopicVersionsFromPrefs(
+      prefs,
+      scopedVersionKey: legacyVersionKey,
+    );
+    if (parsedVersions.isNotEmpty) {
+      await _replacePushedTopicVersionsSnapshot(
+        scope: scope,
+        topicVersions: parsedVersions,
+      );
+      await prefs.remove(legacyVersionKey);
+      await prefs.remove(legacyIdsKey);
+      return parsedVersions;
+    }
+
+    final legacyIds = _readLegacyPushedTopicIdsFromPrefs(
+      prefs,
+      scopedIdsKey: legacyIdsKey,
+    );
+    if (legacyIds.isEmpty) {
+      await prefs.remove(legacyVersionKey);
+      await prefs.remove(legacyIdsKey);
+      return const <String, int>{};
+    }
+
+    final migrated = <String, int>{};
+    for (final topicId in legacyIds) {
+      final currentVersion = currentTopicVersionsForLegacy?[topicId];
+      migrated[topicId] = currentVersion ?? 0;
+    }
+    await _replacePushedTopicVersionsSnapshot(
+      scope: scope,
+      topicVersions: migrated,
+    );
+    await prefs.remove(legacyVersionKey);
+    await prefs.remove(legacyIdsKey);
+    return migrated;
+  }
+
+  Map<String, int> _readLegacyPushedTopicVersionsFromPrefs(
+    SharedPreferences prefs, {
+    required String scopedVersionKey,
+  }) {
+    final raw = prefs.getString(scopedVersionKey);
+    if (raw == null || raw.isEmpty) return const <String, int>{};
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return <String>{};
+      if (decoded is! Map) return const <String, int>{};
+      final out = <String, int>{};
+      decoded.forEach((key, value) {
+        final topicId = key.toString().trim();
+        if (topicId.isEmpty) return;
+        final version = _toOptionalInt(value);
+        if (version != null) {
+          out[topicId] = version;
+        }
+      });
+      return out;
+    } catch (_) {
+      return const <String, int>{};
+    }
+  }
+
+  Set<String> _readLegacyPushedTopicIdsFromPrefs(
+    SharedPreferences prefs, {
+    required String scopedIdsKey,
+  }) {
+    final raw = prefs.getString(scopedIdsKey);
+    if (raw == null || raw.isEmpty) return const <String>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const <String>{};
       return decoded
           .map((item) => item.toString().trim())
           .where((id) => id.isNotEmpty)
           .toSet();
     } catch (_) {
-      return <String>{};
+      return const <String>{};
     }
   }
 
@@ -1880,16 +2190,104 @@ class ServerSyncService {
     );
   }
 
-  Future<void> _writePushedTopicIdsSnapshot(
-    SharedPreferences prefs, {
+  Future<void> _writePushedTopicVersionsSnapshot({
     required String serverUrl,
     required String token,
-    required Set<String> topicIds,
+    required Map<String, int> topicVersions,
+    Map<String, int>? previousTopicVersions,
   }) async {
-    await prefs.setString(
-      _buildScopedPushSnapshotKey(serverUrl: serverUrl, token: token),
-      jsonEncode(topicIds.toList()..sort()),
-    );
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    final normalized = <String, int>{
+      for (final entry in topicVersions.entries)
+        if (entry.key.trim().isNotEmpty) entry.key.trim(): entry.value,
+    };
+    final previous =
+        previousTopicVersions ??
+        await _readPushedTopicVersionsSnapshot(
+          serverUrl: serverUrl,
+          token: token,
+        );
+    final removedTopicIds = previous.keys
+        .where((topicId) => !normalized.containsKey(topicId))
+        .toList();
+    final changedEntries = normalized.entries
+        .where((entry) => previous[entry.key] != entry.value)
+        .toList(growable: false);
+
+    if (removedTopicIds.isEmpty && changedEntries.isEmpty) {
+      _pushTopicVersionsSnapshotMemoryCache[scope] = {...normalized};
+      return;
+    }
+
+    final db = _appDb.userDb;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction(() async {
+      await _deletePushedTopicVersionRows(
+        db: db,
+        scope: scope,
+        topicIds: removedTopicIds,
+      );
+      if (changedEntries.isNotEmpty) {
+        await db.batch((batch) {
+          for (final entry in changedEntries) {
+            batch.customStatement(
+              'INSERT INTO $_pushSnapshotTable(scope, topic_id, updated_at, synced_at) '
+              'VALUES (?, ?, ?, ?) '
+              'ON CONFLICT(scope, topic_id) DO UPDATE SET '
+              'updated_at = excluded.updated_at, synced_at = excluded.synced_at',
+              [scope, entry.key, entry.value, now],
+            );
+          }
+        });
+      }
+    });
+    _pushTopicVersionsSnapshotMemoryCache[scope] = {...normalized};
+  }
+
+  Future<void> _replacePushedTopicVersionsSnapshot({
+    required String scope,
+    required Map<String, int> topicVersions,
+  }) async {
+    final db = _appDb.userDb;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction(() async {
+      await db.customStatement(
+        'DELETE FROM $_pushSnapshotTable WHERE scope = ?',
+        [scope],
+      );
+      if (topicVersions.isEmpty) return;
+      await db.batch((batch) {
+        for (final entry in topicVersions.entries) {
+          if (entry.key.trim().isEmpty) continue;
+          batch.customStatement(
+            'INSERT INTO $_pushSnapshotTable(scope, topic_id, updated_at, synced_at) '
+            'VALUES (?, ?, ?, ?)',
+            [scope, entry.key.trim(), entry.value, now],
+          );
+        }
+      });
+    });
+  }
+
+  Future<void> _deletePushedTopicVersionRows({
+    required UserDatabase db,
+    required String scope,
+    required List<String> topicIds,
+  }) async {
+    if (topicIds.isEmpty) return;
+    const chunkSize = 300;
+    for (var i = 0; i < topicIds.length; i += chunkSize) {
+      final end = i + chunkSize > topicIds.length
+          ? topicIds.length
+          : i + chunkSize;
+      final chunk = topicIds.sublist(i, end);
+      final placeholders = List.filled(chunk.length, '?').join(', ');
+      await db.customStatement(
+        'DELETE FROM $_pushSnapshotTable '
+        'WHERE scope = ? AND topic_id IN ($placeholders)',
+        [scope, ...chunk],
+      );
+    }
   }
 
   String _conflictKey(String topicId, String operation) {
@@ -1900,11 +2298,7 @@ class ServerSyncService {
     required String serverUrl,
     required String token,
   }) {
-    final scope = sha1
-        .convert(
-          utf8.encode('${serverUrl.trim().toLowerCase()}|${token.trim()}'),
-        )
-        .toString();
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
     return '$_pendingConflictsKeyPrefix:$scope';
   }
 
@@ -1912,23 +2306,32 @@ class ServerSyncService {
     required String serverUrl,
     required String token,
   }) {
-    final scope = sha1
-        .convert(
-          utf8.encode('${serverUrl.trim().toLowerCase()}|${token.trim()}'),
-        )
-        .toString();
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
     return '$_pushSnapshotKeyPrefix:$scope';
+  }
+
+  String _buildScopedPushVersionSnapshotKey({
+    required String serverUrl,
+    required String token,
+  }) {
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    return '$_pushSnapshotVersionKeyPrefix:$scope';
   }
 
   String _buildScopedLastSyncKey({
     required String serverUrl,
     required String token,
   }) {
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    return '$_lastSyncKey:$scope';
+  }
+
+  String _buildSyncScope({required String serverUrl, required String token}) {
     final scope = sha1
         .convert(
           utf8.encode('${serverUrl.trim().toLowerCase()}|${token.trim()}'),
         )
         .toString();
-    return '$_lastSyncKey:$scope';
+    return scope;
   }
 }

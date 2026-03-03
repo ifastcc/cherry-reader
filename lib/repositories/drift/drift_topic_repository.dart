@@ -63,6 +63,31 @@ class DriftTopicRepository implements ITopicRepository {
   }
 
   @override
+  Future<List<TopicModel>> getTopicsByIds(List<String> topicIds) async {
+    if (topicIds.isEmpty) return [];
+
+    final topics = await (_db.select(_db.topics)
+          ..where((t) => t.topicId.isIn(topicIds))
+          ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
+        .get();
+    if (topics.isEmpty) return [];
+
+    final links = await (_db.select(_db.topicAssistants)
+          ..where((t) => t.topicId.isIn(topicIds)))
+        .get();
+    final topicToAssistantIds = <String, List<String>>{};
+    for (final link in links) {
+      topicToAssistantIds
+          .putIfAbsent(link.topicId, () => [])
+          .add(link.assistantId);
+    }
+
+    return topics
+        .map((t) => _toModel(t, topicToAssistantIds[t.topicId] ?? const []))
+        .toList();
+  }
+
+  @override
   Future<List<TopicModel>> getTopicsByAssistant(String assistantId) async {
     final linkRows = await (_db.select(_db.topicAssistants)
           ..where((t) => t.assistantId.equals(assistantId)))

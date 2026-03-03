@@ -72,6 +72,13 @@ class HomeScreen extends StatefulWidget {
 }
 
 class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  static final RegExp _previewQuotePattern = RegExp(r'^>\s*', multiLine: true);
+  static final RegExp _previewBoldPattern = RegExp(r'\*\*');
+  static final RegExp _previewInlineCodePattern = RegExp(r'`[^`]*`');
+  static final RegExp _previewLineBreakPattern = RegExp(r'[\r\n]+');
+  static final RegExp _previewMultiSpacePattern = RegExp(r'\s{2,}');
+  static final RegExp _previewListPattern = RegExp(r'^\s*[-*]\s*');
+
   bool _isLoading = false; // 仅用于首次加载无缓存时
   bool _isInitializing = false; // 防止 _initAndLoad 并发
   bool _autoWebDavEnabled = false;
@@ -94,8 +101,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isComputingTimeline = false;
   Timer? _skeletonTimer;
   DateTime? _skeletonShownAt;
-  static const _skeletonDelay = Duration(milliseconds: 200);
-  static const _skeletonMinDuration = Duration(milliseconds: 300);
 
   // 【性能优化】同步状态通知器（独立于主 Widget 树）
   late final SyncStatusNotifier _syncNotifier;
@@ -114,6 +119,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   LocalBackupInfo? _pendingLocalBackup;
 
   bool _hasUpdate = false;
+  int _cachedTopicCount = 0;
+  int _cachedTodayTopicCount = 0;
 
   @override
   void initState() {
@@ -125,6 +132,10 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _topicIndex = HomeCache.topicIndex;
       _assistantMap = HomeCache.assistantMap;
       _computedTimeline = HomeCache.computedTimeline;
+      _refreshTopicStatsCache(
+        timeline: _computedTimeline,
+        topicIndex: _topicIndex,
+      );
       _isLoading = false;
     } else {
       _isLoading = true;
@@ -205,24 +216,16 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             'assistantId': assistantId,
             'messageCount': t.messageCount,
             'roundCount': t.roundCount,
-            'createdAt': DateTime.fromMillisecondsSinceEpoch(
-              t.createdAt,
-            ).toIso8601String(),
-            'updatedAt': DateTime.fromMillisecondsSinceEpoch(
-              t.updatedAt,
-            ).toIso8601String(),
+            'createdAt': t.createdAt,
+            'updatedAt': t.updatedAt,
           });
         }
       }
 
       for (final list in topicIndex.values) {
         list.sort((a, b) {
-          final aTime =
-              DateTime.tryParse(a['updatedAt']?.toString() ?? '') ??
-              DateTime.fromMillisecondsSinceEpoch(0);
-          final bTime =
-              DateTime.tryParse(b['updatedAt']?.toString() ?? '') ??
-              DateTime.fromMillisecondsSinceEpoch(0);
+          final aTime = _parseUpdatedAtMillis(a['updatedAt']) ?? 0;
+          final bTime = _parseUpdatedAtMillis(b['updatedAt']) ?? 0;
           return bTime.compareTo(aTime);
         });
       }
@@ -241,6 +244,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _topicIndex = HomeCache.topicIndex;
         _assistantMap = HomeCache.assistantMap;
         _computedTimeline = timeline;
+        _refreshTopicStatsCache(timeline: timeline, topicIndex: topicIndex);
         _isComputingTimeline = false;
         _isLoading = false;
       });
@@ -251,6 +255,146 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _isLoading = false;
         _isComputingTimeline = false;
       });
+    }
+  }
+
+  ({Map<String, String> userPreviews, Map<String, String> aiPreviews})
+  _extractExistingPreviews() {
+    final userPreviews = <String, String>{};
+    final aiPreviews = <String, String>{};
+    final timeline = _computedTimeline;
+    if (timeline == null) {
+      return (userPreviews: userPreviews, aiPreviews: aiPreviews);
+    }
+
+    for (final item in timeline.topicsMap.values) {
+      if (item.userPreview != null && item.userPreview!.isNotEmpty) {
+        userPreviews[item.topicId] = item.userPreview!;
+      }
+      if (item.aiPreview != null && item.aiPreview!.isNotEmpty) {
+        aiPreviews[item.topicId] = item.aiPreview!;
+      }
+    }
+    return (userPreviews: userPreviews, aiPreviews: aiPreviews);
+  }
+
+  Future<void> _refreshFromServerSyncChanges({
+    required Set<String> upsertedTopicIds,
+    required Set<String> deletedTopicIds,
+  }) async {
+    final changedCount = upsertedTopicIds.length + deletedTopicIds.length;
+    if (changedCount == 0) return;
+
+    // 冷启动或大批量变更场景，回退到全量刷新。
+    if (_topicIndex == null ||
+        _assistantMap == null ||
+        changedCount > 200 ||
+        !mounted) {
+      await _refreshFromDatabase();
+      return;
+    }
+
+    try {
+      final provider = RepositoryProvider.instance;
+      await provider.database.init();
+      final upsertedIds = upsertedTopicIds.toList();
+      final upsertedTopics = upsertedIds.isEmpty
+          ? const []
+          : await provider.topicRepository.getTopicsByIds(upsertedIds);
+
+      final assistants = await provider.assistantRepository.getAllAssistants();
+      final freshPreviews = upsertedIds.isEmpty
+          ? (userPreviews: <String, String>{}, aiPreviews: <String, String>{})
+          : await provider.database.getTopicCardPreviews(upsertedIds);
+
+      final updatedAssistantMap = <String, Map<String, dynamic>>{};
+      for (final a in assistants) {
+        updatedAssistantMap[a.assistantId] = {
+          'id': a.assistantId,
+          'name': a.name,
+          'description': a.description,
+          'avatar': a.avatar,
+          'prompt': a.prompt,
+        };
+      }
+
+      final updatedTopicIndex = <String, List<Map<String, dynamic>>>{};
+      for (final entry in _topicIndex!.entries) {
+        updatedTopicIndex[entry.key] = entry.value
+            .map((topic) => Map<String, dynamic>.from(topic))
+            .toList();
+      }
+
+      final removedIds = <String>{...upsertedTopicIds, ...deletedTopicIds};
+      for (final topics in updatedTopicIndex.values) {
+        topics.removeWhere((topic) {
+          final topicId = topic['id']?.toString();
+          return topicId != null && removedIds.contains(topicId);
+        });
+      }
+      updatedTopicIndex.removeWhere((_, topics) => topics.isEmpty);
+
+      for (final topic in upsertedTopics) {
+        final assistantIds = topic.assistantIds.isNotEmpty
+            ? topic.assistantIds
+            : const [''];
+        for (final assistantId in assistantIds) {
+          updatedTopicIndex.putIfAbsent(assistantId, () => []).add({
+            'id': topic.topicId,
+            'name': topic.name,
+            'assistantId': assistantId,
+            'messageCount': topic.messageCount,
+            'roundCount': topic.roundCount,
+            'createdAt': topic.createdAt,
+            'updatedAt': topic.updatedAt,
+          });
+        }
+      }
+
+      for (final topics in updatedTopicIndex.values) {
+        topics.sort((a, b) {
+          final aTime = _parseUpdatedAtMillis(a['updatedAt']) ?? 0;
+          final bTime = _parseUpdatedAtMillis(b['updatedAt']) ?? 0;
+          return bTime.compareTo(aTime);
+        });
+      }
+
+      final previewMaps = _extractExistingPreviews();
+      for (final deletedId in deletedTopicIds) {
+        previewMaps.userPreviews.remove(deletedId);
+        previewMaps.aiPreviews.remove(deletedId);
+      }
+      for (final upsertedId in upsertedTopicIds) {
+        previewMaps.userPreviews.remove(upsertedId);
+        previewMaps.aiPreviews.remove(upsertedId);
+      }
+      previewMaps.userPreviews.addAll(freshPreviews.userPreviews);
+      previewMaps.aiPreviews.addAll(freshPreviews.aiPreviews);
+
+      final timeline = _buildTimelineFromIndex(
+        updatedTopicIndex,
+        updatedAssistantMap,
+        previewMaps.userPreviews,
+        previewMaps.aiPreviews,
+      );
+
+      HomeCache.cache(updatedTopicIndex, updatedAssistantMap, timeline);
+
+      if (!mounted) return;
+      setState(() {
+        _topicIndex = HomeCache.topicIndex;
+        _assistantMap = HomeCache.assistantMap;
+        _computedTimeline = timeline;
+        _refreshTopicStatsCache(
+          timeline: timeline,
+          topicIndex: updatedTopicIndex,
+        );
+        _isComputingTimeline = false;
+        _isLoading = false;
+      });
+    } catch (e) {
+      debugPrint('⚠️ 增量刷新失败，回退全量刷新: $e');
+      await _refreshFromDatabase();
     }
   }
 
@@ -284,8 +428,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           messageCount: (topic['messageCount'] as num?)?.toInt() ?? 0,
           updatedAt: updatedAt,
           timeDisplay: _formatTimeForGroup(updatedAt, group),
-          userPreview: userPreviews[topicId],
-          aiPreview: aiPreviews[topicId],
+          userPreview: _sanitizePreviewText(userPreviews[topicId]),
+          aiPreview: _sanitizePreviewText(aiPreviews[topicId]),
         );
 
         final existing = topicsMap[topicId];
@@ -330,6 +474,65 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       topicsMap: topicsMap,
       computedAt: now,
     );
+  }
+
+  String? _sanitizePreviewText(String? text) {
+    if (text == null || text.isEmpty) return null;
+    final cleaned = text
+        .replaceAll(_previewQuotePattern, '')
+        .replaceAll(_previewBoldPattern, '')
+        .replaceAll(_previewInlineCodePattern, '')
+        .replaceAll(_previewLineBreakPattern, ' ')
+        .replaceAll(_previewMultiSpacePattern, ' ')
+        .replaceAll(_previewListPattern, '')
+        .trim();
+    return cleaned.isEmpty ? null : cleaned;
+  }
+
+  void _refreshTopicStatsCache({
+    required ComputedTimeline? timeline,
+    required Map<String, List<Map<String, dynamic>>>? topicIndex,
+  }) {
+    if (timeline != null) {
+      _cachedTopicCount = timeline.totalCount;
+      _cachedTodayTopicCount = 0;
+      for (final group in timeline.groups) {
+        if (group.type == TimeGroup.today) {
+          _cachedTodayTopicCount = group.topics.length;
+          break;
+        }
+      }
+      return;
+    }
+
+    if (topicIndex == null) {
+      _cachedTopicCount = 0;
+      _cachedTodayTopicCount = 0;
+      return;
+    }
+
+    final topicIds = <String>{};
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    var todayCount = 0;
+
+    for (final topics in topicIndex.values) {
+      for (final topic in topics) {
+        final topicId = topic['id']?.toString();
+        if (topicId == null || topicId.isEmpty) continue;
+        if (!topicIds.add(topicId)) continue;
+
+        final dt = _parseUpdatedAt(topic['updatedAt']);
+        if (dt == null) continue;
+        final topicDate = DateTime(dt.year, dt.month, dt.day);
+        if (topicDate == today) {
+          todayCount++;
+        }
+      }
+    }
+
+    _cachedTopicCount = topicIds.length;
+    _cachedTodayTopicCount = todayCount;
   }
 
   @override
@@ -539,7 +742,7 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_autoServerSyncEnabled) {
       try {
         final service = ServerSyncService(RepositoryProvider.instance.database);
-        await service.syncNow(
+        final result = await service.syncNow(
           onStatus: (msg) {
             if (mounted) _syncNotifier.updateDownloadProgress(0, msg);
           },
@@ -548,8 +751,11 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _syncNotifier.complete();
           _statusError = null;
         }
-        await _refreshFromDatabase();
-        await _rebuildTopicIndexSafely();
+        await _refreshFromServerSyncChanges(
+          upsertedTopicIds: result.pulledUpsertedTopicIds,
+          deletedTopicIds: result.pulledDeletedTopicIds,
+        );
+        unawaited(_rebuildTopicIndexSafely());
         final keepPrimaryZip = _autoWebDavEnabled || _autoLocalFolderEnabled;
         await DataPersistenceManager.pruneBackupArtifacts(
           keepPrimary: keepPrimaryZip,
@@ -835,7 +1041,14 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _regroupTimeline() {
     if (_computedTimeline == null) return;
     _computedTimeline!.regroup();
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        _refreshTopicStatsCache(
+          timeline: _computedTimeline,
+          topicIndex: _topicIndex,
+        );
+      });
+    }
     debugPrint('✅ 时间线重新分组完成');
   }
 
@@ -858,12 +1071,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('📅 时间线跨越日期边界，重新分组');
       _regroupTimeline();
     }
-  }
-
-  /// 从本地加载数据
-  Future<bool> _loadFromLocal({bool showLoadingIfEmpty = false}) async {
-    await _refreshFromDatabase(showLoading: showLoadingIfEmpty);
-    return _topicIndex != null && _topicIndex!.isNotEmpty;
   }
 
   /// 【新增】处理损坏的文件
@@ -1297,28 +1504,8 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 计算当前状态栏状态
   StatusBarState _computeStatusBarState() {
-    final topicCount = _topicIndex?.values.fold<int>(
-      0,
-      (sum, list) => sum + list.length,
-    );
-
-    // 计算今日话题数
-    int todayTopicCount = 0;
-    if (_topicIndex != null) {
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      for (final topics in _topicIndex!.values) {
-        for (final topic in topics) {
-          final dt = _parseUpdatedAt(topic['updatedAt']);
-          if (dt != null) {
-            final topicDate = DateTime(dt.year, dt.month, dt.day);
-            if (topicDate == today) {
-              todayTopicCount++;
-            }
-          }
-        }
-      }
-    }
+    final topicCount = _topicIndex == null ? null : _cachedTopicCount;
+    final todayTopicCount = _topicIndex == null ? null : _cachedTodayTopicCount;
 
     // 1. 错误状态
     if (_statusError != null) {
@@ -1479,7 +1666,6 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   title: Text(topicName),
                   subtitle: Text('$roundCount 轮 · $lastModifiedText'),
-                  trailing: const Icon(Icons.chevron_right, size: 16),
                   onTap: () => _openTopic(topicId, topicName),
                 );
               }),
@@ -1701,20 +1887,25 @@ class HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return TimeGroup.earlier;
   }
 
+  int? _parseUpdatedAtMillis(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) {
+      final numeric = int.tryParse(value);
+      if (numeric != null) return numeric;
+      final dt = DateTime.tryParse(value);
+      if (dt != null) return dt.toLocal().millisecondsSinceEpoch;
+    }
+    return null;
+  }
+
   /// 解析 updatedAt 字段（支持 int 时间戳和 String ISO 格式）
   DateTime? _parseUpdatedAt(dynamic value) {
-    if (value == null) return null;
+    final ms = _parseUpdatedAtMillis(value);
+    if (ms == null) return null;
     try {
-      DateTime dt;
-      if (value is int) {
-        dt = DateTime.fromMillisecondsSinceEpoch(value);
-      } else if (value is String) {
-        dt = DateTime.parse(value);
-      } else {
-        return null;
-      }
-      // Cherry Studio 存储 UTC 时间，需要转换为本地时间显示
-      return dt.toLocal();
+      return DateTime.fromMillisecondsSinceEpoch(ms);
     } catch (_) {}
     return null;
   }

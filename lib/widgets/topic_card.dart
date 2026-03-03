@@ -20,24 +20,12 @@ class TopicCard extends StatelessWidget {
     required this.onTap,
   });
 
-  String _cleanPreview(String text) {
-    return text
-        .replaceAll(RegExp(r'^>\s*', multiLine: true), '') // 移除引用符号
-        .replaceAll(RegExp(r'\*\*'), '') // 移除加粗
-        .replaceAll(RegExp(r'`[^`]*`'), '') // 移除行内代码
-        .replaceAll(RegExp(r'[\r\n]+'), ' ') // 换行改空格
-        .replaceAll(RegExp(r'\s{2,}'), ' ') // 多空格合并
-        .replaceAll(RegExp(r'^\s*[-*]\s*'), '') // 移除列表符号
-        .trim();
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-
-    final cleanUserPreview = userPreview != null ? _cleanPreview(userPreview!) : null;
-    final cleanAiPreview = aiPreview != null ? _cleanPreview(aiPreview!) : null;
+    final cleanUserPreview = userPreview;
+    final cleanAiPreview = aiPreview;
 
     return Padding(
       // 外边距 - 让卡片之间有明显间隔
@@ -80,13 +68,13 @@ class TopicCard extends StatelessWidget {
                           Icon(
                             Icons.chat_bubble_outline,
                             size: 14,
-                            color: colorScheme.outline.withOpacity(0.5),
+                            color: colorScheme.outline.withValues(alpha: 0.5),
                           ),
                           const SizedBox(width: 4),
                           Text(
                             '$roundCount',
                             style: theme.textTheme.labelSmall?.copyWith(
-                              color: colorScheme.outline.withOpacity(0.6),
+                              color: colorScheme.outline.withValues(alpha: 0.6),
                               fontWeight: FontWeight.w500,
                               fontSize: 12,
                             ),
@@ -98,14 +86,17 @@ class TopicCard extends StatelessWidget {
                 ),
 
                 // Row 2: User query - 单行副标题
-                if (cleanUserPreview != null && cleanUserPreview.isNotEmpty) ...[
+                if (cleanUserPreview != null &&
+                    cleanUserPreview.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
                     cleanUserPreview,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant.withOpacity(0.65),
+                      color: colorScheme.onSurfaceVariant.withValues(
+                        alpha: 0.65,
+                      ),
                       height: 1.4,
                       fontSize: 14,
                     ),
@@ -120,7 +111,9 @@ class TopicCard extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant.withOpacity(0.8),
+                      color: colorScheme.onSurfaceVariant.withValues(
+                        alpha: 0.8,
+                      ),
                       height: 1.5,
                       fontSize: 14,
                     ),
@@ -134,7 +127,7 @@ class TopicCard extends StatelessWidget {
                     Text(
                       assistantName,
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: colorScheme.primary.withOpacity(0.7),
+                        color: colorScheme.primary.withValues(alpha: 0.7),
                         fontWeight: FontWeight.w500,
                         fontSize: 12,
                       ),
@@ -144,7 +137,7 @@ class TopicCard extends StatelessWidget {
                       width: 3,
                       height: 3,
                       decoration: BoxDecoration(
-                        color: colorScheme.outline.withOpacity(0.3),
+                        color: colorScheme.outline.withValues(alpha: 0.3),
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -152,7 +145,7 @@ class TopicCard extends StatelessWidget {
                     Text(
                       date,
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: colorScheme.outline.withOpacity(0.6),
+                        color: colorScheme.outline.withValues(alpha: 0.6),
                         fontSize: 12,
                       ),
                     ),

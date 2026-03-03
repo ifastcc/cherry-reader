@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import '../models/isar/knowledge_entry.dart';
 import 'app_db.dart';
 
@@ -172,6 +171,13 @@ class KnowledgeEntryService {
   /// 按消息 ID 获取（用于显示对话中的高亮/标注）
   Future<List<KnowledgeEntry>> getByMessage(String messageId) async {
     return _db.getKnowledgeEntriesByMessage(messageId);
+  }
+
+  /// 按消息 ID 批量获取（用于列表预加载）
+  Future<Map<String, List<KnowledgeEntry>>> getByMessages(
+    List<String> messageIds,
+  ) async {
+    return _db.getKnowledgeEntriesByMessages(messageIds);
   }
 
   /// 按话题 ID 获取

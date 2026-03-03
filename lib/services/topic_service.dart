@@ -35,20 +35,28 @@ class TopicService {
     await _ensureRepositories();
 
     final assistants = await _assistantRepo!.getAllAssistants();
+    final topics = await _topicRepo!.getAllTopics();
     final result = <String, List<Map<String, dynamic>>>{};
 
     for (final assistant in assistants) {
-      final topics = await _topicRepo!.getTopicsByAssistant(assistant.assistantId);
+      result[assistant.assistantId] = [];
+    }
 
-      result[assistant.assistantId] = topics.map((topic) => {
-        'id': topic.topicId,
-        'name': topic.name,
-        'assistantId': assistant.assistantId, // Use the key we are grouping by
-        'messageCount': topic.messageCount,
-        'roundCount': topic.roundCount,
-        'createdAt': topic.createdAt,
-        'updatedAt': topic.updatedAt,
-      }).toList();
+    for (final topic in topics) {
+      final assistantIds = topic.assistantIds.isNotEmpty
+          ? topic.assistantIds
+          : const [''];
+      for (final assistantId in assistantIds) {
+        result.putIfAbsent(assistantId, () => []).add({
+          'id': topic.topicId,
+          'name': topic.name,
+          'assistantId': assistantId, // Use the key we are grouping by
+          'messageCount': topic.messageCount,
+          'roundCount': topic.roundCount,
+          'createdAt': topic.createdAt,
+          'updatedAt': topic.updatedAt,
+        });
+      }
     }
 
     return result;
@@ -73,7 +81,9 @@ class TopicService {
     final sw = Stopwatch()..start();
 
     await _ensureRepositories();
-    debugPrint('⏱️ [TopicService] ensureRepositories: ${sw.elapsedMilliseconds}ms');
+    debugPrint(
+      '⏱️ [TopicService] ensureRepositories: ${sw.elapsedMilliseconds}ms',
+    );
 
     sw.reset();
     final topic = await _topicRepo!.getTopic(topicId);
@@ -82,53 +92,66 @@ class TopicService {
 
     // 加载所有消息
     sw.reset();
-    final messages = await _messageRepo!.loadAllMessages(topicId);
-    debugPrint('⏱️ [TopicService] loadAllMessages (${messages.length}条): ${sw.elapsedMilliseconds}ms');
+    final messages = await _messageRepo!.loadAllMessages(
+      topicId,
+      parseExtendedFields: false,
+    );
+    debugPrint(
+      '⏱️ [TopicService] loadAllMessages (${messages.length}条): ${sw.elapsedMilliseconds}ms',
+    );
 
     // 【优化】通过 topicId 直接加载所有 Block（避免 anyOf 的 O(n²) 问题）
     sw.reset();
     final blockMap = await _messageRepo!.loadBlocksByTopic(topicId);
-    final totalBlocks = blockMap.values.fold<int>(0, (sum, list) => sum + list.length);
-    debugPrint('⏱️ [TopicService] loadBlocksByTopic ($totalBlocks个Block): ${sw.elapsedMilliseconds}ms');
+    final totalBlocks = blockMap.values.fold<int>(
+      0,
+      (sum, list) => sum + list.length,
+    );
+    debugPrint(
+      '⏱️ [TopicService] loadBlocksByTopic ($totalBlocks个Block): ${sw.elapsedMilliseconds}ms',
+    );
 
     // 组装数据
     sw.reset();
     final messagesData = messages.map((msg) {
       final blocks = blockMap[msg.messageId] ?? [];
 
-      final resolvedBlocks = blocks.map((b) => {
-        'id': b.blockId,
-        'messageId': b.messageId,
-        'type': b.type,
-        'content': b.content,
-        'thinking_millsec': b.thinkingMillsec,
-        'url': b.url,
-        'file': b.file,
-        'error': b.error,
-        'targetLanguage': b.targetLanguage,
-        // tool 块字段
-        'toolId': b.toolId,
-        'toolName': b.toolName,
-        'arguments': b.arguments,
-        // citation 块字段
-        'response': b.response,
-        'knowledge': b.knowledge,
-        'createdAt': DateTime.fromMillisecondsSinceEpoch(b.createdAt).toIso8601String(),
-      }).toList();
+      final resolvedBlocks = blocks
+          .map(
+            (b) => {
+              'id': b.blockId,
+              'messageId': b.messageId,
+              'type': b.type,
+              'content': b.content,
+              'thinking_millsec': b.thinkingMillsec,
+              'url': b.url,
+              'file': b.file,
+              'error': b.error,
+              'targetLanguage': b.targetLanguage,
+              // tool 块字段
+              'toolId': b.toolId,
+              'toolName': b.toolName,
+              'arguments': b.arguments,
+              // citation 块字段
+              'response': b.response,
+              'knowledge': b.knowledge,
+              'createdAt': b.createdAt,
+            },
+          )
+          .toList();
 
       return {
         'id': msg.messageId,
         'role': msg.role,
         'topicId': msg.topicId,
         // 'assistantId': topic.assistantId, // Removed as it's M:N now
-        'createdAt': DateTime.fromMillisecondsSinceEpoch(msg.createdAt).toIso8601String(),
+        'createdAt': msg.createdAt,
         'status': msg.status,
         'askId': msg.askId,
         'useful': msg.useful,
-        'model': msg.modelId != null ? {'id': msg.modelId, 'name': msg.modelName} : null,
-        'usage': msg.usage,
-        'metrics': msg.metrics,
-        'mentions': msg.mentions,
+        'model': msg.modelId != null
+            ? {'id': msg.modelId, 'name': msg.modelName}
+            : null,
         'blocks': resolvedBlocks,
       };
     }).toList();
@@ -139,8 +162,8 @@ class TopicService {
       'name': topic.name,
       'assistantIds': topic.assistantIds,
       'messages': messagesData,
-      'createdAt': DateTime.fromMillisecondsSinceEpoch(topic.createdAt).toIso8601String(),
-      'updatedAt': DateTime.fromMillisecondsSinceEpoch(topic.updatedAt).toIso8601String(),
+      'createdAt': topic.createdAt,
+      'updatedAt': topic.updatedAt,
     };
   }
 

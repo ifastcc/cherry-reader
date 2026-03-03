@@ -25,17 +25,23 @@ class HighlightService {
   Future<void> batchPreload(List<String> messageIds) async {
     if (messageIds.isEmpty) return;
 
-    for (final messageId in messageIds) {
-      if (!_cache.containsKey(messageId)) {
-        final entries = await _entryService.getByMessage(messageId);
-        final highlights = entries
-            .where((e) =>
-                e.type == KnowledgeEntryType.highlight ||
-                e.type == KnowledgeEntryType.annotation)
-            .map(_entryToData)
-            .toList();
-        _cache[messageId] = highlights;
-      }
+    final missingIds = messageIds
+        .where((messageId) => !_cache.containsKey(messageId))
+        .toSet()
+        .toList();
+    if (missingIds.isEmpty) return;
+
+    final groupedEntries = await _entryService.getByMessages(missingIds);
+
+    for (final messageId in missingIds) {
+      final entries = groupedEntries[messageId] ?? const <KnowledgeEntry>[];
+      final highlights = entries
+          .where((e) =>
+              e.type == KnowledgeEntryType.highlight ||
+              e.type == KnowledgeEntryType.annotation)
+          .map(_entryToData)
+          .toList();
+      _cache[messageId] = highlights;
     }
   }
 

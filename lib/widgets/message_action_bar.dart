@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 ///
 /// 显示在每条消息底部，提供常用操作：
 /// - 复制：复制消息内容
-/// - 讨论：进入 AI 讨论
 /// - 重新生成：重新调用模型生成
 /// - 更多：展开更多操作（编辑、删除、翻译、朗读）
 class MessageActionBar extends StatelessWidget {
@@ -17,9 +16,6 @@ class MessageActionBar extends StatelessWidget {
 
   /// 模型名称
   final String modelName;
-
-  /// 点击讨论回调
-  final VoidCallback? onDiscuss;
 
   /// 点击重新生成回调
   final VoidCallback? onRegenerate;
@@ -42,15 +38,11 @@ class MessageActionBar extends StatelessWidget {
   /// 是否显示朗读按钮
   final bool showSpeak;
 
-  /// 讨论数量（用于角标显示）
-  final int discussionCount;
-
   const MessageActionBar({
     super.key,
     required this.content,
     required this.messageId,
     required this.modelName,
-    this.onDiscuss,
     this.onRegenerate,
     this.onEdit,
     this.onDelete,
@@ -58,14 +50,12 @@ class MessageActionBar extends StatelessWidget {
     this.onSpeak,
     this.showRegenerate = true,
     this.showSpeak = true,
-    this.discussionCount = 0,
   });
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final iconColor = isDark ? Colors.grey[500] : Colors.grey[600];
-    final activeColor = const Color(0xFF8B5CF6);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
@@ -80,9 +70,6 @@ class MessageActionBar extends StatelessWidget {
             onTap: () => _copyContent(context),
           ),
           const SizedBox(width: 4),
-
-          // 讨论（带数量角标）
-
 
           // 重新生成
           if (showRegenerate) ...[
@@ -171,8 +158,6 @@ class MessageActionBar extends StatelessWidget {
               const Divider(height: 1),
 
               // 操作列表
-
-
               if (onTranslate != null)
                 _MoreActionItem(
                   icon: Icons.translate_rounded,
@@ -297,84 +282,6 @@ class _ActionButton extends StatelessWidget {
   }
 }
 
-/// 带角标的操作按钮（用于显示讨论数量）
-class _ActionButtonWithBadge extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final int badgeCount;
-  final Color badgeColor;
-  final VoidCallback? onTap;
-
-  const _ActionButtonWithBadge({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.badgeCount,
-    required this.badgeColor,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 图标带角标
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(icon, size: 16, color: color),
-                if (badgeCount > 0)
-                  Positioned(
-                    right: -8,
-                    top: -6,
-                    child: Container(
-                      padding: const EdgeInsets.all(2),
-                      decoration: BoxDecoration(
-                        color: badgeColor,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(
-                        minWidth: 14,
-                        minHeight: 14,
-                      ),
-                      child: Text(
-                        badgeCount > 99 ? '99+' : '$badgeCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            if (label.isNotEmpty) ...[
-              SizedBox(width: badgeCount > 0 ? 10 : 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: color,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// 更多操作项（底部弹窗内）
 class _MoreActionItem extends StatelessWidget {
   final IconData icon;
@@ -398,10 +305,7 @@ class _MoreActionItem extends StatelessWidget {
       leading: Icon(icon, color: color ?? defaultColor, size: 22),
       title: Text(
         label,
-        style: TextStyle(
-          color: color ?? defaultColor,
-          fontSize: 15,
-        ),
+        style: TextStyle(color: color ?? defaultColor, fontSize: 15),
       ),
       onTap: onTap,
     );

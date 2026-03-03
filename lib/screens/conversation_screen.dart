@@ -1,53 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
-import 'dart:convert';
 import 'dart:async';
-import 'dart:ui'; // For ImageFilter
 import '../services/cherry_extractor.dart';
 import '../services/analysis_cache_manager.dart';
 import '../services/highlight_service.dart';
-import '../services/unified_conversation_service.dart';
 import '../services/topic_service.dart';
 import '../services/markdown_isolate_parser.dart';
-import '../models/isar/unified_conversation_entity.dart';
 import '../widgets/highlightable_card.dart';
 import '../widgets/message_action_bar.dart';
-import '../widgets/skeleton_card.dart';
-import '../services/epub_export_service.dart';
-import 'ai_chat_screen.dart';
 import 'package:provider/provider.dart';
 import '../providers/tts_provider.dart';
 import '../models/tts_item.dart';
 import '../widgets/tts_mini_player.dart';
-import '../widgets/dual_fab.dart';
-import 'insight_screen.dart';
-
-/// 页内搜索匹配结果
-class InPageSearchMatch {
-  /// 轮次索引 (0-based)
-  final int roundIndex;
-
-  /// 回复索引（null 表示用户问题）
-  final int? replyIndex;
-
-  /// 类型：'query' 或 'reply'
-  final String type;
-
-  /// 匹配的内容预览
-  final String preview;
-
-  const InPageSearchMatch({
-    required this.roundIndex,
-    this.replyIndex,
-    required this.type,
-    required this.preview,
-  });
-
-  @override
-  String toString() =>
-      'Match(round: $roundIndex, reply: $replyIndex, type: $type)';
-}
 
 class ConversationScreen extends StatefulWidget {
   final CherryExtractor? extractor;
@@ -75,8 +40,8 @@ class ConversationScreen extends StatefulWidget {
   /// 【搜索高亮】要高亮的搜索关键词
   final String? highlightKeyword;
 
-  ConversationScreen({
-    Key? key,
+  const ConversationScreen({
+    super.key,
     this.extractor,
     required this.topicId,
     required this.topicName,
@@ -89,13 +54,22 @@ class ConversationScreen extends StatefulWidget {
     this.scrollToQuotedText,
     this.scrollToQuotedTextOccurrence,
     this.highlightKeyword,
-  }) : super(key: key);
+  });
 
   @override
   State<ConversationScreen> createState() => _ConversationScreenState();
 }
 
 class _ConversationScreenState extends State<ConversationScreen> {
+  static const bool _enableTopicDebugLog = false;
+  static const int _backgroundWarmupInitialDelayMs = 260;
+  static const int _warmupCollectYieldInterval = 24;
+  static const int _highlightWarmupChunkSize = 40;
+  static const int _highlightWarmupMaxEntries = 200;
+  static const int _preParseImmediateCount = 10;
+  static const int _preParseChunkSize = 6;
+  static const int _preParseMaxBackgroundEntries = 120;
+
   late final AnalysisCacheManager _cacheManager;
   late final TopicService _topicService;
 
@@ -106,18 +80,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
   // 【性能优化】缓存对话分组结果
   List<Map<String, dynamic>>? _cachedGroups;
 
-  // 【新增】消息讨论数量缓存（key: messageId 或 contextId）
-  Map<String, int> _discussionCounts = {};
-
-  // 【智能分页】已加载的轮次索引
-  final Set<int> _loadedGroupIndices = {};
-  // 【智能分页】轮次预估高度
-  final Map<int, double> _estimatedGroupHeights = {};
-  // 【智能分页】Isolate 预解析缓存
-  final Map<int, MarkdownPreParseData> _preParseDataCache = {};
-
-  final _epubExportService = EpubExportService();
-
   // 【轮次导航】使用 scroll_to_index 实现精确跳转
   late AutoScrollController _scrollController;
 
@@ -127,26 +89,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
     0.0,
   );
 
-  // 【滚动感知导航】- 使用 ValueNotifier 优化
-  final ValueNotifier<bool> _isScrollingNotifier = ValueNotifier(false);
-  int _hideCheckId = 0; // 用于取消过时的延迟隐藏
-
   // 【Sticky Tab 可见性】- 使用 ValueNotifier 优化
   final ValueNotifier<bool> _currentGroupTabVisibleNotifier = ValueNotifier(
     true,
   );
-
-  final ValueNotifier<DualFabStyle> _fabStyleNotifier = ValueNotifier(
-    DualFabStyle.pill,
-  );
-  final ValueNotifier<bool> _fabVisibleNotifier = ValueNotifier(true);
-  int _fabHideCheckId = 0; // 用于取消过时的延迟显示
-
-  // 【边缘抽屉】状态
-  final ValueNotifier<bool> _edgeDrawerOpenNotifier = ValueNotifier(false);
-  static const double _edgeDrawerClosedOffset = 0.88;
-  static const double _edgeDrawerHandleWidth = 14;
-  static const double _edgeDrawerHandleHeight = 44;
+  int _preParseTaskToken = 0;
 
   // 【内联 Tab 位置追踪】
   final Map<int, GlobalKey> _inlineTabKeys = {};
@@ -165,25 +112,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   // 【性能优化】记录上次处理的 Tab 页码，避免重复注册 postFrameCallback
   final Map<int, int> _lastProcessedTabPage = {};
-
-  // ========== 【页内搜索】状态 ==========
-  /// 是否处于搜索模式
-  bool _isSearchMode = false;
-
-  /// 搜索关键词
-  String _searchKeyword = '';
-
-  /// 搜索结果列表
-  List<InPageSearchMatch> _searchResults = [];
-
-  /// 当前选中的搜索结果索引
-  int _currentSearchIndex = 0;
-
-  /// 搜索输入框控制器
-  final TextEditingController _searchController = TextEditingController();
-
-  /// 搜索输入框焦点
-  final FocusNode _searchFocusNode = FocusNode();
 
   /// 获取或创建指定轮次的页码 ValueNotifier
   ValueNotifier<int> _getCardPageNotifier(int groupIndex) {
@@ -264,14 +192,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   @override
   void dispose() {
+    _preParseTaskToken++;
     _scrollController.removeListener(_onScrollChanged);
     _scrollController.dispose();
     _currentVisibleGroupNotifier.dispose();
     _currentGroupProgressNotifier.dispose();
-    _isScrollingNotifier.dispose();
     _currentGroupTabVisibleNotifier.dispose();
-    _fabStyleNotifier.dispose();
-    _fabVisibleNotifier.dispose();
     // 释放所有 PageController
     for (final controller in _pageControllers.values) {
       controller.dispose();
@@ -287,9 +213,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
       notifier.dispose();
     }
     _cardPageNotifiers.clear();
-    // 【页内搜索】释放资源
-    _searchController.dispose();
-    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -307,7 +230,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
       _conversation = null;
       _cachedGroups = null;
       _aiAnalyses = {};
-      _discussionCounts = {};
 
       // 重新加载数据
       _loadData();
@@ -344,8 +266,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     int visibleGroup = _currentVisibleGroupNotifier.value; // 保持上次值作为默认
     double progress = 0.0;
     bool tabVisible = true;
-    bool found = false;
-
     for (var i = searchStart; i < groups.length; i++) {
       final tagState = tagMap[i];
       if (tagState == null) continue;
@@ -382,7 +302,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
           progress = (scrolledDistance / effectiveHeight).clamp(0.0, 1.0);
         }
 
-        found = true;
         break;
       }
 
@@ -403,7 +322,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
         visibleGroup = i;
         tabVisible = _isInlineTabVisibleForGroup(i, viewportTop);
         progress = 0.0;
-        found = true;
         break;
       }
 
@@ -454,44 +372,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
   int _lastScrollUpdate = 0; // 节流用
 
   /// 处理滚动通知
-  /// 【性能优化】使用 ValueNotifier 避免 setState
   bool _handleScrollNotification(ScrollNotification notification) {
-    if (notification is ScrollStartNotification) {
-      // 滚动开始 - 取消之前的延迟隐藏
-      _hideCheckId++;
-      _fabHideCheckId++;
-      if (!_isScrollingNotifier.value) {
-        _isScrollingNotifier.value = true;
-      }
-      // 滚动时隐藏 FAB
-      if (_fabVisibleNotifier.value) {
-        _fabVisibleNotifier.value = false;
-      }
-    } else if (notification is ScrollEndNotification) {
-      // 滚动结束 - 延迟 1.5 秒后隐藏导航
-      _hideCheckId++;
-      final currentCheckId = _hideCheckId;
-
-      Future.delayed(const Duration(milliseconds: 1500), () {
-        if (currentCheckId == _hideCheckId &&
-            mounted &&
-            _isScrollingNotifier.value) {
-          _isScrollingNotifier.value = false;
-        }
-      });
-
-      // 滚动结束 - 延迟 0.8 秒后显示 FAB
-      _fabHideCheckId++;
-      final currentFabCheckId = _fabHideCheckId;
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (currentFabCheckId == _fabHideCheckId &&
-            mounted &&
-            !_fabVisibleNotifier.value) {
-          _fabVisibleNotifier.value = true;
-        }
-      });
-    }
-    return false; // 不阻止事件继续传递
+    return false;
   }
 
   /// 跳转到指定轮次（使用 scroll_to_index 的两阶段滚动）
@@ -607,179 +489,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
-  // ========== 【页内搜索】方法 ==========
-
-  /// 进入搜索模式
-  void _enterSearchMode() {
-    setState(() {
-      _isSearchMode = true;
-    });
-    // 延迟聚焦，等待 UI 更新
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _searchFocusNode.requestFocus();
-    });
-  }
-
-  /// 退出搜索模式
-  void _exitSearchMode() {
-    setState(() {
-      _isSearchMode = false;
-      _searchKeyword = '';
-      _searchResults = [];
-      _currentSearchIndex = 0;
-    });
-    _searchController.clear();
-  }
-
-  /// 执行页内搜索
-  void _performInPageSearch(String keyword) {
-    if (keyword.trim().isEmpty) {
-      setState(() {
-        _searchKeyword = '';
-        _searchResults = [];
-        _currentSearchIndex = 0;
-      });
-      return;
-    }
-
-    final groups = _getConversationGroups();
-    final results = <InPageSearchMatch>[];
-    final lowerKeyword = keyword.toLowerCase();
-
-    for (var groupIndex = 0; groupIndex < groups.length; groupIndex++) {
-      final group = groups[groupIndex];
-
-      // 搜索用户问题
-      final userMsg = group['user_message'] as Map<String, dynamic>;
-      final userBlocks = userMsg['blocks'] as List<dynamic>? ?? [];
-      String userText = '';
-      for (final block in userBlocks) {
-        if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-          userText += block['content'] as String? ?? '';
-        }
-      }
-      if (userText.toLowerCase().contains(lowerKeyword)) {
-        // 生成预览（关键词前后各取一些文字）
-        final matchIndex = userText.toLowerCase().indexOf(lowerKeyword);
-        final previewStart = (matchIndex - 20).clamp(0, userText.length);
-        final previewEnd = (matchIndex + keyword.length + 30).clamp(
-          0,
-          userText.length,
-        );
-        var preview = userText.substring(previewStart, previewEnd);
-        if (previewStart > 0) preview = '...$preview';
-        if (previewEnd < userText.length) preview = '$preview...';
-
-        results.add(
-          InPageSearchMatch(
-            roundIndex: groupIndex,
-            replyIndex: null,
-            type: 'query',
-            preview: preview.replaceAll('\n', ' '),
-          ),
-        );
-      }
-
-      // 搜索助手回复
-      final assistantReplies = group['assistant_replies'] as List<dynamic>;
-      for (
-        var replyIndex = 0;
-        replyIndex < assistantReplies.length;
-        replyIndex++
-      ) {
-        final reply = assistantReplies[replyIndex] as Map<String, dynamic>;
-        final blocks = reply['blocks'] as List<dynamic>? ?? [];
-        String replyText = '';
-        for (final block in blocks) {
-          if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-            replyText += block['content'] as String? ?? '';
-          }
-        }
-        if (replyText.toLowerCase().contains(lowerKeyword)) {
-          // 生成预览
-          final matchIndex = replyText.toLowerCase().indexOf(lowerKeyword);
-          final previewStart = (matchIndex - 20).clamp(0, replyText.length);
-          final previewEnd = (matchIndex + keyword.length + 30).clamp(
-            0,
-            replyText.length,
-          );
-          var preview = replyText.substring(previewStart, previewEnd);
-          if (previewStart > 0) preview = '...$preview';
-          if (previewEnd < replyText.length) preview = '$preview...';
-
-          results.add(
-            InPageSearchMatch(
-              roundIndex: groupIndex,
-              replyIndex: replyIndex,
-              type: 'reply',
-              preview: preview.replaceAll('\n', ' '),
-            ),
-          );
-        }
-      }
-    }
-
-    setState(() {
-      _searchKeyword = keyword;
-      _searchResults = results;
-      _currentSearchIndex = results.isNotEmpty ? 0 : -1;
-    });
-
-    // 如果有结果，跳转到第一个
-    if (results.isNotEmpty) {
-      _navigateToSearchResult(0);
-    }
-  }
-
-  /// 跳转到指定的搜索结果
-  Future<void> _navigateToSearchResult(int index) async {
-    if (index < 0 || index >= _searchResults.length) return;
-
-    final result = _searchResults[index];
-
-    // 1. 滚动到对应轮次
-    await _scrollToGroup(result.roundIndex);
-
-    // 2. 如果是回复，切换到对应的回复卡片
-    if (result.type == 'reply' && result.replyIndex != null) {
-      // 计算实际的卡片索引（AI 分析在前，回复在后）
-      final aiAnalysisCount = _aiAnalyses[result.roundIndex]?.length ?? 0;
-      final cardIndex = aiAnalysisCount + result.replyIndex!;
-      _getCardPageNotifier(result.roundIndex).value = cardIndex;
-
-      // 同步 PageController
-      final pageController = _pageControllers[result.roundIndex];
-      if (pageController != null && pageController.hasClients) {
-        pageController.animateToPage(
-          cardIndex,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
-      }
-    }
-
-    setState(() {
-      _currentSearchIndex = index;
-    });
-  }
-
-  /// 跳转到上一个搜索结果
-  void _previousSearchResult() {
-    if (_searchResults.isEmpty) return;
-    final newIndex =
-        (_currentSearchIndex - 1 + _searchResults.length) %
-        _searchResults.length;
-    _navigateToSearchResult(newIndex);
-  }
-
-  /// 跳转到下一个搜索结果
-  void _nextSearchResult() {
-    if (_searchResults.isEmpty) return;
-    final newIndex = (_currentSearchIndex + 1) % _searchResults.length;
-    _navigateToSearchResult(newIndex);
-  }
-
   Future<void> _loadData() async {
+    final preParseTaskToken = ++_preParseTaskToken;
     final totalSw = Stopwatch()..start();
     final sw = Stopwatch()..start();
 
@@ -802,40 +513,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
       );
     }
 
-    // 【性能优化】批量预加载所有消息的标注（依赖 conv，必须串行）
-    if (conv != null) {
-      final messages = conv['messages'] as List<dynamic>? ?? [];
-      final messageIds = messages
-          .where((m) => m is Map<String, dynamic>)
-          .map((m) => m['id'] as String?)
-          .where((id) => id != null && id.isNotEmpty)
-          .cast<String>()
-          .toList();
-
-      if (messageIds.isNotEmpty) {
-        sw.reset();
-        final highlightService = HighlightService();
-        await highlightService.batchPreload(messageIds);
-        debugPrint(
-          '⏱️ [ConversationScreen] 标注预加载 (${messageIds.length}条): ${sw.elapsedMilliseconds}ms',
-        );
-      }
-
-      // 【新增】批量预加载讨论数量
-      sw.reset();
-      await _preloadDiscussionCounts(conv);
-      debugPrint(
-        '⏱️ [ConversationScreen] 讨论数量预加载: ${sw.elapsedMilliseconds}ms',
-      );
-
-      // 【性能优化】Isolate 预解析 Markdown
-      sw.reset();
-      await _preParseAllContent(conv);
-      debugPrint(
-        '⏱️ [ConversationScreen] Isolate预解析: ${sw.elapsedMilliseconds}ms',
-      );
-    }
-
     debugPrint(
       '⏱️ [ConversationScreen] _loadData 总耗时: ${totalSw.elapsedMilliseconds}ms',
     );
@@ -849,6 +526,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
       _aiAnalyses = analyses;
       _cachedGroups = null; // 清除缓存，触发重新计算
     });
+
+    // 将重型预热延后到空闲窗口，避免与首屏交互/抽屉动画竞争主线程
+    if (conv != null) {
+      unawaited(_runBackgroundWarmups(conv, taskToken: preParseTaskToken));
+    }
 
     // 测量首帧渲染时间
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -866,18 +548,99 @@ class _ConversationScreenState extends State<ConversationScreen> {
     });
 
     // ========== 调试信息：打印 Topic 详情 ==========
-    _printTopicDebugInfo();
+    if (kDebugMode && _enableTopicDebugLog) {
+      _printTopicDebugInfo();
+    }
+  }
+
+  Future<void> _runBackgroundWarmups(
+    Map<String, dynamic> conv, {
+    required int taskToken,
+  }) async {
+    // 给首帧和抽屉手势留出窗口，降低“打开时中段顿一下”的概率
+    await Future<void>.delayed(
+      const Duration(milliseconds: _backgroundWarmupInitialDelayMs),
+    );
+    if (!_shouldContinuePreParse(taskToken)) return;
+
+    final messages = conv['messages'] as List<dynamic>? ?? [];
+    final messageIds = <String>[];
+
+    for (var i = 0; i < messages.length; i++) {
+      if (!_shouldContinuePreParse(taskToken)) return;
+
+      final msg = messages[i];
+      if (msg is! Map<String, dynamic>) continue;
+      final messageId = msg['id'] as String?;
+      if (messageId != null && messageId.isNotEmpty) {
+        messageIds.add(messageId);
+        if (messageIds.length >= _highlightWarmupMaxEntries) break;
+      }
+
+      // 分片收集，避免一次性遍历占满主线程
+      if (i > 0 && i % _warmupCollectYieldInterval == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    if (messageIds.isNotEmpty) {
+      await _warmUpHighlights(messageIds, taskToken: taskToken);
+    }
+    if (!_shouldContinuePreParse(taskToken)) return;
+
+    await _preParseAllContent(conv, taskToken: taskToken);
+  }
+
+  Future<void> _warmUpHighlights(
+    List<String> messageIds, {
+    required int taskToken,
+  }) async {
+    final sw = Stopwatch()..start();
+    final preloadIds = messageIds
+        .take(_highlightWarmupMaxEntries)
+        .toList(growable: false);
+    if (preloadIds.isEmpty) return;
+
+    try {
+      final highlightService = HighlightService();
+      for (var i = 0; i < preloadIds.length; i += _highlightWarmupChunkSize) {
+        if (!_shouldContinuePreParse(taskToken)) return;
+
+        final end = i + _highlightWarmupChunkSize > preloadIds.length
+            ? preloadIds.length
+            : i + _highlightWarmupChunkSize;
+        final chunk = preloadIds.sublist(i, end);
+        await highlightService.batchPreload(chunk);
+
+        if (!_shouldContinuePreParse(taskToken)) return;
+        if (end < preloadIds.length) {
+          await Future<void>.delayed(const Duration(milliseconds: 8));
+        }
+      }
+      debugPrint(
+        '⏱️ [ConversationScreen] 后台标注预加载 (${preloadIds.length}条): ${sw.elapsedMilliseconds}ms',
+      );
+    } catch (e) {
+      debugPrint('⚠️ [ConversationScreen] 标注预加载失败: $e');
+    }
   }
 
   /// 【性能优化】Isolate 预解析所有轮次的 Markdown 内容
   ///
   /// 在后台线程完成解析，为首屏渲染做准备
-  Future<void> _preParseAllContent(Map<String, dynamic> conv) async {
+  Future<void> _preParseAllContent(
+    Map<String, dynamic> conv, {
+    required int taskToken,
+  }) async {
     final messages = conv['messages'] as List<dynamic>? ?? [];
-    final contents = <String, String>{};
+    final entries = <MapEntry<String, String>>[];
+    const maxEntries = _preParseImmediateCount + _preParseMaxBackgroundEntries;
 
     // 收集所有需要解析的内容
-    for (final msg in messages) {
+    for (var i = 0; i < messages.length; i++) {
+      if (!_shouldContinuePreParse(taskToken)) return;
+
+      final msg = messages[i];
       if (msg is! Map<String, dynamic>) continue;
       final messageId = msg['id'] as String?;
       if (messageId == null || messageId.isEmpty) continue;
@@ -896,64 +659,63 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
       final content = buffer.toString();
       if (content.isNotEmpty) {
-        contents[messageId] = content;
+        entries.add(MapEntry(messageId, content));
+        if (entries.length >= maxEntries) break;
+      }
+
+      // 大会话分片收集，避免一次性遍历造成卡顿
+      if (i > 0 && i % _warmupCollectYieldInterval == 0) {
+        await Future<void>.delayed(Duration.zero);
       }
     }
 
-    // 批量预解析
-    if (contents.isNotEmpty) {
-      await MarkdownIsolateParser.instance.batchPreParse(contents);
+    if (entries.isEmpty || !_shouldContinuePreParse(taskToken)) return;
+
+    final firstBatch = entries
+        .take(_preParseImmediateCount)
+        .toList(growable: false);
+    try {
+      await MarkdownIsolateParser.instance.batchPreParse(
+        Map<String, String>.fromEntries(firstBatch),
+      );
+    } catch (e) {
+      debugPrint('⚠️ [ConversationScreen] 首批 Markdown 预解析失败: $e');
+      return;
+    }
+
+    if (!_shouldContinuePreParse(taskToken) ||
+        entries.length <= _preParseImmediateCount) {
+      return;
+    }
+
+    final remaining = entries
+        .skip(_preParseImmediateCount)
+        .take(_preParseMaxBackgroundEntries)
+        .toList(growable: false);
+
+    for (var i = 0; i < remaining.length; i += _preParseChunkSize) {
+      if (!_shouldContinuePreParse(taskToken)) return;
+      final end = i + _preParseChunkSize > remaining.length
+          ? remaining.length
+          : i + _preParseChunkSize;
+      final chunk = remaining.sublist(i, end);
+      try {
+        await MarkdownIsolateParser.instance.batchPreParse(
+          Map<String, String>.fromEntries(chunk),
+        );
+      } catch (e) {
+        debugPrint('⚠️ [ConversationScreen] Markdown 分批预解析失败: $e');
+        return;
+      }
+
+      if (!_shouldContinuePreParse(taskToken)) return;
+      // 让出主线程时间片，降低后台预热对交互流畅度的影响
+      await Future<void>.delayed(const Duration(milliseconds: 16));
     }
   }
 
-  /// 【新增】批量预加载讨论数量
-  Future<void> _preloadDiscussionCounts(Map<String, dynamic> conv) async {
-    final conversationService = UnifiedConversationService.instance;
-    final messages = conv['messages'] as List<dynamic>? ?? [];
-    final counts = <String, int>{};
-
-    // 收集所有需要查询的 contextId
-    final contextIds = <String>[];
-
-    // 1. 收集所有消息的 messageId（单条消息讨论）
-    for (final msg in messages) {
-      if (msg is Map<String, dynamic>) {
-        final messageId = msg['id'] as String?;
-        if (messageId != null && messageId.isNotEmpty) {
-          contextIds.add(messageId);
-        }
-      }
-    }
-
-    // 2. 收集轮次级别的 contextId（消息组讨论）
-    // 先解析分组以获取轮次数量
-    final groups = <Map<String, dynamic>>[];
-    Map<String, dynamic>? currentGroup;
-    for (final msg in messages) {
-      if (msg is! Map<String, dynamic>) continue;
-      final role = msg['role'] as String?;
-      if (role == 'user') {
-        if (currentGroup != null) groups.add(currentGroup);
-        currentGroup = {
-          'user_message': msg,
-          'assistant_replies': <Map<String, dynamic>>[],
-        };
-      } else if (role == 'assistant' && currentGroup != null) {
-        (currentGroup['assistant_replies'] as List).add(msg);
-      }
-    }
-    if (currentGroup != null) groups.add(currentGroup);
-
-    // 添加轮次级别的 contextId
-    for (var i = 0; i < groups.length; i++) {
-      contextIds.add('${widget.topicId}:$i');
-    }
-
-    // 3. 批量查询讨论数量 (Batch Query)
-    final discussionCounts = await conversationService.getDiscussionCounts(
-      contextIds,
-    );
-    _discussionCounts = discussionCounts;
+  bool _shouldContinuePreParse(int taskToken) {
+    return mounted && taskToken == _preParseTaskToken;
   }
 
   /// 打印 Topic 调试信息
@@ -1099,124 +861,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return groups;
   }
 
-  Future<void> _exportToEpub(int groupIndex) async {
-    final groups = _getConversationGroups();
-    if (groupIndex >= groups.length) return;
-
-    final group = groups[groupIndex];
-    final userMsg = group['user_message'] as Map<String, dynamic>;
-    final assistantReplies = group['assistant_replies'] as List<dynamic>;
-    final analyses = _aiAnalyses[groupIndex] ?? [];
-
-    try {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('正在生成电子书...')));
-
-      await _epubExportService.exportGroup(
-        topicName: widget.topicName,
-        userMessage: userMsg,
-        assistantReplies: assistantReplies,
-        aiAnalyses: analyses,
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('✅ EPUB 3.0 导出成功 (v2)')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('电子书导出失败: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
-
-  /// 导出完整对话（所有轮次）
-  Future<void> _exportFullConversation() async {
-    final groups = _getConversationGroups();
-
-    if (groups.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('没有对话内容可以导出')));
-      return;
-    }
-
-    try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('正在生成完整对话电子书 (${groups.length} 轮)...')),
-      );
-
-      await _epubExportService.exportFullConversation(
-        topicName: widget.topicName,
-        groups: groups,
-        allAnalyses: _aiAnalyses,
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ 完整对话导出成功 (${groups.length} 轮)'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('完整对话导出失败: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
-
-  /// 构建格式化的上下文内容（用户问题 + 模型回复）
-  ///
-  /// 不包含模板内容，模板由用户在 AIChatScreen 中选择
-  String _buildFormattedContext(
-    Map<String, dynamic> userMsg,
-    List<dynamic> assistantReplies,
-  ) {
-    // 提取用户问题
-    final userBlocks = userMsg['blocks'] as List<dynamic>? ?? [];
-    var userQuery = '';
-    for (final block in userBlocks) {
-      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-        userQuery += block['content'] as String? ?? '';
-      }
-    }
-
-    // 提取各模型回复
-    var modelResponses = '';
-    for (var i = 0; i < assistantReplies.length; i++) {
-      final reply = assistantReplies[i] as Map<String, dynamic>;
-      final model = reply['model'] as Map<String, dynamic>?;
-      final modelName = model?['name'] as String? ?? 'Unknown';
-
-      final blocks = reply['blocks'] as List<dynamic>? ?? [];
-      var content = '';
-      for (final block in blocks) {
-        if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-          content += block['content'] as String? ?? '';
-        }
-      }
-
-      modelResponses += '\n\n### 模型 ${i + 1}: $modelName\n$content';
-    }
-
-    // 返回格式化的上下文（不含模板）
-    return '''**用户问题：**
-
-$userQuery
-
-**模型回复对比（${assistantReplies.length} 个）：**
-
-$modelResponses''';
-  }
-
   /// 构建普通 AppBar
   AppBar _buildNormalAppBar() {
     final hasDrawer = widget.onOpenDrawer != null;
@@ -1241,102 +885,10 @@ $modelResponses''';
         child: Text(widget.topicName),
       ),
       actions: [
-        // 页内搜索按钮
         IconButton(
-          icon: const Icon(Icons.search),
-          tooltip: '页内搜索',
-          onPressed: _conversation == null ? null : _enterSearchMode,
-        ),
-        // 朗读整个话题按钮 - 使用 Selector 只监听 hasValidConfig
-        Selector<TtsProvider, bool>(
-          selector: (_, tts) => tts.hasValidConfig,
-          builder: (context, hasValidConfig, _) {
-            if (!hasValidConfig) return const SizedBox.shrink();
-            return IconButton(
-              icon: const Icon(Icons.headphones),
-              tooltip: '朗读整个话题',
-              onPressed: _conversation == null ? null : _playTopicAudio,
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  /// 构建搜索模式 AppBar
-  AppBar _buildSearchAppBar(bool isDark) {
-    final hasResults = _searchResults.isNotEmpty;
-    final resultText = hasResults
-        ? '${_currentSearchIndex + 1}/${_searchResults.length}'
-        : (_searchKeyword.isNotEmpty ? '0/0' : '');
-
-    return AppBar(
-      leading: IconButton(
-        icon: const Icon(Icons.close),
-        tooltip: '退出搜索',
-        onPressed: _exitSearchMode,
-      ),
-      titleSpacing: 0,
-      title: TextField(
-        controller: _searchController,
-        focusNode: _searchFocusNode,
-        decoration: InputDecoration(
-          hintText: '搜索对话内容...',
-          hintStyle: TextStyle(color: Colors.grey[500]),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 0,
-            vertical: 14,
-          ),
-          suffixIcon: _searchController.text.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear, size: 20),
-                  onPressed: () {
-                    _searchController.clear();
-                    _performInPageSearch('');
-                  },
-                )
-              : null,
-        ),
-        style: TextStyle(
-          color: isDark ? Colors.white : Colors.black87,
-          fontSize: 16,
-        ),
-        onChanged: _performInPageSearch,
-        textInputAction: TextInputAction.search,
-        onSubmitted: (_) {
-          // 回车跳转到下一个结果
-          if (_searchResults.isNotEmpty) {
-            _nextSearchResult();
-          }
-        },
-      ),
-      actions: [
-        // 结果计数
-        if (resultText.isNotEmpty)
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text(
-                resultText,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: hasResults ? null : Colors.grey[500],
-                ),
-              ),
-            ),
-          ),
-        // 上一个按钮
-        IconButton(
-          icon: const Icon(Icons.keyboard_arrow_up),
-          tooltip: '上一个',
-          onPressed: hasResults ? _previousSearchResult : null,
-        ),
-        // 下一个按钮
-        IconButton(
-          icon: const Icon(Icons.keyboard_arrow_down),
-          tooltip: '下一个',
-          onPressed: hasResults ? _nextSearchResult : null,
+          icon: const Icon(Icons.map_rounded),
+          tooltip: '迷你地图',
+          onPressed: _conversation == null ? null : _showRoundPicker,
         ),
       ],
     );
@@ -1344,10 +896,8 @@ $modelResponses''';
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
-      appBar: _isSearchMode ? _buildSearchAppBar(isDark) : _buildNormalAppBar(),
+      appBar: _buildNormalAppBar(),
       body: Column(
         children: [
           // 主体内容
@@ -1368,25 +918,6 @@ $modelResponses''';
                         bottom: 0,
                         child: TtsMiniPlayer(),
                       ),
-                      // 点击外部关闭抽屉的蒙层
-                      ValueListenableBuilder<bool>(
-                        valueListenable: _edgeDrawerOpenNotifier,
-                        builder: (context, isOpen, _) {
-                          if (!isOpen) return const SizedBox.shrink();
-                          return Positioned.fill(
-                            child: GestureDetector(
-                              behavior:
-                                  HitTestBehavior.opaque, // 拦截点击事件，防止误触底层内容
-                              onTap: () {
-                                _edgeDrawerOpenNotifier.value = false;
-                              },
-                              child: Container(color: Colors.transparent),
-                            ),
-                          );
-                        },
-                      ),
-                      // 边缘操作抽屉
-                      _buildEdgeActionDrawer(),
                     ],
                   ),
           ),
@@ -1396,374 +927,112 @@ $modelResponses''';
     );
   }
 
-  /// 边缘操作抽屉：右侧贴边小箭头，点击后滑出操作面板（融合导航和操作）
-  Widget _buildEdgeActionDrawer() {
-    final groups = _getConversationGroups();
-    final totalGroups = groups.length;
-    if (groups.isEmpty) return const SizedBox.shrink();
-
-    // 【性能优化】使用 AnimatedBuilder + Listenable.merge 合并两个 ValueNotifier
-    // 减少嵌套层级，提升更新效率
-    return AnimatedBuilder(
-      animation: Listenable.merge([
-        _currentVisibleGroupNotifier,
-        _edgeDrawerOpenNotifier,
-      ]),
-      builder: (context, _) {
-        final currentGroup = _currentVisibleGroupNotifier.value;
-        final isOpen = _edgeDrawerOpenNotifier.value;
-
-        final contextId = '${widget.topicId}:$currentGroup';
-        final discussionCount = _discussionCounts[contextId] ?? 0;
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        final canGoUp = currentGroup > 0;
-        final canGoDown = currentGroup < totalGroups - 1;
-
-        return Positioned(
-          right: 0,
-          bottom: 100, // 避开 TtsMiniPlayer
-          child: AnimatedSlide(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOutCubic,
-            // 关闭时隐藏大部分，只露出触发箭头
-            offset: isOpen
-                ? Offset.zero
-                : const Offset(_edgeDrawerClosedOffset, 0),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 触发箭头：仅手柄区域支持拖拽，避免与回复横向切换冲突
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    _edgeDrawerOpenNotifier.value = !isOpen;
-                  },
-                  onHorizontalDragUpdate: (details) {
-                    _handleEdgeDrawerDragUpdate(details, isOpen);
-                  },
-                  onHorizontalDragEnd: (details) {
-                    _handleEdgeDrawerDragEnd(details, isOpen);
-                  },
-                  child: Container(
-                    width: _edgeDrawerHandleWidth,
-                    height: _edgeDrawerHandleHeight,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 0,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF2D2D2D).withValues(alpha: 0.95)
-                          : Colors.white.withValues(alpha: 0.98),
-                      borderRadius: const BorderRadius.horizontal(
-                        left: Radius.circular(10),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 6,
-                          offset: const Offset(-2, 0),
-                        ),
-                      ],
-                    ),
-                    child: Center(
-                      child: AnimatedRotation(
-                        duration: const Duration(milliseconds: 200),
-                        turns: isOpen ? 0.5 : 0,
-                        child: Icon(
-                          Icons.chevron_left,
-                          size: 14,
-                          color: isDark ? Colors.grey[500] : Colors.grey[500],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                // 操作面板（融合导航 + 操作）
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onHorizontalDragUpdate: isOpen
-                      ? (details) =>
-                            _handleEdgeDrawerDragUpdate(details, isOpen)
-                      : null,
-                  onHorizontalDragEnd: isOpen
-                      ? (details) => _handleEdgeDrawerDragEnd(details, isOpen)
-                      : null,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF2D2D2D).withValues(alpha: 0.98)
-                          : Colors.white.withValues(alpha: 0.99),
-                      borderRadius: const BorderRadius.horizontal(
-                        left: Radius.circular(14),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.12),
-                          blurRadius: 10,
-                          offset: const Offset(-3, 0),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // ========== 导航区 ==========
-                        // 上一轮按钮
-                        _buildEdgeNavButton(
-                          icon: Icons.keyboard_arrow_up_rounded,
-                          enabled: canGoUp,
-                          onTap: () => _scrollToGroup(currentGroup - 1),
-                          isDark: isDark,
-                        ),
-                        const SizedBox(height: 4),
-                        // 当前轮次显示（可点击跳转）
-                        GestureDetector(
-                          onTap: _showRoundPicker,
-                          child: Container(
-                            width: 48,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(
-                                0xFF8B5CF6,
-                              ).withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              '${currentGroup + 1}/$totalGroups',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: isDark
-                                    ? const Color(0xFFA78BFA)
-                                    : const Color(0xFF7C3AED),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        // 下一轮按钮
-                        _buildEdgeNavButton(
-                          icon: Icons.keyboard_arrow_down_rounded,
-                          enabled: canGoDown,
-                          onTap: () => _scrollToGroup(currentGroup + 1),
-                          isDark: isDark,
-                        ),
-
-                        // 分隔线
-                        Container(
-                          width: 36,
-                          height: 1,
-                          margin: const EdgeInsets.symmetric(vertical: 10),
-                          color: isDark ? Colors.grey[700] : Colors.grey[300],
-                        ),
-
-                        // ========== 操作区 ==========
-                        // 朗读按钮
-                        _buildEdgeActionButton(
-                          icon: Icons.headphones_rounded,
-                          label: '朗读',
-                          color: const Color(0xFF10B981),
-                          onTap: () {
-                            _edgeDrawerOpenNotifier.value = false;
-                            _playGroupAudio(currentGroup);
-                          },
-                          isDark: isDark,
-                        ),
-                        const SizedBox(height: 6),
-                        // 讨论按钮（本轮所有内容+话题）
-                        _buildEdgeActionButton(
-                          icon: Icons.chat_bubble_rounded,
-                          label: '讨论',
-                          color: const Color(0xFF8B5CF6),
-                          badgeCount: discussionCount,
-                          onTap: () {
-                            _edgeDrawerOpenNotifier.value = false;
-                            _openAnalysisChat(currentGroup);
-                          },
-                          isDark: isDark,
-                        ),
-                        const SizedBox(height: 6),
-                        // 洞察按钮（全局分析入口）
-                        _buildEdgeActionButton(
-                          icon: Icons.insights_rounded,
-                          label: '洞察',
-                          color: const Color(0xFF0EA5E9),
-                          onTap: () {
-                            _edgeDrawerOpenNotifier.value = false;
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => const InsightScreen(),
-                              ),
-                            );
-                          },
-                          isDark: isDark,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+  String _extractRoundPreview(Map<String, dynamic> group) {
+    final userMsg = group['user_message'] as Map<String, dynamic>?;
+    final blocks = userMsg?['blocks'] as List<dynamic>? ?? [];
+    final buffer = StringBuffer();
+    for (final block in blocks) {
+      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
+        buffer.write(block['content'] as String? ?? '');
+      }
+    }
+    final preview = buffer.toString().replaceAll('\n', ' ').trim();
+    if (preview.isEmpty) return '无问题内容';
+    const maxPreviewLength = 100;
+    if (preview.length <= maxPreviewLength) return preview;
+    return '${preview.substring(0, maxPreviewLength).trim()}...';
   }
 
-  void _handleEdgeDrawerDragUpdate(DragUpdateDetails details, bool isOpen) {
-    final dx = details.delta.dx;
-    if (!isOpen && dx < -12) {
-      _edgeDrawerOpenNotifier.value = true;
-      return;
+  List<Map<String, dynamic>> _buildRoundMapCards(
+    int groupIndex,
+    Map<String, dynamic> group,
+  ) {
+    final cards = <Map<String, dynamic>>[];
+    final assistantReplies = group['assistant_replies'] as List<dynamic>? ?? [];
+    final aiAnalysisCount = _aiAnalyses[groupIndex]?.length ?? 0;
+
+    for (var i = 0; i < aiAnalysisCount; i++) {
+      cards.add({
+        'cardIndex': i,
+        'label': aiAnalysisCount > 1 ? '洞察 #${i + 1}' : '洞察',
+        'color': const Color(0xFF10B981),
+        'isMainline': false,
+      });
     }
-    if (isOpen && dx > 10) {
-      _edgeDrawerOpenNotifier.value = false;
+
+    final totalByModel = <String, int>{};
+    for (final item in assistantReplies) {
+      if (item is! Map<String, dynamic>) continue;
+      final model = item['model'] as Map<String, dynamic>?;
+      final modelName = model?['name'] as String? ?? 'Assistant';
+      totalByModel[modelName] = (totalByModel[modelName] ?? 0) + 1;
+    }
+
+    final seenByModel = <String, int>{};
+    for (var i = 0; i < assistantReplies.length; i++) {
+      final reply = assistantReplies[i];
+      if (reply is! Map<String, dynamic>) continue;
+      final model = reply['model'] as Map<String, dynamic>?;
+      final modelName = model?['name'] as String? ?? 'Assistant';
+      final seen = (seenByModel[modelName] ?? 0) + 1;
+      seenByModel[modelName] = seen;
+      final showOrder = (totalByModel[modelName] ?? 0) > 1;
+
+      cards.add({
+        'cardIndex': aiAnalysisCount + i,
+        'label': showOrder ? '$modelName #$seen' : modelName,
+        'color': _getModelColor(modelName),
+        'isMainline': reply['useful'] as bool? ?? false,
+      });
+    }
+
+    return cards;
+  }
+
+  Future<void> _jumpToRoundTarget(int groupIndex, {int? cardIndex}) async {
+    await _scrollToGroup(groupIndex);
+    if (!mounted || cardIndex == null || cardIndex < 0) return;
+
+    final pageNotifier = _getCardPageNotifier(groupIndex);
+    pageNotifier.value = cardIndex;
+
+    final pageController = _pageControllers[groupIndex];
+    if (pageController != null && pageController.hasClients) {
+      pageController.jumpToPage(cardIndex);
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (mounted) {
+      _scrollToTabTop(groupIndex);
     }
   }
 
-  void _handleEdgeDrawerDragEnd(DragEndDetails details, bool isOpen) {
-    final vx = details.velocity.pixelsPerSecond.dx;
-    if (!isOpen && vx < -500) {
-      _edgeDrawerOpenNotifier.value = true;
-      return;
-    }
-    if (isOpen && vx > 500) {
-      _edgeDrawerOpenNotifier.value = false;
-    }
-  }
-
-  /// 边缘导航按钮（上/下箭头）
-  Widget _buildEdgeNavButton({
-    required IconData icon,
-    required bool enabled,
-    required VoidCallback onTap,
-    required bool isDark,
-  }) {
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Container(
-        width: 48,
-        height: 36,
-        decoration: BoxDecoration(
-          color: enabled
-              ? (isDark ? Colors.grey[800] : Colors.grey[100])
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          icon,
-          size: 24,
-          color: enabled
-              ? (isDark ? Colors.grey[300] : Colors.grey[700])
-              : (isDark ? Colors.grey[700] : Colors.grey[300]),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEdgeActionButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-    VoidCallback? onLongPress,
-    required bool isDark,
-    int badgeCount = 0,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: Container(
-        width: 52,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(icon, size: 20, color: color),
-                ),
-                if (badgeCount > 0)
-                  Positioned(
-                    right: -6,
-                    top: -6,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(
-                        minWidth: 16,
-                        minHeight: 16,
-                      ),
-                      child: Text(
-                        badgeCount > 99 ? '99+' : '$badgeCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                color: isDark ? Colors.grey[400] : Colors.grey[600],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 显示轮次选择器（列表模式，带 query 预览）
+  /// 显示轮次迷你地图（二级导航：轮次 + 模型回复）
   void _showRoundPicker() {
+    // 避免底部弹层打开时残留焦点导致系统键盘自动弹出
+    FocusManager.instance.primaryFocus?.unfocus();
+
     final groups = _getConversationGroups();
+    if (groups.isEmpty) return;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final currentIndex = _currentVisibleGroupNotifier.value;
+    final currentGroupIndex = _currentVisibleGroupNotifier.value;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) {
+      builder: (sheetContext) {
         return Container(
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.6,
+            maxHeight: MediaQuery.of(sheetContext).size.height * 0.78,
           ),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: MainAxisSize.max,
             children: [
-              // 拖动条
               Container(
                 margin: const EdgeInsets.only(top: 12),
                 width: 40,
@@ -1773,20 +1042,27 @@ $modelResponses''';
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              // 标题栏
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
+                    Icon(
+                      Icons.map_rounded,
+                      size: 18,
+                      color: isDark
+                          ? const Color(0xFFA78BFA)
+                          : const Color(0xFF7C3AED),
+                    ),
+                    const SizedBox(width: 8),
                     Text(
-                      '跳转到对话',
+                      '迷你地图',
                       style: TextStyle(
-                        fontSize: 18,
+                        fontSize: 17,
                         fontWeight: FontWeight.w600,
                         color: isDark ? Colors.white : Colors.grey[800],
                       ),
                     ),
+                    const Spacer(),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
@@ -1797,7 +1073,7 @@ $modelResponses''';
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        '${currentIndex + 1} / ${groups.length}',
+                        '${currentGroupIndex + 1} / ${groups.length}',
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
@@ -1810,142 +1086,214 @@ $modelResponses''';
                   ],
                 ),
               ),
-              // 分隔线
               Divider(
                 height: 1,
                 color: isDark ? Colors.grey[800] : Colors.grey[200],
               ),
-              // 轮次列表
-              Flexible(
+              Expanded(
                 child: ListView.builder(
-                  shrinkWrap: true,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
                   itemCount: groups.length,
                   itemBuilder: (context, index) {
                     final group = groups[index];
-                    final isSelected = index == currentIndex;
+                    final queryPreview = _extractRoundPreview(group);
+                    final mapCards = _buildRoundMapCards(index, group);
+                    final isCurrentRound = index == currentGroupIndex;
+                    final currentCardIndex =
+                        _cardPageNotifiers[index]?.value ?? 0;
 
-                    // 提取用户问题预览（从 user_message 的 blocks 中提取）
-                    String queryPreview = '';
-                    final userMsg =
-                        group['user_message'] as Map<String, dynamic>?;
-                    if (userMsg != null) {
-                      final blocks = userMsg['blocks'] as List<dynamic>? ?? [];
-                      for (final block in blocks) {
-                        if (block is Map<String, dynamic> &&
-                            block['type'] == 'main_text') {
-                          queryPreview += block['content'] as String? ?? '';
-                        }
-                      }
-                      queryPreview = queryPreview.replaceAll('\n', ' ').trim();
-                    }
-
-                    // 截断并设置默认值
-                    if (queryPreview.isEmpty) {
-                      queryPreview = '无问题内容';
-                    } else if (queryPreview.length > 60) {
-                      queryPreview = '${queryPreview.substring(0, 60)}...';
-                    }
-
-                    return Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () {
-                          Navigator.pop(context);
-                          _scrollToGroup(index);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? (isDark
-                                      ? const Color(
-                                          0xFF8B5CF6,
-                                        ).withValues(alpha: 0.15)
-                                      : const Color(
-                                          0xFF8B5CF6,
-                                        ).withValues(alpha: 0.08))
-                                : Colors.transparent,
-                            border: Border(
-                              left: BorderSide(
-                                width: 3,
-                                color: isSelected
-                                    ? const Color(0xFF8B5CF6)
-                                    : Colors.transparent,
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: isCurrentRound
+                            ? const Color(
+                                0xFF8B5CF6,
+                              ).withValues(alpha: isDark ? 0.14 : 0.08)
+                            : (isDark
+                                  ? const Color(0xFF252525)
+                                  : const Color(0xFFF7F7FA)),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: isCurrentRound
+                              ? const Color(0xFF8B5CF6).withValues(alpha: 0.45)
+                              : (isDark
+                                    ? Colors.grey[800]!
+                                    : Colors.grey[300]!),
+                          width: 1,
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            InkWell(
+                              borderRadius: BorderRadius.circular(10),
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                unawaited(_jumpToRoundTarget(index));
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                  vertical: 4,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(
+                                          0xFF6366F1,
+                                        ).withValues(alpha: 0.16),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Text(
+                                        'Q',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF6366F1),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '${index + 1}',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: isDark
+                                            ? Colors.white
+                                            : Colors.grey[900],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        queryPreview,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          height: 1.35,
+                                          color: isDark
+                                              ? Colors.grey[300]
+                                              : Colors.grey[700],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                          child: Row(
-                            children: [
-                              // 轮次号
-                              Container(
-                                width: 36,
-                                height: 36,
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? const Color(0xFF8B5CF6)
-                                      : (isDark
-                                            ? Colors.grey[800]
-                                            : Colors.grey[100]),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    '${index + 1}',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: isSelected
-                                          ? Colors.white
-                                          : (isDark
-                                                ? Colors.grey[300]
-                                                : Colors.grey[700]),
+                            if (mapCards.isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: mapCards.map((card) {
+                                  final cardIndex = card['cardIndex'] as int;
+                                  final label = card['label'] as String;
+                                  final chipColor = card['color'] as Color;
+                                  final isMainline =
+                                      card['isMainline'] as bool? ?? false;
+                                  final isSelected =
+                                      isCurrentRound &&
+                                      currentCardIndex == cardIndex;
+
+                                  return InkWell(
+                                    borderRadius: BorderRadius.circular(999),
+                                    onTap: () {
+                                      Navigator.pop(sheetContext);
+                                      unawaited(
+                                        _jumpToRoundTarget(
+                                          index,
+                                          cardIndex: cardIndex,
+                                        ),
+                                      );
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: isSelected
+                                            ? chipColor.withValues(
+                                                alpha: isDark ? 0.30 : 0.18,
+                                              )
+                                            : chipColor.withValues(
+                                                alpha: isDark ? 0.16 : 0.10,
+                                              ),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                        border: Border.all(
+                                          color: isSelected
+                                              ? chipColor
+                                              : chipColor.withValues(
+                                                  alpha: 0.5,
+                                                ),
+                                          width: isSelected ? 1.5 : 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.circle,
+                                            size: 7,
+                                            color: chipColor,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          ConstrainedBox(
+                                            constraints: const BoxConstraints(
+                                              maxWidth: 160,
+                                            ),
+                                            child: Text(
+                                              label,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: isSelected
+                                                    ? FontWeight.w700
+                                                    : FontWeight.w500,
+                                                color: isDark
+                                                    ? Colors.grey[100]
+                                                    : Colors.grey[900],
+                                              ),
+                                            ),
+                                          ),
+                                          if (isMainline) ...[
+                                            const SizedBox(width: 5),
+                                            const Icon(
+                                              Icons.star,
+                                              size: 11,
+                                              color: Color(0xFFFFB800),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                                ),
+                                  );
+                                }).toList(),
                               ),
-                              const SizedBox(width: 14),
-                              // Query 预览
-                              Expanded(
-                                child: Text(
-                                  queryPreview,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    height: 1.4,
-                                    fontWeight: isSelected
-                                        ? FontWeight.w500
-                                        : FontWeight.normal,
-                                    color: isDark
-                                        ? Colors.grey[300]
-                                        : Colors.grey[700],
-                                  ),
-                                ),
-                              ),
-                              // 当前指示
-                              if (isSelected)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 8),
-                                  child: Icon(
-                                    Icons.arrow_back_rounded,
-                                    size: 16,
-                                    color: const Color(0xFF8B5CF6),
-                                  ),
-                                ),
                             ],
-                          ),
+                          ],
                         ),
                       ),
                     );
                   },
                 ),
               ),
-              // 底部安全区
-              SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+              SizedBox(height: MediaQuery.of(sheetContext).padding.bottom + 8),
             ],
           ),
         );
@@ -2153,210 +1501,6 @@ $modelResponses''';
     );
   }
 
-  /// 构建导航箭头按钮
-  Widget _buildNavArrowButton({
-    required IconData icon,
-    required VoidCallback onTap,
-    required bool isDark,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.05),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          icon,
-          size: 28,
-          color: isDark ? Colors.grey[400] : Colors.grey[600],
-        ),
-      ),
-    );
-  }
-
-  /// 构建滚动感知的进度导航（紧凑胶囊式）
-  /// 【性能优化】使用 ValueListenableBuilder 避免整页重建
-  Widget _buildFloatingNavigation() {
-    final groups = _getConversationGroups();
-    final totalGroups = groups.length;
-
-    if (totalGroups <= 1) {
-      return const SizedBox.shrink();
-    }
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Positioned(
-      right: 12, // 留出能量条的空间
-      top: 0,
-      bottom: 80,
-      child: Center(
-        child: ValueListenableBuilder<bool>(
-          valueListenable: _isScrollingNotifier,
-          builder: (context, isScrolling, child) {
-            return AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: isScrolling ? 1.0 : 0.0,
-              child: AnimatedSlide(
-                duration: const Duration(milliseconds: 200),
-                offset: isScrolling ? Offset.zero : const Offset(0.3, 0),
-                curve: Curves.easeOutCubic,
-                child: IgnorePointer(ignoring: !isScrolling, child: child),
-              ),
-            );
-          },
-          child: ValueListenableBuilder<int>(
-            valueListenable: _currentVisibleGroupNotifier,
-            builder: (context, currentVisibleGroup, _) {
-              // 如果轮次太多，只显示关键节点
-              final showAll = totalGroups <= 10;
-              final displayIndices = showAll
-                  ? List.generate(totalGroups, (i) => i)
-                  : _getKeyIndices(totalGroups, currentVisibleGroup);
-
-              return ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 8,
-                      horizontal: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: (isDark ? Colors.grey[900] : Colors.white)
-                          ?.withValues(alpha: 0.75),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: (isDark ? Colors.white : Colors.black)
-                            .withValues(alpha: 0.1),
-                        width: 0.5,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // 上一个按钮
-                        if (currentVisibleGroup > 0)
-                          _buildNavArrowButton(
-                            icon: Icons.keyboard_arrow_up,
-                            onTap: () =>
-                                _scrollToGroup(currentVisibleGroup - 1),
-                            isDark: isDark,
-                          ),
-
-                        ...displayIndices.map((index) {
-                          final isActive = index == currentVisibleGroup;
-                          final isEllipsis = index < 0;
-
-                          if (isEllipsis) {
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4),
-                              child: Text(
-                                '⋮',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: isDark
-                                      ? Colors.grey[600]
-                                      : Colors.grey[400],
-                                ),
-                              ),
-                            );
-                          }
-
-                          return GestureDetector(
-                            onTap: () => _scrollToGroup(index),
-                            behavior: HitTestBehavior.opaque,
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              curve: Curves.easeOutCubic,
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              padding: EdgeInsets.symmetric(
-                                horizontal: isActive ? 12 : 10,
-                                vertical: isActive ? 8 : 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isActive
-                                    ? Theme.of(context).primaryColor
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Text(
-                                '${index + 1}',
-                                style: TextStyle(
-                                  fontSize: isActive ? 16 : 14,
-                                  fontWeight: isActive
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                  color: isActive
-                                      ? Colors.white
-                                      : (isDark
-                                            ? Colors.grey[500]
-                                            : Colors.grey[600]),
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-
-                        // 下一个按钮
-                        if (currentVisibleGroup < totalGroups - 1)
-                          _buildNavArrowButton(
-                            icon: Icons.keyboard_arrow_down,
-                            onTap: () =>
-                                _scrollToGroup(currentVisibleGroup + 1),
-                            isDark: isDark,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 获取关键索引（用于折叠显示）
-  List<int> _getKeyIndices(int total, int current) {
-    final indices = <int>[];
-
-    // 始终显示第一个
-    indices.add(0);
-
-    // 当前位置附近
-    if (current > 2) indices.add(-1); // 省略号
-    if (current > 1) indices.add(current - 1);
-    if (current > 0 && current < total - 1) indices.add(current);
-    if (current < total - 2) indices.add(current + 1);
-    if (current < total - 3) indices.add(-1); // 省略号
-
-    // 始终显示最后一个
-    if (total > 1 && !indices.contains(total - 1)) {
-      indices.add(total - 1);
-    }
-
-    // 去重并排序
-    return indices.toSet().toList()..sort((a, b) {
-      if (a == -1) return 0;
-      if (b == -1) return 0;
-      return a.compareTo(b);
-    });
-  }
-
   Widget _buildConversationGroup(Map<String, dynamic> group, int groupIndex) {
     return _buildCleanLayout(group, groupIndex);
   }
@@ -2502,78 +1646,6 @@ $modelResponses''';
   /// 简洁布局：操作按钮（更紧凑）
   Widget _buildCleanActionButtons(int groupIndex) {
     return const SizedBox.shrink();
-  }
-
-  /// 简洁布局：图标按钮
-  Widget _buildIconOnlyButton({
-    required IconData icon,
-    required String tooltip,
-    required Color color,
-    required VoidCallback onPressed,
-  }) {
-    return IconButton(
-      onPressed: onPressed,
-      icon: Icon(icon, size: 18),
-      color: color,
-      tooltip: tooltip,
-      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-      padding: EdgeInsets.zero,
-      splashRadius: 18,
-    );
-  }
-
-  /// 简洁布局：带角标的图标按钮
-  Widget _buildIconWithBadge({
-    required IconData icon,
-    required String tooltip,
-    required Color color,
-    required int badgeCount,
-    required VoidCallback onPressed,
-    VoidCallback? onLongPress,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onPressed,
-        onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(16),
-        child: SizedBox(
-          width: 32,
-          height: 32,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Center(child: Icon(icon, size: 18, color: color)),
-              if (badgeCount > 0)
-                Positioned(
-                  right: 0,
-                  top: 2,
-                  child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF8B5CF6),
-                      shape: BoxShape.circle,
-                    ),
-                    constraints: const BoxConstraints(
-                      minWidth: 14,
-                      minHeight: 14,
-                    ),
-                    child: Text(
-                      badgeCount > 99 ? '99+' : '$badgeCount',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   /// 简洁布局：回复内容区域（流式布局）
@@ -3004,9 +2076,6 @@ $modelResponses''';
       }
     }
 
-    // 获取单条消息的讨论数量
-    final discussionCount = _discussionCounts[messageId] ?? 0;
-
     return Container(
       color: modelColor.withValues(alpha: isDark ? 0.04 : 0.02),
       child: Column(
@@ -3029,20 +2098,14 @@ $modelResponses''';
                   content: content,
                   messageId: messageId,
                   modelName: modelName,
-                  onDiscuss: () => _openSingleMessageDiscussion(reply),
                   onRegenerate: null, // TODO: 实现重新生成
                   showRegenerate: false, // 查看模式暂不支持重新生成
                   showSpeak: hasValidConfig,
                   onSpeak: () => _speakContent(content, modelName),
-                  discussionCount: discussionCount,
                 ),
-                // 传递上下文参数，使全屏阅读时能进行讨论
-                // topicId: widget.topicId, // 已在上方传递
                 roundIndex: groupIndex,
-                // 【搜索高亮】优先使用页内搜索关键词，否则使用外部传入的
-                searchKeyword: _searchKeyword.isNotEmpty
-                    ? _searchKeyword
-                    : widget.highlightKeyword,
+                // 使用外部传入的关键词高亮
+                searchKeyword: widget.highlightKeyword,
                 // 【精确定位】传递目标高亮 ID，用于闪烁提示
                 targetHighlightId: _targetHighlightId,
               );
@@ -3113,56 +2176,6 @@ $modelResponses''';
     );
   }
 
-  /// 打开单条消息的讨论
-  void _openSingleMessageDiscussion(Map<String, dynamic> reply) {
-    final model = reply['model'] as Map<String, dynamic>?;
-    final modelName = model?['name'] as String? ?? 'Assistant';
-    final messageId = reply['id'] as String? ?? '';
-
-    // 提取内容（包含多种可显示的块类型）
-    // 优先顺序：main_text > thinking > translation > code > error
-    final blocks = reply['blocks'] as List<dynamic>? ?? [];
-    String content = '';
-    final contentTypes = [
-      'main_text',
-      'thinking',
-      'translation',
-      'code',
-      'error',
-    ];
-    for (final type in contentTypes) {
-      for (final block in blocks) {
-        if (block is Map<String, dynamic> && block['type'] == type) {
-          content += block['content'] as String? ?? '';
-        }
-      }
-    }
-
-    // 构建上下文数据
-    final contextData = {
-      'rounds': [
-        {
-          'index': 0,
-          'question': null,
-          'replies': [reply],
-        },
-      ],
-    };
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => AIChatScreen(
-          initialContextId: messageId,
-          initialContextSnapshot: content,
-          initialTitle: '讨论: $modelName',
-          initialContextData: contextData,
-          contextTypeFilter: ConversationContextType.singleMessage,
-        ),
-      ),
-    );
-  }
-
   /// 获取模型颜色
   Color _getModelColor(String modelName) {
     final name = modelName.toLowerCase();
@@ -3179,510 +2192,6 @@ $modelResponses''';
     } else {
       return const Color(0xFF8B5CF6);
     }
-  }
-
-  /// 打开 AI 分析对话界面（多轮对话模式）
-  ///
-  /// 【修复】不再预先创建空对话，而是传递参数让 AIChatScreen 懒创建
-  /// 只有当用户实际发送消息时才会创建对话，避免产生空对话
-  Future<void> _openAnalysisChat(int groupIndex) async {
-    final groups = _getConversationGroups();
-    if (groupIndex >= groups.length) return;
-
-    final group = groups[groupIndex];
-    final userMsg = group['user_message'] as Map<String, dynamic>;
-    final assistantReplies = group['assistant_replies'] as List<dynamic>;
-
-    if (assistantReplies.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('该问题没有助手回复')));
-      return;
-    }
-
-    // 构建上下文快照（markdown 格式）
-    final contextSnapshot = _buildContextSnapshot(userMsg, assistantReplies);
-
-    // 构建原始上下文数据（结构化数据）
-    final contextData = _buildContextData(groups, groupIndex);
-
-    // 构建格式化的上下文内容（用户问题 + 模型回复，不含模板）
-    final formattedContext = _buildFormattedContext(userMsg, assistantReplies);
-    contextData['formattedContext'] = formattedContext;
-
-    // 构建 contextId（用于对话分组和查询）
-    final contextId = '${widget.topicId}:$groupIndex';
-
-    // 跳转到 AI 对话界面
-    // 【修复】不传 initialConversationId，让 AIChatScreen 在用户发送消息时懒创建
-    if (mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => AIChatScreen(
-            // initialConversationId: null - 不预先创建，懒创建
-            initialContextId: contextId,
-            initialContextSnapshot: contextSnapshot,
-            initialContextData: contextData, // ← 传递原始数据
-            initialTitle: '分析 - 第 ${groupIndex + 1} 轮对话',
-            contextTypeFilter: ConversationContextType.messageGroup,
-          ),
-        ),
-      );
-    }
-  }
-
-  /// 打开 AI 分析对话界面（只选中当前显示的回复）
-  ///
-  /// 用于单击讨论按钮，只选中当前 tab 显示的那条回复
-  Future<void> _openAnalysisChatForReply(int groupIndex) async {
-    // 复用完整的 contextData，只是添加标记让编辑器只选当前显示的回复
-    final groups = _getConversationGroups();
-    if (groupIndex >= groups.length) return;
-
-    final group = groups[groupIndex];
-    final userMsg = group['user_message'] as Map<String, dynamic>;
-    final assistantReplies = group['assistant_replies'] as List<dynamic>;
-
-    if (assistantReplies.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('该问题没有助手回复')));
-      return;
-    }
-
-    // 获取当前显示的回复索引（用户正在看的 tab）
-    final currentReplyIndex = _getCardPageNotifier(groupIndex).value;
-
-    // 使用与长按相同的方式构建数据
-    final contextSnapshot = _buildContextSnapshot(userMsg, assistantReplies);
-    final contextData = _buildContextData(groups, groupIndex);
-    final formattedContext = _buildFormattedContext(userMsg, assistantReplies);
-    contextData['formattedContext'] = formattedContext;
-
-    // 添加标记：不选问题，只选当前显示的回复
-    contextData['selectQuestionByDefault'] = false;
-    contextData['selectOnlyReplyIndex'] = currentReplyIndex; // 只选这个索引的回复
-
-    final contextId = '${widget.topicId}:$groupIndex:reply:$currentReplyIndex';
-
-    if (mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => AIChatScreen(
-            initialContextId: contextId,
-            initialContextSnapshot: contextSnapshot,
-            initialContextData: contextData,
-            initialTitle: '讨论 - 第 ${groupIndex + 1} 轮回复',
-            contextTypeFilter: ConversationContextType.messageGroup,
-          ),
-        ),
-      );
-    }
-  }
-
-  /// 构建原始上下文数据（结构化数据，包含所有轮次和完整字段）
-  Map<String, dynamic> _buildContextData(
-    List<Map<String, dynamic>> groups,
-    int currentGroupIndex,
-  ) {
-    final rounds = <Map<String, dynamic>>[];
-
-    // 提取所有轮次的原始数据
-    for (var i = 0; i < groups.length; i++) {
-      final group = groups[i];
-      final userMsg = group['user_message'] as Map<String, dynamic>;
-      final assistantReplies = group['assistant_replies'] as List<dynamic>;
-
-      rounds.add({
-        'index': i,
-        'question': userMsg, // 保留完整的用户消息数据
-        'replies': assistantReplies, // 保留完整的助手回复数据（包含 useful 字段）
-      });
-    }
-
-    // 获取助手信息（注意：assistantIds 是列表，取第一个）
-    String? assistantId;
-    String? assistantName;
-    if (_conversation != null) {
-      // 从 assistantIds 列表取第一个
-      final assistantIds = _conversation!['assistantIds'] as List<dynamic>?;
-      if (assistantIds != null && assistantIds.isNotEmpty) {
-        assistantId = assistantIds.first as String?;
-      }
-      // 尝试从 assistant 字段获取名称（如果有的话）
-      final assistant = _conversation!['assistant'] as Map<String, dynamic>?;
-      assistantName = assistant?['name'] as String?;
-    }
-
-    return {
-      'rounds': rounds,
-      'currentRoundIndex': currentGroupIndex, // 当前轮次索引
-      'topicId': widget.topicId,
-      'topicName': widget.topicName,
-      'assistantId': assistantId,
-      'assistantName': assistantName,
-    };
-  }
-
-  /// 构建上下文快照（用于保存到对话中）
-  String _buildContextSnapshot(
-    Map<String, dynamic> userMsg,
-    List<dynamic> assistantReplies,
-  ) {
-    // 提取用户问题
-    final userBlocks = userMsg['blocks'] as List<dynamic>? ?? [];
-    var userQuery = '';
-    for (final block in userBlocks) {
-      if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-        userQuery += block['content'] as String? ?? '';
-      }
-    }
-
-    // 构建快照
-    var snapshot = '## 用户问题\n\n$userQuery\n\n## 模型回复\n\n';
-    for (var i = 0; i < assistantReplies.length; i++) {
-      final reply = assistantReplies[i] as Map<String, dynamic>;
-      final model = reply['model'] as Map<String, dynamic>?;
-      final modelName = model?['name'] as String? ?? 'Unknown';
-
-      final blocks = reply['blocks'] as List<dynamic>? ?? [];
-      var content = '';
-      for (final block in blocks) {
-        if (block is Map<String, dynamic> && block['type'] == 'main_text') {
-          content += block['content'] as String? ?? '';
-        }
-      }
-
-      snapshot += '### $modelName\n\n$content\n\n';
-    }
-
-    return snapshot;
-  }
-
-  /// 播放本轮对话音频
-  void _playGroupAudio(int groupIndex) {
-    final groups = _getConversationGroups();
-    if (groupIndex >= groups.length) return;
-
-    final group = groups[groupIndex];
-    final content = _buildReadableTextForGroup(group, groupIndex);
-
-    if (content.isEmpty) return;
-
-    final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
-    final item = TtsItem(
-      id: 'group_${widget.topicId}_$groupIndex',
-      text: content,
-      title: '第 ${groupIndex + 1} 轮对话',
-      author: widget.topicName,
-    );
-
-    ttsProvider.setPlaylist([item]);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('开始朗读第 ${groupIndex + 1} 轮对话...'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
-
-  /// 播放整个话题的所有轮次
-  void _playTopicAudio() {
-    final groups = _getConversationGroups();
-    if (groups.isEmpty) return;
-
-    final content = _buildReadableTextForTopic(groups);
-    if (content.isEmpty) return;
-
-    final ttsProvider = Provider.of<TtsProvider>(context, listen: false);
-    final item = TtsItem(
-      id: 'topic_${widget.topicId}',
-      text: content,
-      title: widget.topicName,
-      author: 'Cherry Reader',
-    );
-
-    ttsProvider.setPlaylist([item]);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('开始朗读话题：${widget.topicName}'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
-
-  /// 构建单轮对话的可朗读文本
-  String _buildReadableTextForGroup(
-    Map<String, dynamic> group,
-    int groupIndex, {
-    bool includeRoundHint = false,
-  }) {
-    final buffer = StringBuffer();
-
-    // 轮次提示（用于整个话题朗读时）
-    if (includeRoundHint) {
-      buffer.writeln('第 ${groupIndex + 1} 轮对话');
-      buffer.writeln();
-    }
-
-    // 用户问题
-    final userText = group['user_text'] as String? ?? '';
-    if (userText.isNotEmpty) {
-      // 如果问题太长，截取前 200 字
-      final displayQuestion = userText.length > 200
-          ? '${userText.substring(0, 200)}...等等'
-          : userText;
-      buffer.writeln('用户问：$displayQuestion');
-      buffer.writeln();
-    }
-
-    // AI 分析（如果有）
-    final analyses = _aiAnalyses[groupIndex] ?? [];
-    if (analyses.isNotEmpty) {
-      buffer.writeln('AI 分析：');
-      buffer.writeln();
-      for (final analysis in analyses) {
-        buffer.writeln(analysis);
-        buffer.writeln();
-      }
-    }
-
-    // 各模型回复
-    final assistantReplies = group['assistant_replies'] as List<dynamic>? ?? [];
-    for (var i = 0; i < assistantReplies.length; i++) {
-      final reply = assistantReplies[i] as Map<String, dynamic>;
-      final model = reply['model'] as Map<String, dynamic>?;
-      final modelName = model?['name'] as String? ?? 'Assistant';
-      final useful = reply['useful'] as bool? ?? false;
-
-      final blocks = reply['blocks'] as List<dynamic>? ?? [];
-      var content = '';
-      // 包含多种内容类型：main_text, thinking, translation, text
-      // 这样 Claude 的思考过程（通常显示为引用块）也会被朗读
-      final contentTypes = ['main_text', 'thinking', 'translation', 'text'];
-      for (final block in blocks) {
-        if (block is Map<String, dynamic> &&
-            contentTypes.contains(block['type'])) {
-          content += block['content'] as String? ?? '';
-        }
-      }
-
-      if (content.isNotEmpty) {
-        // 多回复时加模型名称提示
-        if (assistantReplies.length > 1) {
-          if (useful) {
-            buffer.writeln('$modelName 的主要回复：');
-          } else {
-            buffer.writeln('$modelName 回复：');
-          }
-          buffer.writeln();
-        }
-
-        buffer.writeln(content);
-        buffer.writeln();
-
-        // 回复之间添加分隔（会被 SSML 转换器处理为停顿）
-        if (i < assistantReplies.length - 1) {
-          buffer.writeln('---');
-          buffer.writeln();
-        }
-      }
-    }
-
-    return buffer.toString().trim();
-  }
-
-  /// 构建整个话题的可朗读文本
-  String _buildReadableTextForTopic(List<Map<String, dynamic>> groups) {
-    final buffer = StringBuffer();
-
-    // 话题标题
-    buffer.writeln('话题：${widget.topicName}');
-    buffer.writeln();
-    buffer.writeln('共 ${groups.length} 轮对话');
-    buffer.writeln();
-    buffer.writeln('---');
-    buffer.writeln();
-
-    // 各轮次
-    for (var i = 0; i < groups.length; i++) {
-      buffer.writeln(
-        _buildReadableTextForGroup(groups[i], i, includeRoundHint: true),
-      );
-
-      // 轮次之间添加分隔
-      if (i < groups.length - 1) {
-        buffer.writeln();
-        buffer.writeln('---');
-        buffer.writeln();
-      }
-    }
-
-    buffer.writeln();
-    buffer.writeln('话题结束');
-
-    return buffer.toString().trim();
-  }
-
-  /// 显示 FAB 样式选择器底部弹窗
-  void _showFabStylePicker() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) {
-        return Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 拖动指示器
-              Container(
-                margin: const EdgeInsets.only(top: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[400],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              // 标题
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  '选择悬浮按钮样式',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: isDark ? Colors.white : Colors.grey[800],
-                  ),
-                ),
-              ),
-              // 样式列表
-              SizedBox(
-                height: 400,
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: DualFabStyle.values.length,
-                  itemBuilder: (context, index) {
-                    final style = DualFabStyle.values[index];
-                    final isSelected = style == _fabStyleNotifier.value;
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: InkWell(
-                        onTap: () {
-                          _fabStyleNotifier.value = style;
-                          Navigator.of(context).pop();
-                        },
-                        borderRadius: BorderRadius.circular(16),
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? const Color(0xFF8B5CF6).withValues(alpha: 0.1)
-                                : (isDark
-                                      ? Colors.grey[850]
-                                      : Colors.grey[100]),
-                            borderRadius: BorderRadius.circular(16),
-                            border: isSelected
-                                ? Border.all(
-                                    color: const Color(0xFF8B5CF6),
-                                    width: 2,
-                                  )
-                                : null,
-                          ),
-                          child: Row(
-                            children: [
-                              // 样式预览
-                              Container(
-                                width: 80,
-                                height: 80,
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? Colors.grey[800]
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.05,
-                                      ),
-                                      blurRadius: 8,
-                                    ),
-                                  ],
-                                ),
-                                child: Center(
-                                  child: Transform.scale(
-                                    scale: 0.6,
-                                    child: IgnorePointer(
-                                      child: DualFab(
-                                        style: style,
-                                        onPlayPressed: () {},
-                                        onDiscussPressed: () {},
-                                        discussionCount: 3,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              // 样式信息
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      style.displayName,
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: isSelected
-                                            ? const Color(0xFF8B5CF6)
-                                            : (isDark
-                                                  ? Colors.white
-                                                  : Colors.grey[800]),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      style.description,
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.grey[600],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              // 选中标记
-                              if (isSelected)
-                                const Icon(
-                                  Icons.check_circle,
-                                  color: Color(0xFF8B5CF6),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              // 底部安全区
-              SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
-            ],
-          ),
-        );
-      },
-    );
   }
 }
 
@@ -3859,14 +2368,12 @@ class _SwipeableSwitcher extends StatefulWidget {
   final int totalCount;
   final ValueChanged<int> onIndexChanged;
   final Widget Function(int index) itemBuilder;
-  final VoidCallback? onDoubleTap;
 
   const _SwipeableSwitcher({
     required this.currentIndex,
     required this.totalCount,
     required this.onIndexChanged,
     required this.itemBuilder,
-    this.onDoubleTap,
   });
 
   @override
@@ -3967,7 +2474,6 @@ class _SwipeableSwitcherState extends State<_SwipeableSwitcher> {
       onHorizontalDragStart: _onDragStart,
       onHorizontalDragUpdate: _onDragUpdate,
       onHorizontalDragEnd: _onDragEnd,
-      // onDoubleTap: widget.onDoubleTap, // 已移除避免冲突
       behavior: HitTestBehavior.opaque,
       child: Stack(
         children: [

@@ -43,7 +43,13 @@ abstract class IMessageRepository {
   Future<MessageModel?> getMessage(String messageId);
 
   /// 获取话题的所有消息（慎用：可能数据量大）
-  Future<List<MessageModel>> loadAllMessages(String topicId);
+  ///
+  /// [parseExtendedFields] 为 false 时跳过 usage/metrics/mentions 的 JSON 解析，
+  /// 可显著降低大话题加载开销。
+  Future<List<MessageModel>> loadAllMessages(
+    String topicId, {
+    bool parseExtendedFields = true,
+  });
 
   /// 【性能优化】获取所有用户消息（跨话题批量查询）
   ///

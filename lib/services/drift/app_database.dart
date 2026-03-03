@@ -350,6 +350,15 @@ class ImportDatabase extends _$ImportDatabase {
 
   @override
   int get schemaVersion => 1;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) async => m.createAll(),
+    onUpgrade: (m, from, to) async {},
+    beforeOpen: (details) async {
+      await _ensureImportIndexes(this);
+    },
+  );
 }
 
 @DriftDatabase(
@@ -371,6 +380,15 @@ class UserDatabase extends _$UserDatabase {
 
   @override
   int get schemaVersion => 1;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) async => m.createAll(),
+    onUpgrade: (m, from, to) async {},
+    beforeOpen: (details) async {
+      await _ensureUserIndexes(this);
+    },
+  );
 }
 
 QueryExecutor _openImportConnection() {
@@ -403,4 +421,71 @@ QueryExecutor _openUserConnection() {
       native: const DriftNativeOptions(shareAcrossIsolates: true),
     );
   });
+}
+
+Future<void> _ensureImportIndexes(ImportDatabase db) async {
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_messages_topic_order '
+    'ON messages(topic_id, order_index)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_messages_topic_round_order '
+    'ON messages(topic_id, round_index, order_index)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_messages_topic_role_order '
+    'ON messages(topic_id, role, order_index)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_message_blocks_topic_message_order '
+    'ON message_blocks(topic_id, message_id, order_index)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_message_blocks_message_order '
+    'ON message_blocks(message_id, order_index)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_topic_assistants_assistant_topic '
+    'ON topic_assistants(assistant_id, topic_id)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_topics_updated_at '
+    'ON topics(updated_at)',
+  );
+}
+
+Future<void> _ensureUserIndexes(UserDatabase db) async {
+  await db.customStatement(
+    'CREATE TABLE IF NOT EXISTS server_sync_topic_snapshots ('
+    'scope TEXT NOT NULL, '
+    'topic_id TEXT NOT NULL, '
+    'updated_at INTEGER NOT NULL, '
+    'synced_at INTEGER NOT NULL, '
+    'PRIMARY KEY(scope, topic_id)'
+    ')',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_server_sync_topic_snapshots_scope '
+    'ON server_sync_topic_snapshots(scope)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_knowledge_entries_message_created '
+    'ON knowledge_entries(message_id, created_at DESC)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_knowledge_entries_topic_created '
+    'ON knowledge_entries(topic_id, created_at DESC)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_unified_conversations_context '
+    'ON unified_conversations(context_id)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_unified_conversations_context_updated '
+    'ON unified_conversations(context_id, updated_at DESC)',
+  );
+  await db.customStatement(
+    'CREATE INDEX IF NOT EXISTS idx_unified_conversations_archived_created '
+    'ON unified_conversations(is_archived, created_at DESC)',
+  );
 }

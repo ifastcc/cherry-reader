@@ -12,7 +12,7 @@ class DriftMessageRepository implements IMessageRepository {
 
   DriftMessageRepository(this._db);
 
-  MessageModel _toMessageModel(Message row) {
+  MessageModel _toMessageModel(Message row, {bool parseExtendedFields = true}) {
     return MessageModel(
       messageId: row.messageId,
       topicId: row.topicId,
@@ -25,9 +25,15 @@ class DriftMessageRepository implements IMessageRepository {
       modelName: row.modelName,
       createdAt: row.createdAt,
       status: row.status,
-      usage: MessageModel.parseUsageJson(row.usageJson),
-      metrics: MessageModel.parseMetricsJson(row.metricsJson),
-      mentions: MessageModel.parseMentionsJson(row.mentionsJson),
+      usage: parseExtendedFields
+          ? MessageModel.parseUsageJson(row.usageJson)
+          : null,
+      metrics: parseExtendedFields
+          ? MessageModel.parseMetricsJson(row.metricsJson)
+          : null,
+      mentions: parseExtendedFields
+          ? MessageModel.parseMentionsJson(row.mentionsJson)
+          : null,
     );
   }
 
@@ -43,10 +49,12 @@ class DriftMessageRepository implements IMessageRepository {
       modelId: Value(model.modelId),
       modelName: Value(model.modelName),
       usageJson: Value(model.usage != null ? jsonEncode(model.usage) : null),
-      metricsJson:
-          Value(model.metrics != null ? jsonEncode(model.metrics) : null),
-      mentionsJson:
-          Value(model.mentions != null ? jsonEncode(model.mentions) : null),
+      metricsJson: Value(
+        model.metrics != null ? jsonEncode(model.metrics) : null,
+      ),
+      mentionsJson: Value(
+        model.mentions != null ? jsonEncode(model.mentions) : null,
+      ),
       createdAt: Value(model.createdAt),
       status: Value(model.status),
     );
@@ -100,10 +108,12 @@ class DriftMessageRepository implements IMessageRepository {
       ),
       errorJson: Value(model.error != null ? jsonEncode(model.error) : null),
       targetLanguage: Value(model.targetLanguage),
-      responseJson:
-          Value(model.response != null ? jsonEncode(model.response) : null),
-      knowledgeJson:
-          Value(model.knowledge != null ? jsonEncode(model.knowledge) : null),
+      responseJson: Value(
+        model.response != null ? jsonEncode(model.response) : null,
+      ),
+      knowledgeJson: Value(
+        model.knowledge != null ? jsonEncode(model.knowledge) : null,
+      ),
       createdAt: Value(model.createdAt),
     );
   }
@@ -111,10 +121,11 @@ class DriftMessageRepository implements IMessageRepository {
   @override
   Future<int> getMessageCount(String topicId) async {
     final countExp = _db.messages.messageId.count();
-    final row = await (_db.selectOnly(_db.messages)
-          ..addColumns([countExp])
-          ..where(_db.messages.topicId.equals(topicId)))
-        .getSingle();
+    final row =
+        await (_db.selectOnly(_db.messages)
+              ..addColumns([countExp])
+              ..where(_db.messages.topicId.equals(topicId)))
+            .getSingle();
     return row.read(countExp) ?? 0;
   }
 
@@ -140,9 +151,11 @@ class DriftMessageRepository implements IMessageRepository {
   }) async {
     final endRound = startRound + roundCount - 1;
     final query = _db.select(_db.messages)
-      ..where((t) =>
-          t.topicId.equals(topicId) &
-          t.roundIndex.isBetweenValues(startRound, endRound))
+      ..where(
+        (t) =>
+            t.topicId.equals(topicId) &
+            t.roundIndex.isBetweenValues(startRound, endRound),
+      )
       ..orderBy([(t) => OrderingTerm.asc(t.orderIndex)]);
     final rows = await query.get();
     return rows.map(_toMessageModel).toList();
@@ -167,12 +180,20 @@ class DriftMessageRepository implements IMessageRepository {
   }
 
   @override
-  Future<List<MessageModel>> loadAllMessages(String topicId) async {
+  Future<List<MessageModel>> loadAllMessages(
+    String topicId, {
+    bool parseExtendedFields = true,
+  }) async {
     final query = _db.select(_db.messages)
       ..where((t) => t.topicId.equals(topicId))
       ..orderBy([(t) => OrderingTerm.asc(t.orderIndex)]);
     final rows = await query.get();
-    return rows.map(_toMessageModel).toList();
+    return rows
+        .map(
+          (row) =>
+              _toMessageModel(row, parseExtendedFields: parseExtendedFields),
+        )
+        .toList();
   }
 
   @override
@@ -205,13 +226,14 @@ class DriftMessageRepository implements IMessageRepository {
     List<String> messageIds,
   ) async {
     if (messageIds.isEmpty) return {};
-    final rows = await (_db.select(_db.messageBlocks)
-          ..where((t) => t.messageId.isIn(messageIds))
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.messageId),
-            (t) => OrderingTerm.asc(t.orderIndex),
-          ]))
-        .get();
+    final rows =
+        await (_db.select(_db.messageBlocks)
+              ..where((t) => t.messageId.isIn(messageIds))
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.messageId),
+                (t) => OrderingTerm.asc(t.orderIndex),
+              ]))
+            .get();
     final grouped = <String, List<BlockModel>>{};
     for (final row in rows) {
       grouped.putIfAbsent(row.messageId, () => []).add(_toBlockModel(row));
@@ -220,14 +242,17 @@ class DriftMessageRepository implements IMessageRepository {
   }
 
   @override
-  Future<Map<String, List<BlockModel>>> loadBlocksByTopic(String topicId) async {
-    final rows = await (_db.select(_db.messageBlocks)
-          ..where((t) => t.topicId.equals(topicId))
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.messageId),
-            (t) => OrderingTerm.asc(t.orderIndex),
-          ]))
-        .get();
+  Future<Map<String, List<BlockModel>>> loadBlocksByTopic(
+    String topicId,
+  ) async {
+    final rows =
+        await (_db.select(_db.messageBlocks)
+              ..where((t) => t.topicId.equals(topicId))
+              ..orderBy([
+                (t) => OrderingTerm.asc(t.messageId),
+                (t) => OrderingTerm.asc(t.orderIndex),
+              ]))
+            .get();
     final grouped = <String, List<BlockModel>>{};
     for (final row in rows) {
       grouped.putIfAbsent(row.messageId, () => []).add(_toBlockModel(row));
@@ -237,7 +262,9 @@ class DriftMessageRepository implements IMessageRepository {
 
   @override
   Future<void> saveMessage(MessageModel message) async {
-    await _db.into(_db.messages).insertOnConflictUpdate(_toMessageCompanion(message));
+    await _db
+        .into(_db.messages)
+        .insertOnConflictUpdate(_toMessageCompanion(message));
   }
 
   @override
@@ -254,14 +281,16 @@ class DriftMessageRepository implements IMessageRepository {
 
   @override
   Future<void> deleteMessage(String messageId) async {
-    await (_db.delete(_db.messages)..where((t) => t.messageId.equals(messageId)))
-        .go();
+    await (_db.delete(
+      _db.messages,
+    )..where((t) => t.messageId.equals(messageId))).go();
   }
 
   @override
   Future<void> deleteMessagesByTopic(String topicId) async {
-    await (_db.delete(_db.messages)..where((t) => t.topicId.equals(topicId)))
-        .go();
+    await (_db.delete(
+      _db.messages,
+    )..where((t) => t.topicId.equals(topicId))).go();
   }
 
   @override
@@ -271,7 +300,9 @@ class DriftMessageRepository implements IMessageRepository {
 
   @override
   Future<void> saveBlock(BlockModel block) async {
-    await _db.into(_db.messageBlocks).insertOnConflictUpdate(_toBlockCompanion(block));
+    await _db
+        .into(_db.messageBlocks)
+        .insertOnConflictUpdate(_toBlockCompanion(block));
   }
 
   @override
@@ -288,15 +319,16 @@ class DriftMessageRepository implements IMessageRepository {
 
   @override
   Future<void> deleteBlock(String blockId) async {
-    await (_db.delete(_db.messageBlocks)..where((t) => t.blockId.equals(blockId)))
-        .go();
+    await (_db.delete(
+      _db.messageBlocks,
+    )..where((t) => t.blockId.equals(blockId))).go();
   }
 
   @override
   Future<void> deleteBlocksByMessage(String messageId) async {
-    await (_db.delete(_db.messageBlocks)
-          ..where((t) => t.messageId.equals(messageId)))
-        .go();
+    await (_db.delete(
+      _db.messageBlocks,
+    )..where((t) => t.messageId.equals(messageId))).go();
   }
 
   @override

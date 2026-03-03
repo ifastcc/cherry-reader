@@ -10,6 +10,9 @@ abstract class ITopicRepository {
   /// 获取所有话题
   Future<List<TopicModel>> getAllTopics();
 
+  /// 批量根据 ID 获取话题
+  Future<List<TopicModel>> getTopicsByIds(List<String> topicIds);
+
   /// 根据助手 ID 获取话题列表
   Future<List<TopicModel>> getTopicsByAssistant(String assistantId);
 

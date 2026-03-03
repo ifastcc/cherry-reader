@@ -63,9 +63,7 @@ class TopicIndexService {
 
   /// 获取指定助手的话题列表（同步）
   List<TopicInfo> getTopicsByAssistant(String assistantId) {
-    return _topics.values
-        .where((t) => t.assistantId == assistantId)
-        .toList()
+    return _topics.values.where((t) => t.assistantId == assistantId).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
   }
 
@@ -109,7 +107,9 @@ class TopicIndexService {
           name: a.name,
         );
       }
-      debugPrint('⏱️ [TopicIndex] 加载 ${assistants.length} 个助手: ${sw.elapsedMilliseconds}ms');
+      debugPrint(
+        '⏱️ [TopicIndex] 加载 ${assistants.length} 个助手: ${sw.elapsedMilliseconds}ms',
+      );
 
       // 2. 加载所有话题元数据
       sw.reset();
@@ -129,7 +129,9 @@ class TopicIndexService {
           isRoundsLoaded: false,
         );
       }
-      debugPrint('⏱️ [TopicIndex] 加载 ${allTopics.length} 个话题: ${sw.elapsedMilliseconds}ms');
+      debugPrint(
+        '⏱️ [TopicIndex] 加载 ${allTopics.length} 个话题: ${sw.elapsedMilliseconds}ms',
+      );
 
       _isInitialized = true;
       _lastBuildTime = DateTime.now();
@@ -158,7 +160,10 @@ class TopicIndexService {
     final sw = Stopwatch()..start();
 
     // 加载消息
-    final messages = await _messageRepo!.loadAllMessages(topicId);
+    final messages = await _messageRepo!.loadAllMessages(
+      topicId,
+      parseExtendedFields: false,
+    );
 
     // 加载 blocks（用于提取预览）
     final blockMap = await _messageRepo!.loadBlocksByTopic(topicId);
@@ -173,12 +178,14 @@ class TopicIndexService {
       if (msg.role == 'user') {
         // 保存上一轮
         if (currentQuestion != null || currentReplies.isNotEmpty) {
-          rounds.add(RoundInfo(
-            index: roundIndex++,
-            questionPreview: _truncate(currentQuestion ?? '', 80),
-            questionLength: currentQuestion?.length ?? 0,
-            replies: List.from(currentReplies),
-          ));
+          rounds.add(
+            RoundInfo(
+              index: roundIndex++,
+              questionPreview: _truncate(currentQuestion ?? '', 80),
+              questionLength: currentQuestion?.length ?? 0,
+              replies: List.from(currentReplies),
+            ),
+          );
           currentReplies = [];
         }
 
@@ -191,34 +198,37 @@ class TopicIndexService {
         final blocks = blockMap[msg.messageId] ?? [];
         final content = _extractMainText(blocks);
 
-        currentReplies.add(ReplyInfo(
-          id: msg.messageId,
-          modelName: msg.modelName ?? 'AI',
-          charCount: content.length,
-          isMainline: msg.useful,
-          contentPreview: _truncate(content, 150),
-          // 完整内容不存储，按需加载
-        ));
+        currentReplies.add(
+          ReplyInfo(
+            id: msg.messageId,
+            modelName: msg.modelName ?? 'AI',
+            charCount: content.length,
+            isMainline: msg.useful,
+            contentPreview: _truncate(content, 150),
+            // 完整内容不存储，按需加载
+          ),
+        );
       }
     }
 
     // 保存最后一轮
     if (currentQuestion != null || currentReplies.isNotEmpty) {
-      rounds.add(RoundInfo(
-        index: roundIndex,
-        questionPreview: _truncate(currentQuestion ?? '', 80),
-        questionLength: currentQuestion?.length ?? 0,
-        replies: List.from(currentReplies),
-      ));
+      rounds.add(
+        RoundInfo(
+          index: roundIndex,
+          questionPreview: _truncate(currentQuestion ?? '', 80),
+          questionLength: currentQuestion?.length ?? 0,
+          replies: List.from(currentReplies),
+        ),
+      );
     }
 
     // 更新话题
-    _topics[topicId] = topic.copyWith(
-      rounds: rounds,
-      isRoundsLoaded: true,
-    );
+    _topics[topicId] = topic.copyWith(rounds: rounds, isRoundsLoaded: true);
 
-    debugPrint('⏱️ [TopicIndex] 加载话题 $topicId 的 ${rounds.length} 轮: ${sw.elapsedMilliseconds}ms');
+    debugPrint(
+      '⏱️ [TopicIndex] 加载话题 $topicId 的 ${rounds.length} 轮: ${sw.elapsedMilliseconds}ms',
+    );
   }
 
   /// 获取回复的完整内容（按需，从数据库或缓存）
@@ -248,7 +258,10 @@ class TopicIndexService {
 
     // 从数据库加载
     await _ensureRepositories();
-    final messages = await _messageRepo!.loadAllMessages(topicId);
+    final messages = await _messageRepo!.loadAllMessages(
+      topicId,
+      parseExtendedFields: false,
+    );
 
     // 找到指定轮次的用户消息
     int currentRound = 0;
@@ -306,10 +319,7 @@ class AssistantInfo {
   final String id;
   final String name;
 
-  const AssistantInfo({
-    required this.id,
-    required this.name,
-  });
+  const AssistantInfo({required this.id, required this.name});
 }
 
 /// 话题信息（常驻）
@@ -336,10 +346,7 @@ class TopicInfo {
     required this.isRoundsLoaded,
   });
 
-  TopicInfo copyWith({
-    List<RoundInfo>? rounds,
-    bool? isRoundsLoaded,
-  }) {
+  TopicInfo copyWith({List<RoundInfo>? rounds, bool? isRoundsLoaded}) {
     return TopicInfo(
       id: id,
       name: name,
