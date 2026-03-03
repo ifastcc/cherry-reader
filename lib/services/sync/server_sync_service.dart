@@ -708,6 +708,7 @@ class ServerSyncService {
     var deletedCount = 0;
     final upsertedTopicIds = <String>{};
     final deletedTopicIds = <String>{};
+    var isFirstPage = true;
 
     while (true) {
       onStatus?.call('正在查询变更...');
@@ -730,6 +731,28 @@ class ServerSyncService {
       final items = (syncData['items'] as List<dynamic>? ?? const []);
       final hasMore = syncData['hasMore'] == true;
       final nextCursor = (syncData['nextCursor'] as num?)?.toInt() ?? cursor;
+
+      // 检测 cursor 是否落入已 purge 的空洞：
+      // 如果 cursor > 0 且小于服务端最小可用 seq，说明部分变更已被清理，
+      // 需要重置 cursor 从头拉取以避免静默丢失数据
+      if (isFirstPage) {
+        isFirstPage = false;
+        final oldestAvailableSeq =
+            (syncData['oldestAvailableSeq'] as num?)?.toInt() ?? 0;
+        if (cursor > 0 &&
+            oldestAvailableSeq > 0 &&
+            cursor < oldestAvailableSeq) {
+          debugPrint(
+            '[ServerSync] Pull cursor $cursor is stale '
+            '(oldest available seq=$oldestAvailableSeq). '
+            'Resetting cursor to 0 for full re-sync.',
+          );
+          onStatus?.call('同步游标已过期，正在全量重新拉取...');
+          cursor = 0;
+          await prefs.setInt(syncCursorKey, 0);
+          continue; // 重新以 cursor=0 发起请求
+        }
+      }
 
       if (items.isEmpty) {
         await prefs.setInt(syncCursorKey, nextCursor);
