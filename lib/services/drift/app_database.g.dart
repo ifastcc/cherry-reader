@@ -596,6 +596,53 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, Topic> {
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _pinnedMeta = const VerificationMeta('pinned');
+  @override
+  late final GeneratedColumn<bool> pinned = GeneratedColumn<bool>(
+    'pinned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("pinned" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _promptMeta = const VerificationMeta('prompt');
+  @override
+  late final GeneratedColumn<String> prompt = GeneratedColumn<String>(
+    'prompt',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _topicTypeMeta = const VerificationMeta(
+    'topicType',
+  );
+  @override
+  late final GeneratedColumn<String> topicType = GeneratedColumn<String>(
+    'topic_type',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _isNameManuallyEditedMeta =
+      const VerificationMeta('isNameManuallyEdited');
+  @override
+  late final GeneratedColumn<bool> isNameManuallyEdited = GeneratedColumn<bool>(
+    'is_name_manually_edited',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_name_manually_edited" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     topicId,
@@ -604,6 +651,10 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, Topic> {
     roundCount,
     createdAt,
     updatedAt,
+    pinned,
+    prompt,
+    topicType,
+    isNameManuallyEdited,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -668,6 +719,33 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, Topic> {
     } else if (isInserting) {
       context.missing(_updatedAtMeta);
     }
+    if (data.containsKey('pinned')) {
+      context.handle(
+        _pinnedMeta,
+        pinned.isAcceptableOrUnknown(data['pinned']!, _pinnedMeta),
+      );
+    }
+    if (data.containsKey('prompt')) {
+      context.handle(
+        _promptMeta,
+        prompt.isAcceptableOrUnknown(data['prompt']!, _promptMeta),
+      );
+    }
+    if (data.containsKey('topic_type')) {
+      context.handle(
+        _topicTypeMeta,
+        topicType.isAcceptableOrUnknown(data['topic_type']!, _topicTypeMeta),
+      );
+    }
+    if (data.containsKey('is_name_manually_edited')) {
+      context.handle(
+        _isNameManuallyEditedMeta,
+        isNameManuallyEdited.isAcceptableOrUnknown(
+          data['is_name_manually_edited']!,
+          _isNameManuallyEditedMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -701,6 +779,22 @@ class $TopicsTable extends Topics with TableInfo<$TopicsTable, Topic> {
         DriftSqlType.int,
         data['${effectivePrefix}updated_at'],
       )!,
+      pinned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}pinned'],
+      )!,
+      prompt: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}prompt'],
+      ),
+      topicType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}topic_type'],
+      ),
+      isNameManuallyEdited: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_name_manually_edited'],
+      )!,
     );
   }
 
@@ -717,6 +811,10 @@ class Topic extends DataClass implements Insertable<Topic> {
   final int roundCount;
   final int createdAt;
   final int updatedAt;
+  final bool pinned;
+  final String? prompt;
+  final String? topicType;
+  final bool isNameManuallyEdited;
   const Topic({
     required this.topicId,
     required this.name,
@@ -724,6 +822,10 @@ class Topic extends DataClass implements Insertable<Topic> {
     required this.roundCount,
     required this.createdAt,
     required this.updatedAt,
+    required this.pinned,
+    this.prompt,
+    this.topicType,
+    required this.isNameManuallyEdited,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -734,6 +836,14 @@ class Topic extends DataClass implements Insertable<Topic> {
     map['round_count'] = Variable<int>(roundCount);
     map['created_at'] = Variable<int>(createdAt);
     map['updated_at'] = Variable<int>(updatedAt);
+    map['pinned'] = Variable<bool>(pinned);
+    if (!nullToAbsent || prompt != null) {
+      map['prompt'] = Variable<String>(prompt);
+    }
+    if (!nullToAbsent || topicType != null) {
+      map['topic_type'] = Variable<String>(topicType);
+    }
+    map['is_name_manually_edited'] = Variable<bool>(isNameManuallyEdited);
     return map;
   }
 
@@ -745,6 +855,14 @@ class Topic extends DataClass implements Insertable<Topic> {
       roundCount: Value(roundCount),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
+      pinned: Value(pinned),
+      prompt: prompt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(prompt),
+      topicType: topicType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(topicType),
+      isNameManuallyEdited: Value(isNameManuallyEdited),
     );
   }
 
@@ -760,6 +878,12 @@ class Topic extends DataClass implements Insertable<Topic> {
       roundCount: serializer.fromJson<int>(json['roundCount']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      pinned: serializer.fromJson<bool>(json['pinned']),
+      prompt: serializer.fromJson<String?>(json['prompt']),
+      topicType: serializer.fromJson<String?>(json['topicType']),
+      isNameManuallyEdited: serializer.fromJson<bool>(
+        json['isNameManuallyEdited'],
+      ),
     );
   }
   @override
@@ -772,6 +896,10 @@ class Topic extends DataClass implements Insertable<Topic> {
       'roundCount': serializer.toJson<int>(roundCount),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
+      'pinned': serializer.toJson<bool>(pinned),
+      'prompt': serializer.toJson<String?>(prompt),
+      'topicType': serializer.toJson<String?>(topicType),
+      'isNameManuallyEdited': serializer.toJson<bool>(isNameManuallyEdited),
     };
   }
 
@@ -782,6 +910,10 @@ class Topic extends DataClass implements Insertable<Topic> {
     int? roundCount,
     int? createdAt,
     int? updatedAt,
+    bool? pinned,
+    Value<String?> prompt = const Value.absent(),
+    Value<String?> topicType = const Value.absent(),
+    bool? isNameManuallyEdited,
   }) => Topic(
     topicId: topicId ?? this.topicId,
     name: name ?? this.name,
@@ -789,6 +921,10 @@ class Topic extends DataClass implements Insertable<Topic> {
     roundCount: roundCount ?? this.roundCount,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
+    pinned: pinned ?? this.pinned,
+    prompt: prompt.present ? prompt.value : this.prompt,
+    topicType: topicType.present ? topicType.value : this.topicType,
+    isNameManuallyEdited: isNameManuallyEdited ?? this.isNameManuallyEdited,
   );
   Topic copyWithCompanion(TopicsCompanion data) {
     return Topic(
@@ -802,6 +938,12 @@ class Topic extends DataClass implements Insertable<Topic> {
           : this.roundCount,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      pinned: data.pinned.present ? data.pinned.value : this.pinned,
+      prompt: data.prompt.present ? data.prompt.value : this.prompt,
+      topicType: data.topicType.present ? data.topicType.value : this.topicType,
+      isNameManuallyEdited: data.isNameManuallyEdited.present
+          ? data.isNameManuallyEdited.value
+          : this.isNameManuallyEdited,
     );
   }
 
@@ -813,7 +955,11 @@ class Topic extends DataClass implements Insertable<Topic> {
           ..write('messageCount: $messageCount, ')
           ..write('roundCount: $roundCount, ')
           ..write('createdAt: $createdAt, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('pinned: $pinned, ')
+          ..write('prompt: $prompt, ')
+          ..write('topicType: $topicType, ')
+          ..write('isNameManuallyEdited: $isNameManuallyEdited')
           ..write(')'))
         .toString();
   }
@@ -826,6 +972,10 @@ class Topic extends DataClass implements Insertable<Topic> {
     roundCount,
     createdAt,
     updatedAt,
+    pinned,
+    prompt,
+    topicType,
+    isNameManuallyEdited,
   );
   @override
   bool operator ==(Object other) =>
@@ -836,7 +986,11 @@ class Topic extends DataClass implements Insertable<Topic> {
           other.messageCount == this.messageCount &&
           other.roundCount == this.roundCount &&
           other.createdAt == this.createdAt &&
-          other.updatedAt == this.updatedAt);
+          other.updatedAt == this.updatedAt &&
+          other.pinned == this.pinned &&
+          other.prompt == this.prompt &&
+          other.topicType == this.topicType &&
+          other.isNameManuallyEdited == this.isNameManuallyEdited);
 }
 
 class TopicsCompanion extends UpdateCompanion<Topic> {
@@ -846,6 +1000,10 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
   final Value<int> roundCount;
   final Value<int> createdAt;
   final Value<int> updatedAt;
+  final Value<bool> pinned;
+  final Value<String?> prompt;
+  final Value<String?> topicType;
+  final Value<bool> isNameManuallyEdited;
   final Value<int> rowid;
   const TopicsCompanion({
     this.topicId = const Value.absent(),
@@ -854,6 +1012,10 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
     this.roundCount = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.pinned = const Value.absent(),
+    this.prompt = const Value.absent(),
+    this.topicType = const Value.absent(),
+    this.isNameManuallyEdited = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TopicsCompanion.insert({
@@ -863,6 +1025,10 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
     required int roundCount,
     required int createdAt,
     required int updatedAt,
+    this.pinned = const Value.absent(),
+    this.prompt = const Value.absent(),
+    this.topicType = const Value.absent(),
+    this.isNameManuallyEdited = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : topicId = Value(topicId),
        name = Value(name),
@@ -877,6 +1043,10 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
     Expression<int>? roundCount,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
+    Expression<bool>? pinned,
+    Expression<String>? prompt,
+    Expression<String>? topicType,
+    Expression<bool>? isNameManuallyEdited,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -886,6 +1056,11 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
       if (roundCount != null) 'round_count': roundCount,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
+      if (pinned != null) 'pinned': pinned,
+      if (prompt != null) 'prompt': prompt,
+      if (topicType != null) 'topic_type': topicType,
+      if (isNameManuallyEdited != null)
+        'is_name_manually_edited': isNameManuallyEdited,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -897,6 +1072,10 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
     Value<int>? roundCount,
     Value<int>? createdAt,
     Value<int>? updatedAt,
+    Value<bool>? pinned,
+    Value<String?>? prompt,
+    Value<String?>? topicType,
+    Value<bool>? isNameManuallyEdited,
     Value<int>? rowid,
   }) {
     return TopicsCompanion(
@@ -906,6 +1085,10 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
       roundCount: roundCount ?? this.roundCount,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      pinned: pinned ?? this.pinned,
+      prompt: prompt ?? this.prompt,
+      topicType: topicType ?? this.topicType,
+      isNameManuallyEdited: isNameManuallyEdited ?? this.isNameManuallyEdited,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -931,6 +1114,20 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
     if (updatedAt.present) {
       map['updated_at'] = Variable<int>(updatedAt.value);
     }
+    if (pinned.present) {
+      map['pinned'] = Variable<bool>(pinned.value);
+    }
+    if (prompt.present) {
+      map['prompt'] = Variable<String>(prompt.value);
+    }
+    if (topicType.present) {
+      map['topic_type'] = Variable<String>(topicType.value);
+    }
+    if (isNameManuallyEdited.present) {
+      map['is_name_manually_edited'] = Variable<bool>(
+        isNameManuallyEdited.value,
+      );
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -946,6 +1143,10 @@ class TopicsCompanion extends UpdateCompanion<Topic> {
           ..write('roundCount: $roundCount, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
+          ..write('pinned: $pinned, ')
+          ..write('prompt: $prompt, ')
+          ..write('topicType: $topicType, ')
+          ..write('isNameManuallyEdited: $isNameManuallyEdited, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -5809,6 +6010,10 @@ typedef $$TopicsTableCreateCompanionBuilder =
       required int roundCount,
       required int createdAt,
       required int updatedAt,
+      Value<bool> pinned,
+      Value<String?> prompt,
+      Value<String?> topicType,
+      Value<bool> isNameManuallyEdited,
       Value<int> rowid,
     });
 typedef $$TopicsTableUpdateCompanionBuilder =
@@ -5819,6 +6024,10 @@ typedef $$TopicsTableUpdateCompanionBuilder =
       Value<int> roundCount,
       Value<int> createdAt,
       Value<int> updatedAt,
+      Value<bool> pinned,
+      Value<String?> prompt,
+      Value<String?> topicType,
+      Value<bool> isNameManuallyEdited,
       Value<int> rowid,
     });
 
@@ -5926,6 +6135,26 @@ class $$TopicsTableFilterComposer
 
   ColumnFilters<int> get updatedAt => $composableBuilder(
     column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get pinned => $composableBuilder(
+    column: $table.pinned,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get prompt => $composableBuilder(
+    column: $table.prompt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get topicType => $composableBuilder(
+    column: $table.topicType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isNameManuallyEdited => $composableBuilder(
+    column: $table.isNameManuallyEdited,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6043,6 +6272,26 @@ class $$TopicsTableOrderingComposer
     column: $table.updatedAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get pinned => $composableBuilder(
+    column: $table.pinned,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get prompt => $composableBuilder(
+    column: $table.prompt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get topicType => $composableBuilder(
+    column: $table.topicType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isNameManuallyEdited => $composableBuilder(
+    column: $table.isNameManuallyEdited,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$TopicsTableAnnotationComposer
@@ -6075,6 +6324,20 @@ class $$TopicsTableAnnotationComposer
 
   GeneratedColumn<int> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get pinned =>
+      $composableBuilder(column: $table.pinned, builder: (column) => column);
+
+  GeneratedColumn<String> get prompt =>
+      $composableBuilder(column: $table.prompt, builder: (column) => column);
+
+  GeneratedColumn<String> get topicType =>
+      $composableBuilder(column: $table.topicType, builder: (column) => column);
+
+  GeneratedColumn<bool> get isNameManuallyEdited => $composableBuilder(
+    column: $table.isNameManuallyEdited,
+    builder: (column) => column,
+  );
 
   Expression<T> topicAssistantsRefs<T extends Object>(
     Expression<T> Function($$TopicAssistantsTableAnnotationComposer a) f,
@@ -6190,6 +6453,10 @@ class $$TopicsTableTableManager
                 Value<int> roundCount = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
+                Value<bool> pinned = const Value.absent(),
+                Value<String?> prompt = const Value.absent(),
+                Value<String?> topicType = const Value.absent(),
+                Value<bool> isNameManuallyEdited = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TopicsCompanion(
                 topicId: topicId,
@@ -6198,6 +6465,10 @@ class $$TopicsTableTableManager
                 roundCount: roundCount,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
+                pinned: pinned,
+                prompt: prompt,
+                topicType: topicType,
+                isNameManuallyEdited: isNameManuallyEdited,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -6208,6 +6479,10 @@ class $$TopicsTableTableManager
                 required int roundCount,
                 required int createdAt,
                 required int updatedAt,
+                Value<bool> pinned = const Value.absent(),
+                Value<String?> prompt = const Value.absent(),
+                Value<String?> topicType = const Value.absent(),
+                Value<bool> isNameManuallyEdited = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TopicsCompanion.insert(
                 topicId: topicId,
@@ -6216,6 +6491,10 @@ class $$TopicsTableTableManager
                 roundCount: roundCount,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
+                pinned: pinned,
+                prompt: prompt,
+                topicType: topicType,
+                isNameManuallyEdited: isNameManuallyEdited,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

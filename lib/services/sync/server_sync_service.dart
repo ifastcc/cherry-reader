@@ -933,6 +933,9 @@ class ServerSyncService {
     var stale = 0;
     var conflict = 0;
     var failed = 0;
+    // 逐 topic 跟踪成功推送的 topicId，用于精细化更新快照
+    final succeededUpsertTopicIds = <String>{};
+    final succeededDeleteTopicIds = <String>{};
 
     final allowForce =
         mode == ServerSyncMode.autoFull &&
@@ -962,6 +965,11 @@ class ServerSyncService {
       conflict += parsed.conflict;
       failed += parsed.failed;
       retryUpsertIds.addAll(parsed.retryIds);
+      for (final result in results) {
+        if (result.isTerminalSuccess) {
+          succeededUpsertTopicIds.add(result.topicId);
+        }
+      }
       _applyResultsToPendingMap(
         pendingMap,
         results: results,
@@ -989,6 +997,11 @@ class ServerSyncService {
       conflict += parsed.conflict;
       failed += parsed.failed;
       retryDeleteIds.addAll(parsed.retryIds);
+      for (final result in results) {
+        if (result.isTerminalSuccess) {
+          succeededDeleteTopicIds.add(result.topicId);
+        }
+      }
       _applyResultsToPendingMap(
         pendingMap,
         results: results,
@@ -1026,6 +1039,11 @@ class ServerSyncService {
         stale += parsed.stale;
         conflict += parsed.conflict;
         failed += parsed.failed;
+        for (final result in results) {
+          if (result.isTerminalSuccess) {
+            succeededUpsertTopicIds.add(result.topicId);
+          }
+        }
         _applyResultsToPendingMap(
           pendingMap,
           results: results,
@@ -1056,6 +1074,11 @@ class ServerSyncService {
         stale += parsed.stale;
         conflict += parsed.conflict;
         failed += parsed.failed;
+        for (final result in results) {
+          if (result.isTerminalSuccess) {
+            succeededDeleteTopicIds.add(result.topicId);
+          }
+        }
         _applyResultsToPendingMap(
           pendingMap,
           results: results,
@@ -1072,14 +1095,24 @@ class ServerSyncService {
       conflicts: pendingMap.values.toList(),
     );
 
-    if (failed == 0) {
-      await _writePushedTopicVersionsSnapshot(
-        serverUrl: serverUrl,
-        token: token,
-        topicVersions: currentTopicVersions,
-        previousTopicVersions: previousTopicVersions,
-      );
+    // 按 topic 粒度更新快照：成功推送的条目记录新版本，
+    // 成功删除的条目从快照中移除。即使部分失败也保留成功部分。
+    final updatedSnapshot = <String, int>{...previousTopicVersions};
+    for (final topicId in succeededUpsertTopicIds) {
+      final version = currentTopicVersions[topicId];
+      if (version != null) {
+        updatedSnapshot[topicId] = version;
+      }
     }
+    for (final topicId in succeededDeleteTopicIds) {
+      updatedSnapshot.remove(topicId);
+    }
+    await _writePushedTopicVersionsSnapshot(
+      serverUrl: serverUrl,
+      token: token,
+      topicVersions: updatedSnapshot,
+      previousTopicVersions: previousTopicVersions,
+    );
 
     onStatus?.call('推送完成: 应用$applied/无变更$noop/旧版本$stale/冲突$conflict/失败$failed');
 
@@ -1510,9 +1543,9 @@ class ServerSyncService {
     if (decoded is! Map<String, dynamic>) {
       throw StateError('拉取服务端话题失败：响应格式错误');
     }
-    final topic = decoded['data'];
+    final topic = decoded['topic'] ?? decoded['data'];
     if (topic is! Map<String, dynamic>) {
-      throw StateError('拉取服务端话题失败：缺少 topic data');
+      throw StateError('拉取服务端话题失败：缺少 topic 数据');
     }
 
     await db.transaction(() async {
@@ -1705,7 +1738,7 @@ class ServerSyncService {
         messagePayloads.add(messagePayload);
       }
 
-      payloads.add({
+      final topicPayload = <String, dynamic>{
         'topicId': topic.topicId,
         'name': topic.name,
         'assistantId': assistantId,
@@ -1713,7 +1746,18 @@ class ServerSyncService {
         'createdAt': topic.createdAt,
         'updatedAt': topic.updatedAt,
         'messages': messagePayloads,
-      });
+      };
+      if (topic.pinned) topicPayload['pinned'] = true;
+      if (topic.prompt != null && topic.prompt!.isNotEmpty) {
+        topicPayload['prompt'] = topic.prompt;
+      }
+      if (topic.topicType != null && topic.topicType!.isNotEmpty) {
+        topicPayload['type'] = topic.topicType;
+      }
+      if (topic.isNameManuallyEdited) {
+        topicPayload['isNameManuallyEdited'] = true;
+      }
+      payloads.add(topicPayload);
     }
 
     return payloads;
@@ -1798,6 +1842,12 @@ class ServerSyncService {
       db.messages,
     )..where((t) => t.topicId.equals(topicId))).go();
 
+    // 解析额外元数据
+    final pinned = topicData['pinned'] == true;
+    final prompt = topicData['prompt'] as String?;
+    final topicType = topicData['type'] as String?;
+    final isNameManuallyEdited = topicData['isNameManuallyEdited'] == true;
+
     // 写入 Topic
     await db
         .into(db.topics)
@@ -1809,6 +1859,10 @@ class ServerSyncService {
             roundCount: Value(roundIndex + 1),
             createdAt: Value(createdAt),
             updatedAt: Value(updatedAt),
+            pinned: Value(pinned),
+            prompt: Value(prompt),
+            topicType: Value(topicType),
+            isNameManuallyEdited: Value(isNameManuallyEdited),
           ),
         );
 

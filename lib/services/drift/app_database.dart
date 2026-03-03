@@ -37,6 +37,11 @@ class Topics extends Table {
   IntColumn get roundCount => integer()();
   IntColumn get createdAt => integer()();
   IntColumn get updatedAt => integer()();
+  BoolColumn get pinned => boolean().withDefault(const Constant(false))();
+  TextColumn get prompt => text().nullable()();
+  TextColumn get topicType => text().nullable()();
+  BoolColumn get isNameManuallyEdited =>
+      boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column<Object>> get primaryKey => {topicId};
@@ -349,12 +354,19 @@ class ImportDatabase extends _$ImportDatabase {
     : super(_openImportConnectionWithPath(dbPath));
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async => m.createAll(),
-    onUpgrade: (m, from, to) async {},
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        await m.addColumn(topics, topics.pinned);
+        await m.addColumn(topics, topics.prompt);
+        await m.addColumn(topics, topics.topicType);
+        await m.addColumn(topics, topics.isNameManuallyEdited);
+      }
+    },
     beforeOpen: (details) async {
       await _ensureImportIndexes(this);
     },
