@@ -179,24 +179,6 @@ class ServerSyncConflictResolveResult {
   });
 }
 
-class _BatchWriteOutcome {
-  final int applied;
-  final int noop;
-  final int stale;
-  final int conflict;
-  final int failed;
-  final Set<String> retryIds;
-
-  const _BatchWriteOutcome({
-    required this.applied,
-    required this.noop,
-    required this.stale,
-    required this.conflict,
-    required this.failed,
-    required this.retryIds,
-  });
-}
-
 class _ServerTopicWriteResult {
   final String topicId;
   final String status;
@@ -243,22 +225,29 @@ class _ServerTopicWriteResult {
       status == 'applied' || status == 'noop' || status == 'not_found';
 }
 
-class _TopicRevisionMeta {
+class _ManifestEntry {
   final int revision;
-  final int? updatedAt;
-  final int? clientUpdatedAt;
+  final int? deletedAt;
 
-  const _TopicRevisionMeta({
-    required this.revision,
-    required this.updatedAt,
-    required this.clientUpdatedAt,
+  const _ManifestEntry({required this.revision, this.deletedAt});
+}
+
+class _ManifestResponse {
+  final int changeSeq;
+  final int topicCount;
+  final Map<String, _ManifestEntry> entries;
+
+  const _ManifestResponse({
+    required this.changeSeq,
+    required this.topicCount,
+    required this.entries,
   });
 }
 
-/// Cherry Sync Server 同步服务
+/// Cherry Sync Server 同步服务（基于 Manifest 协调）
 ///
 /// 支持：
-/// 1. 增量拉取（cursor）
+/// 1. 基于 manifest（topicId → revision）做协调
 /// 2. 双向推送（批量 upsert）
 /// 3. 冲突策略（服务端优先 / 本地优先）
 class ServerSyncService {
@@ -268,14 +257,14 @@ class ServerSyncService {
   static const String _syncModeKey = 'server_sync_mode';
   static const String _conflictPolicyKey = 'server_sync_conflict_policy';
   static const String _syncIntervalSecondsKey = 'server_sync_interval_seconds';
-  // 旧版本字段（分钟）保留用于迁移
   static const String _syncIntervalMinutesLegacyKey =
       'server_sync_interval_minutes';
   static const String _pendingConflictsKeyPrefix =
       'server_sync_pending_conflicts';
-  // 仅用于旧版本 SharedPreferences 快照迁移。
+  static const String _syncedRevisionsKeyPrefix = 'server_sync_revisions';
+  static const String _dirtyTopicsKeyPrefix = 'server_sync_dirty_topics';
+  // 旧版快照 key，仅用于迁移
   static const String _pushSnapshotKeyPrefix = 'server_sync_push_topic_ids';
-  // 仅用于旧版本 SharedPreferences 快照迁移。
   static const String _pushSnapshotVersionKeyPrefix =
       'server_sync_push_topic_versions';
   static const String _pushSnapshotTable = 'server_sync_topic_snapshots';
@@ -283,11 +272,9 @@ class ServerSyncService {
   static const int defaultSyncIntervalSeconds = 30 * 60;
   static const int minSyncIntervalSeconds = 5;
   static const int maxSyncIntervalSeconds = 24 * 60 * 60;
-  static const int _changePageSize = 200;
   static const int _topicWriteBatchSize = 20;
   static const int _topicDeleteBatchSize = 100;
-  static final Map<String, Map<String, int>>
-  _pushTopicVersionsSnapshotMemoryCache = {};
+  static const int _batchGetThreshold = 5;
 
   final AppDb _appDb;
 
@@ -339,7 +326,6 @@ class ServerSyncService {
       return rawSeconds.clamp(minSyncIntervalSeconds, maxSyncIntervalSeconds);
     }
 
-    // 兼容旧版本：分钟字段迁移为秒
     final rawMinutes = prefs.getInt(_syncIntervalMinutesLegacyKey);
     if (rawMinutes != null) {
       final migratedSeconds = (rawMinutes.clamp(5, 1440) * 60).clamp(
@@ -378,22 +364,7 @@ class ServerSyncService {
       serverUrl: config.serverUrl,
       token: config.token,
     );
-    if (cached.isEmpty) return cached;
-
-    final enriched = await _enrichPendingConflictsFromServer(
-      serverUrl: config.serverUrl,
-      token: config.token,
-      conflicts: cached,
-    );
-    if (_hasPendingConflictDiff(cached, enriched)) {
-      await _writePendingConflicts(
-        prefs,
-        serverUrl: config.serverUrl,
-        token: config.token,
-        conflicts: enriched,
-      );
-    }
-    return enriched;
+    return cached;
   }
 
   Future<void> clearPendingConflicts() async {
@@ -405,6 +376,290 @@ class ServerSyncService {
       serverUrl: config.serverUrl,
       token: config.token,
       conflicts: const [],
+    );
+  }
+
+  // ── Synced Revisions 存储层 ────────────────────────────────────────
+
+  String _syncedRevisionsKeyScoped(String scope) =>
+      '$_syncedRevisionsKeyPrefix:$scope';
+
+  String _dirtyTopicsKeyScoped(String scope) =>
+      '$_dirtyTopicsKeyPrefix:$scope';
+
+  Future<Map<String, int>> _loadSyncedRevisions({
+    required String serverUrl,
+    required String token,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    final raw = prefs.getString(_syncedRevisionsKeyScoped(scope));
+    if (raw == null || raw.isEmpty) return <String, int>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return <String, int>{};
+      final out = <String, int>{};
+      decoded.forEach((key, value) {
+        final topicId = key.toString().trim();
+        if (topicId.isEmpty) return;
+        final rev = _toOptionalInt(value);
+        if (rev != null) out[topicId] = rev;
+      });
+      return out;
+    } catch (_) {
+      return <String, int>{};
+    }
+  }
+
+  Future<void> _saveSyncedRevisions({
+    required String serverUrl,
+    required String token,
+    required Map<String, int> revisions,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    await prefs.setString(
+      _syncedRevisionsKeyScoped(scope),
+      jsonEncode(revisions),
+    );
+  }
+
+  Future<Set<String>> _loadDirtyTopicIds({
+    required String serverUrl,
+    required String token,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    final raw = prefs.getString(_dirtyTopicsKeyScoped(scope));
+    if (raw == null || raw.isEmpty) return <String>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return <String>{};
+      return decoded
+          .map((item) => item.toString().trim())
+          .where((id) => id.isNotEmpty)
+          .toSet();
+    } catch (_) {
+      return <String>{};
+    }
+  }
+
+  Future<void> _saveDirtyTopicIds({
+    required String serverUrl,
+    required String token,
+    required Set<String> ids,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    if (ids.isEmpty) {
+      await prefs.remove(_dirtyTopicsKeyScoped(scope));
+      return;
+    }
+    await prefs.setString(
+      _dirtyTopicsKeyScoped(scope),
+      jsonEncode(ids.toList()),
+    );
+  }
+
+  // ── Manifest API ──────────────────────────────────────────────────
+
+  Future<_ManifestResponse> _fetchManifest({
+    required String serverUrl,
+    required String token,
+  }) async {
+    final resp = await _getWithTimeout(
+      Uri.parse('$serverUrl/api/sync/manifest'),
+      headers: {'Authorization': 'Bearer $token'},
+      timeoutMessage: '拉取 Manifest 超时，请检查网络或服务器状态',
+    );
+
+    if (resp.statusCode == 401 || resp.statusCode == 403) {
+      throw StateError('认证失败，请检查 Token');
+    }
+    if (resp.statusCode != 200) {
+      throw StateError('拉取 Manifest 失败（HTTP ${resp.statusCode}）');
+    }
+
+    final decoded = jsonDecode(resp.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw StateError('Manifest 格式错误');
+    }
+
+    final changeSeq = (decoded['changeSeq'] as num?)?.toInt() ?? 0;
+    final topicCount = (decoded['topicCount'] as num?)?.toInt() ?? 0;
+    final rawEntries = decoded['entries'];
+    final entries = <String, _ManifestEntry>{};
+
+    if (rawEntries is Map<String, dynamic>) {
+      rawEntries.forEach((topicId, value) {
+        if (value is! Map<String, dynamic>) return;
+        entries[topicId] = _ManifestEntry(
+          revision: (value['revision'] as num?)?.toInt() ?? 0,
+          deletedAt: value['deletedAt'] != null
+              ? (value['deletedAt'] as num?)?.toInt()
+              : null,
+        );
+      });
+    }
+
+    return _ManifestResponse(
+      changeSeq: changeSeq,
+      topicCount: topicCount,
+      entries: entries,
+    );
+  }
+
+  Future<Map<String, dynamic>?> _fetchTopicById({
+    required String serverUrl,
+    required String token,
+    required String topicId,
+  }) async {
+    final resp = await _getWithTimeout(
+      Uri.parse('$serverUrl/api/topics/$topicId'),
+      headers: {'Authorization': 'Bearer $token'},
+      timeoutMessage: '拉取话题超时',
+    );
+    if (resp.statusCode == 404) return null;
+    if (resp.statusCode != 200) return null;
+    final decoded = jsonDecode(resp.body);
+    if (decoded is! Map<String, dynamic>) return null;
+    return (decoded['topic'] ?? decoded['data'] ?? decoded)
+        as Map<String, dynamic>?;
+  }
+
+  Future<Map<String, Map<String, dynamic>>> _fetchTopicsBatch({
+    required String serverUrl,
+    required String token,
+    required List<String> topicIds,
+  }) async {
+    final out = <String, Map<String, dynamic>>{};
+    if (topicIds.isEmpty) return out;
+
+    if (topicIds.length <= _batchGetThreshold) {
+      for (final id in topicIds) {
+        final data = await _fetchTopicById(
+          serverUrl: serverUrl,
+          token: token,
+          topicId: id,
+        );
+        if (data != null) out[id] = data;
+      }
+      return out;
+    }
+
+    try {
+      final resp = await _postWithTimeout(
+        Uri.parse('$serverUrl/api/topics/batch-get'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'topicIds': topicIds}),
+        timeoutMessage: '批量拉取话题超时',
+      );
+
+      if (resp.statusCode != 200) {
+        // fallback to individual fetches
+        for (final id in topicIds) {
+          final data = await _fetchTopicById(
+            serverUrl: serverUrl,
+            token: token,
+            topicId: id,
+          );
+          if (data != null) out[id] = data;
+        }
+        return out;
+      }
+
+      final decoded = jsonDecode(resp.body);
+      if (decoded is! Map<String, dynamic>) return out;
+      final topics = decoded['topics'];
+      if (topics is! List) return out;
+
+      for (final item in topics) {
+        if (item is! Map<String, dynamic>) continue;
+        final topicId = item['topicId']?.toString() ?? '';
+        final topicData = item['topic'] ?? item;
+        if (topicId.isNotEmpty && topicData is Map<String, dynamic>) {
+          out[topicId] = topicData;
+        }
+      }
+    } catch (e) {
+      debugPrint('[ServerSync] batch-get failed, falling back: $e');
+      for (final id in topicIds) {
+        final data = await _fetchTopicById(
+          serverUrl: serverUrl,
+          token: token,
+          topicId: id,
+        );
+        if (data != null) out[id] = data;
+      }
+    }
+
+    return out;
+  }
+
+  // ── 迁移 ──────────────────────────────────────────────────────────
+
+  Future<void> _migrateFromSnapshotIfNeeded({
+    required String serverUrl,
+    required String token,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
+    final revisionsKey = _syncedRevisionsKeyScoped(scope);
+
+    // 如果已有 syncedRevisions，说明已迁移过
+    if (prefs.getString(revisionsKey) != null) return;
+
+    final db = _appDb.importDb;
+    final currentVersions = await _loadCurrentTopicVersions(db);
+
+    // 初始化：所有 topic revision 设为 0，标记为 dirty
+    final revisions = <String, int>{};
+    final dirtyIds = <String>{};
+    for (final topicId in currentVersions.keys) {
+      revisions[topicId] = 0;
+      dirtyIds.add(topicId);
+    }
+
+    await _saveSyncedRevisions(
+      serverUrl: serverUrl,
+      token: token,
+      revisions: revisions,
+    );
+    await _saveDirtyTopicIds(
+      serverUrl: serverUrl,
+      token: token,
+      ids: dirtyIds,
+    );
+
+    // 清理旧快照数据
+    final legacyVersionKey = _buildScopedPushVersionSnapshotKey(
+      serverUrl: serverUrl,
+      token: token,
+    );
+    final legacyIdsKey = _buildScopedPushSnapshotKey(
+      serverUrl: serverUrl,
+      token: token,
+    );
+    await prefs.remove(legacyVersionKey);
+    await prefs.remove(legacyIdsKey);
+
+    // 清理 DB 中的旧快照表
+    try {
+      final userDb = _appDb.userDb;
+      await userDb.customStatement(
+        'DELETE FROM $_pushSnapshotTable WHERE scope = ?',
+        [scope],
+      );
+    } catch (_) {
+      // 旧表可能不存在，忽略
+    }
+
+    debugPrint(
+      '[ServerSync] Migrated to manifest-based sync: '
+      '${currentVersions.length} topics marked dirty',
     );
   }
 
@@ -421,49 +676,316 @@ class ServerSyncService {
     onStatus?.call('检查同步服务器连接...');
     await _probeServer(config.serverUrl, config.token);
 
+    // 迁移检查
+    await _migrateFromSnapshotIfNeeded(
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+
+    onStatus?.call('拉取服务端清单...');
+    final manifest = await _fetchManifest(
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+
+    final db = _appDb.importDb;
+    final localVersions = await _loadCurrentTopicVersions(db);
+    final localTopicIds = localVersions.keys.toSet();
+    final syncedRevisions = await _loadSyncedRevisions(
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+    final dirtyTopicIds = await _loadDirtyTopicIds(
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+
+    // 协调
+    final toFetch = <String>[];
+    final toDeleteLocal = <String>[];
+    final toPush = <String>[];
+    final toDeleteRemote = <String>[];
+    var conflictCount = 0;
+    final newConflicts = <ServerSyncPendingConflict>[];
+
+    for (final entry in manifest.entries.entries) {
+      final topicId = entry.key;
+      final mEntry = entry.value;
+      final localHas = localTopicIds.contains(topicId);
+      final syncedRev = syncedRevisions[topicId] ?? -1;
+      final isDirty = dirtyTopicIds.contains(topicId);
+      final serverDeleted = mEntry.deletedAt != null;
+
+      if (serverDeleted) {
+        if (localHas && !isDirty) {
+          toDeleteLocal.add(topicId);
+        } else if (localHas && isDirty) {
+          if (mode == ServerSyncMode.autoFull) {
+            if (conflictPolicy == ServerSyncConflictPolicy.serverWins) {
+              toDeleteLocal.add(topicId);
+            } else {
+              toPush.add(topicId);
+            }
+          } else if (mode == ServerSyncMode.autoSafe) {
+            conflictCount++;
+            newConflicts.add(ServerSyncPendingConflict(
+              topicId: topicId,
+              operation: 'upsert',
+              status: 'conflict',
+              detectedAt: DateTime.now().millisecondsSinceEpoch,
+              reason: 'server_deleted_local_dirty',
+              serverRevision: mEntry.revision,
+            ));
+          }
+        }
+        continue;
+      }
+
+      if (!localHas) {
+        if (isDirty) {
+          toDeleteRemote.add(topicId);
+        } else {
+          // 所有模式都拉取新 topic（Flutter 端没有 push_only 模式）
+          toFetch.add(topicId);
+        }
+        continue;
+      }
+
+      if (mEntry.revision > syncedRev) {
+        if (!isDirty) {
+          toFetch.add(topicId);
+        } else {
+          if (mode == ServerSyncMode.autoFull) {
+            if (conflictPolicy == ServerSyncConflictPolicy.serverWins) {
+              toFetch.add(topicId);
+            } else {
+              toPush.add(topicId);
+            }
+          } else if (mode == ServerSyncMode.autoSafe) {
+            conflictCount++;
+            newConflicts.add(ServerSyncPendingConflict(
+              topicId: topicId,
+              operation: 'upsert',
+              status: 'conflict',
+              detectedAt: DateTime.now().millisecondsSinceEpoch,
+              reason: 'both_modified',
+              serverRevision: mEntry.revision,
+            ));
+          }
+        }
+      }
+    }
+
+    // dirty topics → push
+    for (final topicId in dirtyTopicIds) {
+      if (localTopicIds.contains(topicId)) {
+        if (!toFetch.contains(topicId) && !toPush.contains(topicId)) {
+          toPush.add(topicId);
+        }
+      } else {
+        if (!toDeleteRemote.contains(topicId)) {
+          toDeleteRemote.add(topicId);
+        }
+      }
+    }
+
+    // 本地有、服务端没有且 dirty → push
+    for (final topicId in localTopicIds) {
+      if (!manifest.entries.containsKey(topicId) &&
+          dirtyTopicIds.contains(topicId)) {
+        if (!toPush.contains(topicId)) {
+          toPush.add(topicId);
+        }
+      }
+    }
+
+    if (conflictCount > 0) {
+      debugPrint(
+        '[ServerSync] Manifest reconcile: $conflictCount conflicts (auto_safe mode, skipping)',
+      );
+    }
+
     var pulledUpserted = 0;
     var pulledDeleted = 0;
     final pulledUpsertedTopicIds = <String>{};
     final pulledDeletedTopicIds = <String>{};
-    var pushResult = const ServerPushResult.zero();
+    var pushApplied = 0;
+    var pushNoop = 0;
+    var pushStale = 0;
+    var pushConflict = 0;
+    var pushFailed = 0;
 
-    final preferLocalFirst =
-        mode == ServerSyncMode.autoFull &&
-        conflictPolicy == ServerSyncConflictPolicy.localWins;
-
-    if (!preferLocalFirst) {
-      final pulled = await _pullIncremental(
+    // Pull
+    if (toFetch.isNotEmpty) {
+      onStatus?.call('拉取 ${toFetch.length} 个话题...');
+      final fetched = await _fetchTopicsBatch(
         serverUrl: config.serverUrl,
         token: config.token,
-        onStatus: onStatus,
+        topicIds: toFetch,
       );
-      pulledUpserted += pulled.upserted;
-      pulledDeleted += pulled.deleted;
-      pulledUpsertedTopicIds.addAll(pulled.upsertedTopicIds);
-      pulledDeletedTopicIds.addAll(pulled.deletedTopicIds);
+
+      for (final topicId in toFetch) {
+        final topicData = fetched[topicId];
+        if (topicData == null) continue;
+
+        try {
+          await _importTopicFromServer(db, topicData);
+          pulledUpserted++;
+          pulledUpsertedTopicIds.add(topicId);
+
+          final serverEntry = manifest.entries[topicId];
+          if (serverEntry != null) {
+            syncedRevisions[topicId] = serverEntry.revision;
+          }
+          dirtyTopicIds.remove(topicId);
+        } catch (e) {
+          debugPrint('[ServerSync] Failed to import topic $topicId: $e');
+        }
+      }
     }
 
-    if (mode != ServerSyncMode.pullOnly) {
-      pushResult = await _pushLocalTopics(
+    // Local delete
+    if (toDeleteLocal.isNotEmpty) {
+      onStatus?.call('删除 ${toDeleteLocal.length} 个本地话题...');
+      for (final topicId in toDeleteLocal) {
+        try {
+          await _deleteTopicsBatch(db, [topicId]);
+          pulledDeleted++;
+          pulledDeletedTopicIds.add(topicId);
+          syncedRevisions.remove(topicId);
+          dirtyTopicIds.remove(topicId);
+        } catch (e) {
+          debugPrint('[ServerSync] Failed to delete local topic $topicId: $e');
+        }
+      }
+    }
+
+    // Push
+    if (mode != ServerSyncMode.pullOnly && toPush.isNotEmpty) {
+      final topics = await _buildTopicPayloadsByIds(db, toPush);
+      if (topics.isNotEmpty) {
+        onStatus?.call('推送 ${topics.length} 个话题...');
+      }
+
+      final forceWrite = mode == ServerSyncMode.autoFull &&
+          conflictPolicy == ServerSyncConflictPolicy.localWins;
+
+      for (var i = 0; i < topics.length; i += _topicWriteBatchSize) {
+        final end = (i + _topicWriteBatchSize).clamp(0, topics.length);
+        final chunk = topics.sublist(i, end);
+        onStatus?.call('推送中... $end/${topics.length}');
+        final results = await _postTopicBatch(
+          serverUrl: config.serverUrl,
+          token: config.token,
+          topics: chunk,
+          force: forceWrite,
+        );
+
+        for (final result in results) {
+          if (result.isTerminalSuccess) {
+            if (result.revision != null) {
+              syncedRevisions[result.topicId] = result.revision!;
+            }
+            dirtyTopicIds.remove(result.topicId);
+          }
+
+          switch (result.status) {
+            case 'applied':
+              pushApplied++;
+              break;
+            case 'noop':
+            case 'not_found':
+              pushNoop++;
+              break;
+            case 'stale':
+              pushStale++;
+              break;
+            case 'conflict':
+              pushConflict++;
+              break;
+            default:
+              pushFailed++;
+          }
+        }
+      }
+    }
+
+    // Remote delete
+    if (mode != ServerSyncMode.pullOnly && toDeleteRemote.isNotEmpty) {
+      onStatus?.call('远程删除 ${toDeleteRemote.length} 个话题...');
+      for (var i = 0; i < toDeleteRemote.length; i += _topicDeleteBatchSize) {
+        final end =
+            (i + _topicDeleteBatchSize).clamp(0, toDeleteRemote.length);
+        final chunk = toDeleteRemote.sublist(i, end);
+        final results = await _postDeleteBatch(
+          serverUrl: config.serverUrl,
+          token: config.token,
+          topicIds: chunk,
+          force: false,
+        );
+        for (final result in results) {
+          if (result.isTerminalSuccess) {
+            syncedRevisions.remove(result.topicId);
+            dirtyTopicIds.remove(result.topicId);
+          }
+          switch (result.status) {
+            case 'applied':
+              pushApplied++;
+              break;
+            case 'noop':
+            case 'not_found':
+              pushNoop++;
+              break;
+            default:
+              pushFailed++;
+          }
+        }
+      }
+    }
+
+    // 持久化
+    await _saveSyncedRevisions(
+      serverUrl: config.serverUrl,
+      token: config.token,
+      revisions: syncedRevisions,
+    );
+    await _saveDirtyTopicIds(
+      serverUrl: config.serverUrl,
+      token: config.token,
+      ids: dirtyTopicIds,
+    );
+
+    // 写入 pending conflicts
+    if (newConflicts.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      final existing = _readPendingConflicts(
+        prefs,
         serverUrl: config.serverUrl,
         token: config.token,
-        mode: mode,
-        conflictPolicy: conflictPolicy,
-        onStatus: onStatus,
+      );
+      await _writePendingConflicts(
+        prefs,
+        serverUrl: config.serverUrl,
+        token: config.token,
+        conflicts: [...existing, ...newConflicts],
       );
     }
 
-    if (preferLocalFirst) {
-      final pulled = await _pullIncremental(
-        serverUrl: config.serverUrl,
-        token: config.token,
-        onStatus: onStatus,
-      );
-      pulledUpserted += pulled.upserted;
-      pulledDeleted += pulled.deleted;
-      pulledUpsertedTopicIds.addAll(pulled.upsertedTopicIds);
-      pulledDeletedTopicIds.addAll(pulled.deletedTopicIds);
-    }
+    // 设置 cursor
+    final prefs = await SharedPreferences.getInstance();
+    final syncCursorKey = _buildScopedLastSyncKey(
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+    await prefs.setInt(syncCursorKey, manifest.changeSeq);
+
+    final pushResult = ServerPushResult(
+      applied: pushApplied,
+      noop: pushNoop,
+      stale: pushStale,
+      conflict: pushConflict,
+      failed: pushFailed,
+    );
 
     final result = ServerSyncResult(
       pulledUpserted: pulledUpserted,
@@ -504,12 +1026,38 @@ class ServerSyncService {
       );
     }
 
+    final syncedRevisions = await _loadSyncedRevisions(
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+    final dirtyTopicIds = await _loadDirtyTopicIds(
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+
     if (policy == ServerSyncConflictPolicy.serverWins) {
       onStatus?.call('按服务端版本处理冲突...');
       await _refreshTopicFromServer(
         serverUrl: config.serverUrl,
         token: config.token,
         topicId: conflict.topicId,
+      );
+      if (conflict.reason == 'server_deleted_local_dirty' ||
+          conflict.operation == 'delete') {
+        syncedRevisions.remove(conflict.topicId);
+      } else if (conflict.serverRevision != null) {
+        syncedRevisions[conflict.topicId] = conflict.serverRevision!;
+      }
+      dirtyTopicIds.remove(conflict.topicId);
+      await _saveSyncedRevisions(
+        serverUrl: config.serverUrl,
+        token: config.token,
+        revisions: syncedRevisions,
+      );
+      await _saveDirtyTopicIds(
+        serverUrl: config.serverUrl,
+        token: config.token,
+        ids: dirtyTopicIds,
       );
       map.remove(key);
       await _writePendingConflicts(
@@ -540,15 +1088,17 @@ class ServerSyncService {
         );
       }
 
-      final versionSnap = await _readPushedTopicVersionsSnapshot(
+      syncedRevisions.remove(conflict.topicId);
+      dirtyTopicIds.remove(conflict.topicId);
+      await _saveSyncedRevisions(
         serverUrl: config.serverUrl,
         token: config.token,
+        revisions: syncedRevisions,
       );
-      versionSnap.remove(conflict.topicId);
-      await _writePushedTopicVersionsSnapshot(
+      await _saveDirtyTopicIds(
         serverUrl: config.serverUrl,
         token: config.token,
-        topicVersions: versionSnap,
+        ids: dirtyTopicIds,
       );
       map.remove(key);
       await _writePendingConflicts(
@@ -588,19 +1138,21 @@ class ServerSyncService {
       );
     }
 
-    final versionSnap = await _readPushedTopicVersionsSnapshot(
-      serverUrl: config.serverUrl,
-      token: config.token,
-    );
-    final localUpdatedAt = _toOptionalInt(topic['updatedAt']);
-    if (localUpdatedAt != null) {
-      versionSnap[conflict.topicId] = localUpdatedAt;
+    if (first.revision != null) {
+      syncedRevisions[conflict.topicId] = first.revision!;
     }
-    await _writePushedTopicVersionsSnapshot(
+    dirtyTopicIds.remove(conflict.topicId);
+    await _saveSyncedRevisions(
       serverUrl: config.serverUrl,
       token: config.token,
-      topicVersions: versionSnap,
+      revisions: syncedRevisions,
     );
+    await _saveDirtyTopicIds(
+      serverUrl: config.serverUrl,
+      token: config.token,
+      ids: dirtyTopicIds,
+    );
+
     map.remove(key);
     await _writePendingConflicts(
       prefs,
@@ -614,22 +1166,12 @@ class ServerSyncService {
     );
   }
 
-  /// 执行增量同步
-  ///
-  /// 返回 (新增/更新数, 删除数)
+  /// 执行增量同步（简化版，直接调用 syncNow 的拉取部分）
   Future<({int upserted, int deleted})> incrementalSync({
     void Function(String message)? onStatus,
   }) async {
-    await _appDb.init();
-    final config = await _resolveConfig();
-    onStatus?.call('检查同步服务器连接...');
-    await _probeServer(config.serverUrl, config.token);
-    final pulled = await _pullIncremental(
-      serverUrl: config.serverUrl,
-      token: config.token,
-      onStatus: onStatus,
-    );
-    return (upserted: pulled.upserted, deleted: pulled.deleted);
+    final result = await syncNow(onStatus: onStatus);
+    return (upserted: result.pulledUpserted, deleted: result.pulledDeleted);
   }
 
   /// 重置同步状态（强制全量重新拉取）
@@ -638,6 +1180,10 @@ class ServerSyncService {
     final keys = prefs.getKeys();
     for (final key in keys) {
       if (key == _lastSyncKey || key.startsWith('$_lastSyncKey:')) {
+        await prefs.remove(key);
+      }
+      if (key.startsWith('$_syncedRevisionsKeyPrefix:') ||
+          key.startsWith('$_dirtyTopicsKeyPrefix:')) {
         await prefs.remove(key);
       }
     }
@@ -681,471 +1227,6 @@ class ServerSyncService {
     if (resp.statusCode != 200) {
       throw StateError('同步服务器不可用（HTTP ${resp.statusCode}）');
     }
-  }
-
-  Future<
-    ({
-      int upserted,
-      int deleted,
-      Set<String> upsertedTopicIds,
-      Set<String> deletedTopicIds,
-    })
-  >
-  _pullIncremental({
-    required String serverUrl,
-    required String token,
-    void Function(String message)? onStatus,
-  }) async {
-    final db = _appDb.importDb;
-    final prefs = await SharedPreferences.getInstance();
-    final syncCursorKey = _buildScopedLastSyncKey(
-      serverUrl: serverUrl,
-      token: token,
-    );
-    final headers = {'Authorization': 'Bearer $token'};
-    var cursor = prefs.getInt(syncCursorKey) ?? 0;
-    var upsertedCount = 0;
-    var deletedCount = 0;
-    final upsertedTopicIds = <String>{};
-    final deletedTopicIds = <String>{};
-    var isFirstPage = true;
-
-    while (true) {
-      onStatus?.call('正在查询变更...');
-      final syncResp = await _getWithTimeout(
-        Uri.parse(
-          '$serverUrl/api/sync/changes?cursor=$cursor&limit=$_changePageSize&includePayload=1',
-        ),
-        headers: headers,
-        timeoutMessage: '查询变更超时，请检查网络或服务器状态',
-      );
-
-      if (syncResp.statusCode == 401 || syncResp.statusCode == 403) {
-        throw StateError('认证失败，请检查 Token');
-      }
-      if (syncResp.statusCode != 200) {
-        throw StateError('同步服务器返回 ${syncResp.statusCode}');
-      }
-
-      final syncData = jsonDecode(syncResp.body) as Map<String, dynamic>;
-      final items = (syncData['items'] as List<dynamic>? ?? const []);
-      final hasMore = syncData['hasMore'] == true;
-      final nextCursor = (syncData['nextCursor'] as num?)?.toInt() ?? cursor;
-
-      // 检测 cursor 是否落入已 purge 的空洞：
-      // 如果 cursor > 0 且小于服务端最小可用 seq，说明部分变更已被清理，
-      // 需要重置 cursor 从头拉取以避免静默丢失数据
-      if (isFirstPage) {
-        isFirstPage = false;
-        final oldestAvailableSeq =
-            (syncData['oldestAvailableSeq'] as num?)?.toInt() ?? 0;
-        if (cursor > 0 &&
-            oldestAvailableSeq > 0 &&
-            cursor < oldestAvailableSeq) {
-          debugPrint(
-            '[ServerSync] Pull cursor $cursor is stale '
-            '(oldest available seq=$oldestAvailableSeq). '
-            'Resetting cursor to 0 for full re-sync.',
-          );
-          onStatus?.call('同步游标已过期，正在全量重新拉取...');
-          cursor = 0;
-          await prefs.setInt(syncCursorKey, 0);
-          continue; // 重新以 cursor=0 发起请求
-        }
-      }
-
-      if (items.isEmpty) {
-        await prefs.setInt(syncCursorKey, nextCursor);
-        if (!hasMore) {
-          onStatus?.call(
-            upsertedCount == 0 && deletedCount == 0
-                ? '已是最新'
-                : '拉取完成: +$upsertedCount -$deletedCount',
-          );
-          return (
-            upserted: upsertedCount,
-            deleted: deletedCount,
-            upsertedTopicIds: upsertedTopicIds,
-            deletedTopicIds: deletedTopicIds,
-          );
-        }
-        cursor = nextCursor;
-        continue;
-      }
-
-      final upsertPayloads = <Map<String, dynamic>>[];
-      final deleteIds = <String>[];
-      final failedUpserts = <String>{};
-      final failedDeletes = <String>{};
-
-      for (final item in items) {
-        if (item is! Map<String, dynamic>) continue;
-        final op = item['op'] as String? ?? '';
-        final topicId = item['topicId'] as String? ?? '';
-        if (topicId.isEmpty) continue;
-
-        if (op == 'upsert') {
-          final payload = item['topic'];
-          if (payload is Map<String, dynamic>) {
-            upsertPayloads.add(payload);
-          } else {
-            failedUpserts.add(topicId);
-          }
-        } else if (op == 'delete') {
-          deleteIds.add(topicId);
-        }
-      }
-
-      if (upsertPayloads.isNotEmpty || deleteIds.isNotEmpty) {
-        onStatus?.call(
-          '拉取到 ${upsertPayloads.length} 个新增/更新, ${deleteIds.length} 个删除',
-        );
-      }
-
-      final filteredUpsertPayloads = upsertPayloads.isEmpty
-          ? const <Map<String, dynamic>>[]
-          : await _filterUnchangedUpsertPayloads(db, upsertPayloads);
-      final skippedUnchangedCount =
-          upsertPayloads.length - filteredUpsertPayloads.length;
-      if (skippedUnchangedCount > 0) {
-        debugPrint(
-          '[ServerSync] 跳过 $skippedUnchangedCount 个未变化话题（updatedAt/messageCount/roundCount 一致）',
-        );
-      }
-
-      for (
-        var i = 0;
-        i < filteredUpsertPayloads.length;
-        i += _topicWriteBatchSize
-      ) {
-        final end = i + _topicWriteBatchSize > filteredUpsertPayloads.length
-            ? filteredUpsertPayloads.length
-            : i + _topicWriteBatchSize;
-        final chunk = filteredUpsertPayloads.sublist(i, end);
-
-        try {
-          await db.transaction(() async {
-            for (final topicData in chunk) {
-              await _importTopicFromServerInTransaction(db, topicData);
-            }
-          });
-          upsertedCount += chunk.length;
-          for (final topicData in chunk) {
-            final topicId = topicData['topicId'] as String?;
-            if (topicId != null && topicId.isNotEmpty) {
-              upsertedTopicIds.add(topicId);
-            }
-          }
-        } catch (e) {
-          for (final topicData in chunk) {
-            final topicId = topicData['topicId'] as String? ?? '';
-            try {
-              await _importTopicFromServer(db, topicData);
-              upsertedCount++;
-              if (topicId.isNotEmpty) {
-                upsertedTopicIds.add(topicId);
-              }
-            } catch (inner) {
-              if (topicId.isNotEmpty) failedUpserts.add(topicId);
-              debugPrint('[ServerSync] Failed to write topic $topicId: $inner');
-            }
-          }
-        }
-      }
-
-      for (var i = 0; i < deleteIds.length; i += _topicDeleteBatchSize) {
-        final end = (i + _topicDeleteBatchSize).clamp(0, deleteIds.length);
-        final chunk = deleteIds.sublist(i, end);
-        try {
-          await _deleteTopicsBatch(db, chunk);
-          deletedCount += chunk.length;
-          deletedTopicIds.addAll(chunk);
-        } catch (e) {
-          for (final topicId in chunk) {
-            try {
-              await _deleteTopicsBatch(db, [topicId]);
-              deletedCount++;
-              deletedTopicIds.add(topicId);
-            } catch (inner) {
-              failedDeletes.add(topicId);
-              debugPrint(
-                '[ServerSync] Failed to delete topic $topicId: $inner',
-              );
-            }
-          }
-        }
-      }
-
-      if (failedUpserts.isNotEmpty || failedDeletes.isNotEmpty) {
-        throw StateError(
-          '部分拉取失败：新增/更新失败 ${failedUpserts.length} 条，删除失败 ${failedDeletes.length} 条',
-        );
-      }
-
-      cursor = nextCursor;
-      await prefs.setInt(syncCursorKey, cursor);
-      onStatus?.call('拉取中: +$upsertedCount -$deletedCount');
-
-      if (!hasMore) {
-        onStatus?.call('拉取完成: +$upsertedCount -$deletedCount');
-        return (
-          upserted: upsertedCount,
-          deleted: deletedCount,
-          upsertedTopicIds: upsertedTopicIds,
-          deletedTopicIds: deletedTopicIds,
-        );
-      }
-    }
-  }
-
-  Future<ServerPushResult> _pushLocalTopics({
-    required String serverUrl,
-    required String token,
-    required ServerSyncMode mode,
-    required ServerSyncConflictPolicy conflictPolicy,
-    void Function(String message)? onStatus,
-  }) async {
-    final db = _appDb.importDb;
-    final currentTopicVersions = await _loadCurrentTopicVersions(db);
-    final currentTopicIds = currentTopicVersions.keys.toSet();
-
-    final prefs = await SharedPreferences.getInstance();
-    final pendingMap = <String, ServerSyncPendingConflict>{
-      for (final c in _readPendingConflicts(
-        prefs,
-        serverUrl: serverUrl,
-        token: token,
-      ))
-        _conflictKey(c.topicId, c.operation): c,
-    };
-    final previousTopicVersions = await _readPushedTopicVersionsSnapshot(
-      serverUrl: serverUrl,
-      token: token,
-      currentTopicVersionsForLegacy: currentTopicVersions,
-    );
-
-    final changedTopicIds = currentTopicIds.where((topicId) {
-      final previous = previousTopicVersions[topicId];
-      final current = currentTopicVersions[topicId];
-      return previous == null || previous != current;
-    }).toList();
-    final deletedTopicIds = previousTopicVersions.keys
-        .where((topicId) => !currentTopicIds.contains(topicId))
-        .toList();
-
-    if (changedTopicIds.isEmpty && deletedTopicIds.isEmpty) {
-      onStatus?.call('本地暂无可推送变更');
-      return const ServerPushResult.zero();
-    }
-
-    final topics = await _buildTopicPayloadsByIds(db, changedTopicIds);
-    final payloadById = <String, Map<String, dynamic>>{
-      for (final topic in topics)
-        if ((topic['topicId'] as String?)?.isNotEmpty ?? false)
-          topic['topicId'] as String: topic,
-    };
-
-    if (topics.isNotEmpty) {
-      onStatus?.call('准备推送 ${topics.length} 个本地变更话题...');
-    } else {
-      onStatus?.call('未发现新增/更新，正在同步删除...');
-    }
-
-    var applied = 0;
-    var noop = 0;
-    var stale = 0;
-    var conflict = 0;
-    var failed = 0;
-    // 逐 topic 跟踪成功推送的 topicId，用于精细化更新快照
-    final succeededUpsertTopicIds = <String>{};
-    final succeededDeleteTopicIds = <String>{};
-
-    final allowForce =
-        mode == ServerSyncMode.autoFull &&
-        conflictPolicy == ServerSyncConflictPolicy.localWins;
-    final retryUpsertIds = <String>{};
-    final retryDeleteIds = <String>{};
-    final missingTopicCount = changedTopicIds.length - topics.length;
-    if (missingTopicCount > 0) {
-      failed += missingTopicCount;
-      debugPrint('[ServerSync] $missingTopicCount 个变更话题构建 payload 失败，将计入失败项');
-    }
-
-    for (var i = 0; i < topics.length; i += _topicWriteBatchSize) {
-      final end = (i + _topicWriteBatchSize).clamp(0, topics.length);
-      final chunk = topics.sublist(i, end);
-      onStatus?.call('推送中... $end/${topics.length}');
-      final results = await _postTopicBatch(
-        serverUrl: serverUrl,
-        token: token,
-        topics: chunk,
-        force: false,
-      );
-      final parsed = _analyzeBatchResults(results, allowForce: allowForce);
-      applied += parsed.applied;
-      noop += parsed.noop;
-      stale += parsed.stale;
-      conflict += parsed.conflict;
-      failed += parsed.failed;
-      retryUpsertIds.addAll(parsed.retryIds);
-      for (final result in results) {
-        if (result.isTerminalSuccess) {
-          succeededUpsertTopicIds.add(result.topicId);
-        }
-      }
-      _applyResultsToPendingMap(
-        pendingMap,
-        results: results,
-        operation: 'upsert',
-        queueConflicts: !allowForce,
-      );
-    }
-
-    if (deletedTopicIds.isNotEmpty) {
-      onStatus?.call('正在同步 ${deletedTopicIds.length} 个本地删除...');
-    }
-    for (var i = 0; i < deletedTopicIds.length; i += _topicDeleteBatchSize) {
-      final end = (i + _topicDeleteBatchSize).clamp(0, deletedTopicIds.length);
-      final chunk = deletedTopicIds.sublist(i, end);
-      final results = await _postDeleteBatch(
-        serverUrl: serverUrl,
-        token: token,
-        topicIds: chunk,
-        force: false,
-      );
-      final parsed = _analyzeBatchResults(results, allowForce: allowForce);
-      applied += parsed.applied;
-      noop += parsed.noop;
-      stale += parsed.stale;
-      conflict += parsed.conflict;
-      failed += parsed.failed;
-      retryDeleteIds.addAll(parsed.retryIds);
-      for (final result in results) {
-        if (result.isTerminalSuccess) {
-          succeededDeleteTopicIds.add(result.topicId);
-        }
-      }
-      _applyResultsToPendingMap(
-        pendingMap,
-        results: results,
-        operation: 'delete',
-        queueConflicts: !allowForce,
-      );
-    }
-
-    if (allowForce && retryUpsertIds.isNotEmpty) {
-      onStatus?.call('发现冲突，按本地优先自动回写...');
-      final retryTopics = <Map<String, dynamic>>[];
-      for (final id in retryUpsertIds) {
-        final payload = payloadById[id];
-        if (payload != null) {
-          retryTopics.add(payload);
-        } else {
-          failed += 1;
-        }
-      }
-
-      stale = 0;
-      conflict = 0;
-      for (var i = 0; i < retryTopics.length; i += _topicWriteBatchSize) {
-        final end = (i + _topicWriteBatchSize).clamp(0, retryTopics.length);
-        final chunk = retryTopics.sublist(i, end);
-        final results = await _postTopicBatch(
-          serverUrl: serverUrl,
-          token: token,
-          topics: chunk,
-          force: true,
-        );
-        final parsed = _analyzeBatchResults(results, allowForce: false);
-        applied += parsed.applied;
-        noop += parsed.noop;
-        stale += parsed.stale;
-        conflict += parsed.conflict;
-        failed += parsed.failed;
-        for (final result in results) {
-          if (result.isTerminalSuccess) {
-            succeededUpsertTopicIds.add(result.topicId);
-          }
-        }
-        _applyResultsToPendingMap(
-          pendingMap,
-          results: results,
-          operation: 'upsert',
-          queueConflicts: true,
-        );
-      }
-    }
-
-    if (allowForce && retryDeleteIds.isNotEmpty) {
-      onStatus?.call('发现删除冲突，按本地优先自动回写...');
-      final retryDeleteList = retryDeleteIds.toList();
-      for (var i = 0; i < retryDeleteList.length; i += _topicDeleteBatchSize) {
-        final end = (i + _topicDeleteBatchSize).clamp(
-          0,
-          retryDeleteList.length,
-        );
-        final chunk = retryDeleteList.sublist(i, end);
-        final results = await _postDeleteBatch(
-          serverUrl: serverUrl,
-          token: token,
-          topicIds: chunk,
-          force: true,
-        );
-        final parsed = _analyzeBatchResults(results, allowForce: false);
-        applied += parsed.applied;
-        noop += parsed.noop;
-        stale += parsed.stale;
-        conflict += parsed.conflict;
-        failed += parsed.failed;
-        for (final result in results) {
-          if (result.isTerminalSuccess) {
-            succeededDeleteTopicIds.add(result.topicId);
-          }
-        }
-        _applyResultsToPendingMap(
-          pendingMap,
-          results: results,
-          operation: 'delete',
-          queueConflicts: true,
-        );
-      }
-    }
-
-    await _writePendingConflicts(
-      prefs,
-      serverUrl: serverUrl,
-      token: token,
-      conflicts: pendingMap.values.toList(),
-    );
-
-    // 按 topic 粒度更新快照：成功推送的条目记录新版本，
-    // 成功删除的条目从快照中移除。即使部分失败也保留成功部分。
-    final updatedSnapshot = <String, int>{...previousTopicVersions};
-    for (final topicId in succeededUpsertTopicIds) {
-      final version = currentTopicVersions[topicId];
-      if (version != null) {
-        updatedSnapshot[topicId] = version;
-      }
-    }
-    for (final topicId in succeededDeleteTopicIds) {
-      updatedSnapshot.remove(topicId);
-    }
-    await _writePushedTopicVersionsSnapshot(
-      serverUrl: serverUrl,
-      token: token,
-      topicVersions: updatedSnapshot,
-      previousTopicVersions: previousTopicVersions,
-    );
-
-    onStatus?.call('推送完成: 应用$applied/无变更$noop/旧版本$stale/冲突$conflict/失败$failed');
-
-    return ServerPushResult(
-      applied: applied,
-      noop: noop,
-      stale: stale,
-      conflict: conflict,
-      failed: failed,
-    );
   }
 
   Future<List<_ServerTopicWriteResult>> _postTopicBatch({
@@ -1234,88 +1315,6 @@ class ServerSyncService {
     return out;
   }
 
-  Future<List<Map<String, dynamic>>> _filterUnchangedUpsertPayloads(
-    ImportDatabase db,
-    List<Map<String, dynamic>> payloads,
-  ) async {
-    if (payloads.isEmpty) return const [];
-    final topicIds = payloads
-        .map((payload) => payload['topicId']?.toString() ?? '')
-        .where((id) => id.isNotEmpty)
-        .toSet()
-        .toList();
-    if (topicIds.isEmpty) return const [];
-
-    final localTopics = await (db.select(
-      db.topics,
-    )..where((t) => t.topicId.isIn(topicIds))).get();
-    final localById = <String, Topic>{
-      for (final topic in localTopics) topic.topicId: topic,
-    };
-
-    final filtered = <Map<String, dynamic>>[];
-    for (final payload in payloads) {
-      final topicId = payload['topicId']?.toString() ?? '';
-      if (topicId.isEmpty) {
-        filtered.add(payload);
-        continue;
-      }
-
-      final local = localById[topicId];
-      if (local == null) {
-        filtered.add(payload);
-        continue;
-      }
-
-      final incomingUpdatedAt = _parseSyncTimestampOrNull(payload['updatedAt']);
-      final incomingMessages = payload['messages'];
-      final incomingMessageCount = incomingMessages is List
-          ? incomingMessages.length
-          : null;
-      final incomingRoundCount = incomingMessages is List
-          ? _countPayloadRounds(incomingMessages)
-          : null;
-      final incomingName = payload['name']?.toString();
-
-      final unchanged =
-          incomingUpdatedAt != null &&
-          incomingUpdatedAt == local.updatedAt &&
-          incomingMessageCount != null &&
-          incomingMessageCount == local.messageCount &&
-          incomingRoundCount != null &&
-          incomingRoundCount == local.roundCount &&
-          (incomingName == null || incomingName == local.name);
-
-      if (!unchanged) {
-        filtered.add(payload);
-      }
-    }
-
-    return filtered;
-  }
-
-  int _countPayloadRounds(List<dynamic> messages) {
-    var roundCount = 0;
-    for (final message in messages) {
-      if (message is Map<String, dynamic> && message['role'] == 'user') {
-        roundCount++;
-      }
-    }
-    return roundCount;
-  }
-
-  int? _parseSyncTimestampOrNull(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    if (value is String) {
-      final numeric = int.tryParse(value);
-      if (numeric != null) return numeric;
-      final dt = DateTime.tryParse(value);
-      if (dt != null) return dt.millisecondsSinceEpoch;
-    }
-    return null;
-  }
-
   Future<List<_ServerTopicWriteResult>> _postDeleteBatch({
     required String serverUrl,
     required String token,
@@ -1391,153 +1390,6 @@ class ServerSyncService {
     return out;
   }
 
-  void _applyResultsToPendingMap(
-    Map<String, ServerSyncPendingConflict> pendingMap, {
-    required List<_ServerTopicWriteResult> results,
-    required String operation,
-    required bool queueConflicts,
-  }) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    for (final item in results) {
-      final key = _conflictKey(item.topicId, operation);
-      if (item.isTerminalSuccess) {
-        pendingMap.remove(key);
-        continue;
-      }
-      if (item.isConflictLike && queueConflicts) {
-        final previous = pendingMap[key];
-        pendingMap[key] = ServerSyncPendingConflict(
-          topicId: item.topicId,
-          operation: operation,
-          status: item.status,
-          detectedAt: previous?.detectedAt ?? now,
-          reason:
-              item.error ??
-              previous?.reason ??
-              (item.status == 'stale' ? 'stale' : 'conflict'),
-          localUpdatedAt: item.localUpdatedAt ?? previous?.localUpdatedAt,
-          serverRevision: item.revision ?? previous?.serverRevision,
-          serverUpdatedAt: item.serverUpdatedAt ?? previous?.serverUpdatedAt,
-          serverClientUpdatedAt:
-              item.serverClientUpdatedAt ?? previous?.serverClientUpdatedAt,
-        );
-      }
-    }
-  }
-
-  Future<List<ServerSyncPendingConflict>> _enrichPendingConflictsFromServer({
-    required String serverUrl,
-    required String token,
-    required List<ServerSyncPendingConflict> conflicts,
-  }) async {
-    final out = <ServerSyncPendingConflict>[];
-    for (final conflict in conflicts) {
-      if (conflict.serverRevision != null && conflict.serverUpdatedAt != null) {
-        out.add(conflict);
-        continue;
-      }
-
-      try {
-        final revision = await _getTopicRevision(
-          serverUrl: serverUrl,
-          token: token,
-          topicId: conflict.topicId,
-        );
-        if (revision == null) {
-          out.add(conflict);
-          continue;
-        }
-        out.add(
-          ServerSyncPendingConflict(
-            topicId: conflict.topicId,
-            operation: conflict.operation,
-            status: conflict.status,
-            detectedAt: conflict.detectedAt,
-            reason: conflict.reason,
-            localUpdatedAt: conflict.localUpdatedAt,
-            serverRevision: revision.revision,
-            serverUpdatedAt: revision.updatedAt,
-            serverClientUpdatedAt: revision.clientUpdatedAt,
-          ),
-        );
-      } catch (_) {
-        out.add(conflict);
-      }
-    }
-    return out;
-  }
-
-  bool _hasPendingConflictDiff(
-    List<ServerSyncPendingConflict> a,
-    List<ServerSyncPendingConflict> b,
-  ) {
-    if (a.length != b.length) return true;
-    for (var i = 0; i < a.length; i++) {
-      if (_conflictKey(a[i].topicId, a[i].operation) !=
-          _conflictKey(b[i].topicId, b[i].operation)) {
-        return true;
-      }
-      if (a[i].serverRevision != b[i].serverRevision ||
-          a[i].serverUpdatedAt != b[i].serverUpdatedAt ||
-          a[i].serverClientUpdatedAt != b[i].serverClientUpdatedAt ||
-          a[i].reason != b[i].reason ||
-          a[i].status != b[i].status ||
-          a[i].localUpdatedAt != b[i].localUpdatedAt) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  _BatchWriteOutcome _analyzeBatchResults(
-    List<_ServerTopicWriteResult> results, {
-    required bool allowForce,
-  }) {
-    var applied = 0;
-    var noop = 0;
-    var stale = 0;
-    var conflict = 0;
-    var failed = 0;
-    final retryIds = <String>{};
-
-    for (final item in results) {
-      switch (item.status) {
-        case 'applied':
-          applied += 1;
-          break;
-        case 'noop':
-        case 'not_found':
-          noop += 1;
-          break;
-        case 'stale':
-          if (allowForce) {
-            retryIds.add(item.topicId);
-          } else {
-            stale += 1;
-          }
-          break;
-        case 'conflict':
-          if (allowForce) {
-            retryIds.add(item.topicId);
-          } else {
-            conflict += 1;
-          }
-          break;
-        default:
-          failed += 1;
-      }
-    }
-
-    return _BatchWriteOutcome(
-      applied: applied,
-      noop: noop,
-      stale: stale,
-      conflict: conflict,
-      failed: failed,
-      retryIds: retryIds,
-    );
-  }
-
   Future<void> _refreshTopicFromServer({
     required String serverUrl,
     required String token,
@@ -1574,34 +1426,6 @@ class ServerSyncService {
     await db.transaction(() async {
       await _importTopicFromServerInTransaction(db, topic);
     });
-  }
-
-  Future<_TopicRevisionMeta?> _getTopicRevision({
-    required String serverUrl,
-    required String token,
-    required String topicId,
-  }) async {
-    final resp = await _getWithTimeout(
-      Uri.parse('$serverUrl/api/topics/$topicId/revision'),
-      headers: {'Authorization': 'Bearer $token'},
-      timeoutMessage: '读取服务端版本超时，请检查网络或服务器状态',
-    );
-
-    if (resp.statusCode == 404) return null;
-    if (resp.statusCode == 401 || resp.statusCode == 403) {
-      throw StateError('认证失败，请检查 Token');
-    }
-    if (resp.statusCode != 200) {
-      throw StateError('读取服务端版本失败：HTTP ${resp.statusCode}');
-    }
-
-    final decoded = jsonDecode(resp.body);
-    if (decoded is! Map<String, dynamic>) return null;
-    return _TopicRevisionMeta(
-      revision: _toOptionalInt(decoded['revision']) ?? 0,
-      updatedAt: _toOptionalInt(decoded['updatedAt']),
-      clientUpdatedAt: _toOptionalInt(decoded['clientUpdatedAt']),
-    );
   }
 
   Future<Map<String, dynamic>?> _buildTopicPayloadById(
@@ -1803,9 +1627,6 @@ class ServerSyncService {
   }
 
   // ── 数据写入 ──────────────────────────────────────────────────────
-  //
-  // 复用 DriftDataImportService._importTopic 的逻辑，但适配服务端 API 格式。
-  // 服务端返回的数据中 blocks 已内联在 messages 中，无需外部 blockMap。
 
   Future<void> _importTopicFromServer(
     ImportDatabase db,
@@ -1857,7 +1678,7 @@ class ServerSyncService {
           );
     }
 
-    // 先清除旧数据（因为是 Topic 级别整体覆盖）
+    // 先清除旧数据
     await (db.delete(
       db.messageBlocks,
     )..where((t) => t.topicId.equals(topicId))).go();
@@ -2090,141 +1911,6 @@ class ServerSyncService {
     return out;
   }
 
-  Future<Map<String, int>> _readPushedTopicVersionsSnapshot({
-    required String serverUrl,
-    required String token,
-    Map<String, int>? currentTopicVersionsForLegacy,
-  }) async {
-    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
-    final cached = _pushTopicVersionsSnapshotMemoryCache[scope];
-    if (cached != null) return {...cached};
-
-    final db = _appDb.userDb;
-    final rows = await db
-        .customSelect(
-          'SELECT topic_id AS topicId, updated_at AS updatedAt '
-          'FROM $_pushSnapshotTable WHERE scope = ?',
-          variables: [Variable<String>(scope)],
-        )
-        .get();
-    if (rows.isNotEmpty) {
-      final out = <String, int>{};
-      for (final row in rows) {
-        final topicId = row.read<String>('topicId');
-        final updatedAt = _toOptionalInt(row.read<dynamic>('updatedAt'));
-        if (topicId.isEmpty || updatedAt == null) continue;
-        out[topicId] = updatedAt;
-      }
-      _pushTopicVersionsSnapshotMemoryCache[scope] = {...out};
-      return out;
-    }
-
-    final migrated = await _migrateLegacyPushedSnapshotFromPrefs(
-      scope: scope,
-      serverUrl: serverUrl,
-      token: token,
-      currentTopicVersionsForLegacy: currentTopicVersionsForLegacy,
-    );
-    _pushTopicVersionsSnapshotMemoryCache[scope] = {...migrated};
-    return migrated;
-  }
-
-  Future<Map<String, int>> _migrateLegacyPushedSnapshotFromPrefs({
-    required String scope,
-    required String serverUrl,
-    required String token,
-    Map<String, int>? currentTopicVersionsForLegacy,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final legacyVersionKey = _buildScopedPushVersionSnapshotKey(
-      serverUrl: serverUrl,
-      token: token,
-    );
-    final legacyIdsKey = _buildScopedPushSnapshotKey(
-      serverUrl: serverUrl,
-      token: token,
-    );
-
-    final parsedVersions = _readLegacyPushedTopicVersionsFromPrefs(
-      prefs,
-      scopedVersionKey: legacyVersionKey,
-    );
-    if (parsedVersions.isNotEmpty) {
-      await _replacePushedTopicVersionsSnapshot(
-        scope: scope,
-        topicVersions: parsedVersions,
-      );
-      await prefs.remove(legacyVersionKey);
-      await prefs.remove(legacyIdsKey);
-      return parsedVersions;
-    }
-
-    final legacyIds = _readLegacyPushedTopicIdsFromPrefs(
-      prefs,
-      scopedIdsKey: legacyIdsKey,
-    );
-    if (legacyIds.isEmpty) {
-      await prefs.remove(legacyVersionKey);
-      await prefs.remove(legacyIdsKey);
-      return const <String, int>{};
-    }
-
-    final migrated = <String, int>{};
-    for (final topicId in legacyIds) {
-      final currentVersion = currentTopicVersionsForLegacy?[topicId];
-      migrated[topicId] = currentVersion ?? 0;
-    }
-    await _replacePushedTopicVersionsSnapshot(
-      scope: scope,
-      topicVersions: migrated,
-    );
-    await prefs.remove(legacyVersionKey);
-    await prefs.remove(legacyIdsKey);
-    return migrated;
-  }
-
-  Map<String, int> _readLegacyPushedTopicVersionsFromPrefs(
-    SharedPreferences prefs, {
-    required String scopedVersionKey,
-  }) {
-    final raw = prefs.getString(scopedVersionKey);
-    if (raw == null || raw.isEmpty) return const <String, int>{};
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return const <String, int>{};
-      final out = <String, int>{};
-      decoded.forEach((key, value) {
-        final topicId = key.toString().trim();
-        if (topicId.isEmpty) return;
-        final version = _toOptionalInt(value);
-        if (version != null) {
-          out[topicId] = version;
-        }
-      });
-      return out;
-    } catch (_) {
-      return const <String, int>{};
-    }
-  }
-
-  Set<String> _readLegacyPushedTopicIdsFromPrefs(
-    SharedPreferences prefs, {
-    required String scopedIdsKey,
-  }) {
-    final raw = prefs.getString(scopedIdsKey);
-    if (raw == null || raw.isEmpty) return const <String>{};
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! List) return const <String>{};
-      return decoded
-          .map((item) => item.toString().trim())
-          .where((id) => id.isNotEmpty)
-          .toSet();
-    } catch (_) {
-      return const <String>{};
-    }
-  }
-
   List<ServerSyncPendingConflict> _readPendingConflicts(
     SharedPreferences prefs, {
     required String serverUrl,
@@ -2265,106 +1951,6 @@ class ServerSyncService {
       _buildScopedPendingConflictKey(serverUrl: serverUrl, token: token),
       jsonEncode(sorted.map((item) => item.toJson()).toList()),
     );
-  }
-
-  Future<void> _writePushedTopicVersionsSnapshot({
-    required String serverUrl,
-    required String token,
-    required Map<String, int> topicVersions,
-    Map<String, int>? previousTopicVersions,
-  }) async {
-    final scope = _buildSyncScope(serverUrl: serverUrl, token: token);
-    final normalized = <String, int>{
-      for (final entry in topicVersions.entries)
-        if (entry.key.trim().isNotEmpty) entry.key.trim(): entry.value,
-    };
-    final previous =
-        previousTopicVersions ??
-        await _readPushedTopicVersionsSnapshot(
-          serverUrl: serverUrl,
-          token: token,
-        );
-    final removedTopicIds = previous.keys
-        .where((topicId) => !normalized.containsKey(topicId))
-        .toList();
-    final changedEntries = normalized.entries
-        .where((entry) => previous[entry.key] != entry.value)
-        .toList(growable: false);
-
-    if (removedTopicIds.isEmpty && changedEntries.isEmpty) {
-      _pushTopicVersionsSnapshotMemoryCache[scope] = {...normalized};
-      return;
-    }
-
-    final db = _appDb.userDb;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    await db.transaction(() async {
-      await _deletePushedTopicVersionRows(
-        db: db,
-        scope: scope,
-        topicIds: removedTopicIds,
-      );
-      if (changedEntries.isNotEmpty) {
-        await db.batch((batch) {
-          for (final entry in changedEntries) {
-            batch.customStatement(
-              'INSERT INTO $_pushSnapshotTable(scope, topic_id, updated_at, synced_at) '
-              'VALUES (?, ?, ?, ?) '
-              'ON CONFLICT(scope, topic_id) DO UPDATE SET '
-              'updated_at = excluded.updated_at, synced_at = excluded.synced_at',
-              [scope, entry.key, entry.value, now],
-            );
-          }
-        });
-      }
-    });
-    _pushTopicVersionsSnapshotMemoryCache[scope] = {...normalized};
-  }
-
-  Future<void> _replacePushedTopicVersionsSnapshot({
-    required String scope,
-    required Map<String, int> topicVersions,
-  }) async {
-    final db = _appDb.userDb;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    await db.transaction(() async {
-      await db.customStatement(
-        'DELETE FROM $_pushSnapshotTable WHERE scope = ?',
-        [scope],
-      );
-      if (topicVersions.isEmpty) return;
-      await db.batch((batch) {
-        for (final entry in topicVersions.entries) {
-          if (entry.key.trim().isEmpty) continue;
-          batch.customStatement(
-            'INSERT INTO $_pushSnapshotTable(scope, topic_id, updated_at, synced_at) '
-            'VALUES (?, ?, ?, ?)',
-            [scope, entry.key.trim(), entry.value, now],
-          );
-        }
-      });
-    });
-  }
-
-  Future<void> _deletePushedTopicVersionRows({
-    required UserDatabase db,
-    required String scope,
-    required List<String> topicIds,
-  }) async {
-    if (topicIds.isEmpty) return;
-    const chunkSize = 300;
-    for (var i = 0; i < topicIds.length; i += chunkSize) {
-      final end = i + chunkSize > topicIds.length
-          ? topicIds.length
-          : i + chunkSize;
-      final chunk = topicIds.sublist(i, end);
-      final placeholders = List.filled(chunk.length, '?').join(', ');
-      await db.customStatement(
-        'DELETE FROM $_pushSnapshotTable '
-        'WHERE scope = ? AND topic_id IN ($placeholders)',
-        [scope, ...chunk],
-      );
-    }
   }
 
   String _conflictKey(String topicId, String operation) {
